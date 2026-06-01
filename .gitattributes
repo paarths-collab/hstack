@@ -1,0 +1,7 @@
+# Force LF on shell scripts so the bash installer runs on Linux/VPS (CRLF = "bad interpreter").
+setup        text eol=lf
+*.sh         text eol=lf
+# Skills + docs are LF too for consistency.
+*.md         text eol=lf
+# Windows installer keeps CRLF.
+*.ps1        text eol=crlf
