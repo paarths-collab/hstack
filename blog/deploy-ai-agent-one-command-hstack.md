@@ -57,7 +57,7 @@ But something interesting happened during that four-hour slog. Once Claude Code 
 
 hstack productizes exactly that. It is the accumulated knowledge of every wall worth hitting, packaged so Claude Code can walk the whole path for you and stop only where a human is genuinely required. It is, in short, **the production layer that Hermes is missing** — for people who want a self-hosted agent without living in a terminal.
 
-The community arrived at the same conclusion independently: the most common "how do I install Hermes" answer became "just have Claude Code do it for you." hstack is that answer, made repeatable and reliable.
+There is a natural pattern here, and it is the one hstack is built on: once a capable coding agent can reach your server, "just have Claude Code do it for you" is a remarkably effective way to install Hermes. hstack takes that pattern and makes it repeatable and reliable, instead of something you reinvent from scratch each time.
 
 ### Why a command, not a hosted service?
 
@@ -84,7 +84,7 @@ That is the entire install. Claude clones the toolkit (a library of small Markdo
 
 You do not need to prepare anything in advance. The deploy command is conversational: it asks where to deploy, which model to use, and which messaging platforms you want, then it does each step and pauses only when it needs something from you.
 
-> **On Windows:** install under WSL2 — Hermes has no native Windows support. Or, simplest of all, deploy to a Linux VPS, which is the recommended target anyway.
+> **On Windows:** Hermes now runs natively — the CLI, gateway, TUI, and tools all install without WSL (`iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)` in PowerShell). WSL2 is optional. But for an agent that answers 24/7 you still want it on an always-on Linux VPS rather than your laptop, which is the recommended target.
 
 ---
 
@@ -95,7 +95,7 @@ You will not be asked to gather these ahead of time. During `/hermes-deploy`, **
 | You provide | Where to get it (Claude walks you through it) | Needed for |
 |-------------|-----------------------------------------------|------------|
 | **Server access** | **Hostinger:** hPanel → Docker Manager → Compose → one-click deploy → search "Hermes". **Other VPS:** your SSH host, user, and password/key. | Install |
-| **Model API key** | **OpenRouter (easiest):** [openrouter.ai](https://openrouter.ai) → Keys → Create Key → copy `sk-or-...`. **Or OpenAI:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys). **Or** log in with your existing ChatGPT account via OAuth. | Model |
+| **Model API key** | **Nous Portal (simplest):** one subscription covers the model, web search, image generation, and TTS — Claude sets it up with `hermes setup --portal`, no separate keys to collect. **Or OpenRouter:** [openrouter.ai](https://openrouter.ai) → Keys → Create Key → copy `sk-or-...`. **Or OpenAI:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys). **Or** log in with your existing ChatGPT account via OAuth. | Model |
 | **Telegram bot token** | In Telegram, message **@BotFather** → `/newbot` → name it → username ends in `bot` → copy the token. | Telegram |
 | **Your Telegram user ID** | In Telegram, message **@userinfobot** → it replies with your numeric ID. | Telegram allowlist |
 | **Discord bot token + intents** | [discord.com/developers](https://discord.com/developers/applications) → New Application → Bot → Reset Token. Enable **Message Content** + **Server Members** intents. Invite via the OAuth2 URL. | Discord |
@@ -117,7 +117,7 @@ Claude installs Hermes on the target, pinned to a known-good version and made PA
 
 ### Stage 2 — Model
 
-Claude configures your provider and model, validates that the model meets the 64,000-token context minimum (smaller ones are rejected at startup), enables prompt caching to control cost, and runs a smoke test that proves the agent can actually answer. **You provide:** an API key, or an OAuth login.
+Claude configures your provider and model, validates that the model meets the 64,000-token context minimum (smaller ones are rejected at startup), enables prompt caching to control cost, and runs a smoke test that proves the agent can actually answer. If you would rather not juggle keys, Claude can set up **Nous Portal** (`hermes setup --portal`) — one subscription that covers the model plus web search, image generation, and TTS in a single step. **You provide:** an API key, an OAuth login, or a Nous Portal subscription.
 
 ### Stage 3 — Platforms
 
@@ -154,9 +154,15 @@ You:    /hermes-deploy
 
 Claude: Where should I deploy your agent?
         1) Hostinger (one-click, easiest)  2) Another VPS over SSH  3) Local
-You:    2 — here's the SSH info: root@203.0.113.10
+You:    1 — Hostinger
 
-Claude: Connected. Installing Hermes (pinned v0.15.0)... done. `hermes --version` → 0.15.0.
+Claude: Open hPanel → Docker Manager → Compose → one-click deploy, search "Hermes",
+        and deploy it. It'll show an admin username and password — paste them here,
+        then open the web terminal (Docker Manager → Open).
+You:    Done — here are the admin credentials.
+
+Claude: Connected to the web terminal. Hermes is already installed by the one-click
+        image — confirming version... `hermes --version` → 0.15.0. ✓
         Which model? I recommend DeepSeek V4 (cheapest quality) or your ChatGPT login.
 You:    DeepSeek V4
 
@@ -204,7 +210,7 @@ Issue #4379 documents that a large fraction of every request is fixed overhead �
 
 ### Silent capability degradation
 
-Vision, web summarization, and compression are powered by auxiliary models. If the provider that powers them is not keyed, those features do not throw an error — they quietly stop working, which is maddening to debug. **hstack** computes which capabilities will degrade given the keys you provided and warns you up front, rather than letting you discover it weeks later.
+Vision, web summarization, and compression are powered by auxiliary models. If the provider that powers them is not keyed, those features do not throw an error — they quietly stop working, which is maddening to debug. **hstack** computes which capabilities will degrade given the keys you provided and warns you up front, rather than letting you discover it weeks later. (The cleanest way to avoid this class of problem entirely is **Nous Portal**, which powers the model and all the auxiliary capabilities from a single subscription — hstack will offer it during the model stage.)
 
 ### A provider error taking the whole gateway offline
 
@@ -220,7 +226,7 @@ The Hermes dashboard binds to localhost and reads your `.env` full of keys, but 
 
 ### Platform and host-specific traps
 
-hstack also bakes in the smaller, version-specific landmines: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open, and pins a dashboard-working version (the immediately-newer release shipped a broken dashboard wheel).
+hstack also bakes in the smaller, version-specific landmines: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open, and pins a known-good, dashboard-working version so a later release cannot silently change behavior under you.
 
 The full, continuously-updated catalogue with issue numbers lives in the repo's [`reference/TROUBLESHOOTING.md`](https://github.com/paarths-collab/hstack/blob/main/reference/TROUBLESHOOTING.md). This accumulated knowledge — not the install script — is what hstack really is.
 
@@ -236,7 +242,7 @@ hstack pre-solves these during deploy, but if you are debugging an existing setu
 | Gateway crash-loops | Stale `gateway.pid` after a crash | `/hermes-restart` (clears the lock) |
 | Memory balloons, then OOM | The gateway leak over ~a day | Nightly restart cron (hstack adds this) |
 | Vision/web "doesn't work," no error | Auxiliary model not keyed | Add a provider key |
-| Dashboard won't load | A version with a broken dashboard wheel | Pin v0.15.0 (hstack's default) |
+| Dashboard won't load | A version-specific dashboard regression | Pin a known-good version — v0.15.0 (hstack's default) |
 
 When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repairs it.
 

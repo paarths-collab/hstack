@@ -115,7 +115,7 @@ You need three things: a server, a model, and (optionally) a messaging account t
 
 **A messaging account:** a Telegram account is the easiest starting point and costs nothing.
 
-> **A note on Windows:** Hermes has no native Windows support. If you are on Windows, install it under WSL2 (Windows Subsystem for Linux), or — far simpler — deploy to a Linux VPS, which is what this guide assumes.
+> **A note on Windows:** Hermes installs natively on Windows — the CLI, gateway, TUI, and tools all run without WSL. Open PowerShell and run `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`. WSL2 also works if you prefer it (only the browser-based dashboard chat pane benefits from it). That said, for an *always-on* agent you still want a Linux VPS running 24/7 rather than your personal machine — which is what this guide assumes.
 
 ---
 
@@ -207,6 +207,16 @@ You will choose a provider and a specific model. Here are the sensible options:
 | **DeepSeek V4** (via OpenRouter) | Cheapest quality | Around $0.30 per million input tokens; excellent value. |
 | **Claude Sonnet / GPT** | Highest quality | Pay-per-token; best reasoning. |
 | **Ollama (local)** | Privacy / free | Runs on your own hardware; needs a capable machine. |
+
+### The easiest option: Nous Portal (one subscription, no key-juggling)
+
+If collecting and configuring several provider keys sounds like a hassle — and especially if you want vision, web search, image generation, and text-to-speech to *just work* — use **Nous Portal**. It is a single subscription that covers the model, web search, image generation, TTS, and a cloud browser, set up in one step:
+
+```bash
+hermes setup --portal
+```
+
+This is the most beginner-friendly path: one account instead of four, and it sidesteps the "capability degradation" trap below entirely, because the auxiliary features are all powered out of the box. If you would rather use your own provider keys (for cost control or a specific model), the table above still applies.
 
 ### The two rules that prevent silent failures
 
