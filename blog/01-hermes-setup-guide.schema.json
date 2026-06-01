@@ -1,0 +1,36 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "BlogPosting",
+      "headline": "How to Set Up Your Own AI Agent (Self-Hosted Hermes): The Complete Beginner's Guide",
+      "description": "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, dashboard, security, and cost, for beginners and devs.",
+      "datePublished": "2026-06-01",
+      "dateModified": "2026-06-01",
+      "author": { "@type": "Person", "name": "Paarth", "affiliation": { "@type": "Organization", "name": "Digital Crew" } },
+      "publisher": { "@type": "Organization", "name": "Digital Crew" },
+      "image": "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80",
+      "mainEntityOfPage": { "@type": "WebPage", "@id": "https://YOUR-DOMAIN.example/blog/hermes-agent-setup-guide" },
+      "keywords": "hermes agent, self-hosted ai, ai agent, telegram bot, vps, hostinger, digitalocean, beginner"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Do I need to know how to code to set up Hermes?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Not really, especially on the Hostinger one-click path, where the software installs without a terminal. You do need to be comfortable copying a token from Telegram and pasting it where prompted. If even that feels like too much, the one-command hstack approach hands the whole job to Claude Code." } },
+        { "@type": "Question", "name": "How much does it cost per month?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Roughly $10-17 per month all-in for typical personal use: $4-7 for the VPS and $6-10 for model API fees on a cost-effective model. That is well below premium hosted assistant subscriptions." } },
+        { "@type": "Question", "name": "Can I use my existing ChatGPT or Claude subscription instead of an API key?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Choose the OAuth login path during hermes model (for example, OpenAI Codex with your ChatGPT account). It rides your existing subscription rather than billing per token. Watch your usage the first week, since providers sometimes route third-party-tool usage differently." } },
+        { "@type": "Question", "name": "Which messaging platform should I connect first?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Telegram. It is the only fully headless option, pure token and numeric ID, with no QR scan or browser OAuth. Add WhatsApp, Discord, Slack, or others once Telegram is working." } },
+        { "@type": "Question", "name": "Is my data private?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes, in the sense that everything lives on your server: memory, conversations, and config are local files. Your prompts still go to whatever model provider you choose, so pick a provider you trust, or run a local model for full privacy." } },
+        { "@type": "Question", "name": "What happens when a new Hermes version comes out?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Nothing, until you upgrade. That is the point of pinning v0.15.2, the current stable release. When you decide to upgrade, back up first with hermes backup, then update, then re-verify each platform still responds." } },
+        { "@type": "Question", "name": "Can it run on a Raspberry Pi?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes, if the model runs via an API. People run Hermes 24/7 on a Raspberry Pi 5. Local models on a Pi are not realistic." } }
+      ]
+    }
+  ]
+}
