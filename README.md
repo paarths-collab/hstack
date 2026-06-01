@@ -1,16 +1,55 @@
-<div align="center">
+<p align="center">
+  <img src="assets/banner.svg" alt="hstack — one command, your own AI agent, deployed" width="100%">
+</p>
 
-# hstack
+<h1 align="center">hstack</h1>
 
-**One command. Your own AI agent, deployed.**
+<p align="center">
+  <strong>One command. Your own self-hosted AI agent, deployed.</strong><br>
+  hstack turns <a href="https://claude.com/claude-code">Claude Code</a> into the engineer who installs, wires, and hardens a <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> for you — so a non-developer goes from an empty server to an AI on their phone with a single paste.
+</p>
 
-hstack turns Claude Code into the engineer who sets up your self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent) for you — installs it, picks the model, wires your messaging platforms, hardens it, and keeps it alive. You answer ~5 questions. Claude does the rest.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Claude%20Code-compatible-58a6ff" alt="Claude Code compatible">
+  <img src="https://img.shields.io/badge/Agent%20Skills-compatible-2dd4bf" alt="Agent Skills compatible">
+  <img src="https://img.shields.io/badge/Commands-19-f59e0b" alt="19 commands">
+  <img src="https://img.shields.io/badge/Hermes-v0.15.0%20pinned-9d6bff" alt="Hermes v0.15.0 pinned">
+  <img src="https://img.shields.io/badge/Platforms-Telegram%20·%20WhatsApp%20·%20Discord%20·%20Slack-229ED9" alt="Platforms">
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
+</p>
 
-*Modeled on [gstack](https://github.com/garrytan/gstack). MIT licensed. Built by Paarth · Sponsored by Digital Crew.*
+<p align="center">
+  <a href="#-quick-start">Quick start</a> ·
+  <a href="#-commands">Commands</a> ·
+  <a href="#-reliability--what-hstack-pre-solves">Reliability</a> ·
+  <a href="#-deploy-targets">Deploy targets</a> ·
+  <a href="blog/deploy-ai-agent-one-command-hstack.md">Blog</a> ·
+  <a href="reference/TROUBLESHOOTING.md">Troubleshooting</a>
+</p>
 
-</div>
+<p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · Sponsored by Digital Crew</em></p>
 
 ---
+
+> **TL;DR** — Paste one command into Claude Code. It installs Hermes Agent, configures the model, wires
+> your messaging apps, hardens the deploy, and starts it. You answer ~5 questions (a token, a key, the
+> first "hello"). ~30 minutes, empty VPS → AI on your phone.
+
+## Table of contents
+
+- [Why hstack exists](#why-hstack-exists)
+- [What you get](#what-you-get)
+- [🚀 Quick start](#-quick-start)
+- [🧩 Commands](#-commands)
+- [⚙️ How it works](#️-how-it-works)
+- [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
+- [🌍 Deploy targets](#-deploy-targets)
+- [🔐 Security defaults](#-security-defaults)
+- [📊 Dashboard](#-dashboard)
+- [📝 Blog & guides](#-blog--guides)
+- [🤝 Contributing](#-contributing)
+- [License](#license)
 
 ## Why hstack exists
 
@@ -29,7 +68,7 @@ hstack is **the production layer Hermes is missing** — a self-healing, secured
 
 ---
 
-## Quick start
+## 🚀 Quick start
 
 > **Requirements:** [Claude Code](https://claude.com/claude-code), Git, and a server to deploy to (a fresh Ubuntu 24.04 VPS works — Hostinger one-click is the easiest; DigitalOcean / Hetzner / any VPS also supported).
 
@@ -48,7 +87,7 @@ Claude installs the toolkit, then `/hermes-deploy` walks you through the whole t
 
 ---
 
-## Commands
+## 🧩 Commands
 
 ### Orchestrator
 | Command | Does |
@@ -87,7 +126,7 @@ Claude installs the toolkit, then `/hermes-deploy` walks you through the whole t
 
 ---
 
-## How it works
+## ⚙️ How it works
 
 hstack is a set of Markdown **skills** — instructions Claude Code follows, plus small bash scripts. No new infrastructure, no daemon. Each command is one `skills/<name>/SKILL.md`.
 
@@ -112,7 +151,7 @@ You paste one command
 
 ---
 
-## Reliability — what hstack pre-solves
+## 🛡️ Reliability — what hstack pre-solves
 
 Every item below is a real, logged failure mode hstack handles so you don't hit it:
 
@@ -128,28 +167,59 @@ See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full 
 
 ---
 
-## Deploy targets
+## 🌍 Deploy targets
 
 hstack works on **any VPS**, with **Hostinger as the recommended one-click default** (genuinely the easiest path for non-technical users). Provider guides:
 
-- [Hostinger (one-click Docker)](blog/01-hermes-setup-guide.md#track-a--one-click-install-non-developers) — recommended
-- DigitalOcean / Hetzner / AWS (manual) — [advanced section](blog/01-hermes-setup-guide.md#advanced-other-vps-providers)
+| Provider | Path | Difficulty |
+|----------|------|-----------|
+| **Hostinger** ⭐ | One-click Docker deploy — no terminal | Easiest |
+| **DigitalOcean** | Ubuntu Droplet + SSH | Medium |
+| **Hetzner / any VPS** | Ubuntu box + SSH (~€4/mo) | Medium |
 
-## Security defaults
+Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
+
+## 🔐 Security defaults
 
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
 - Dashboard is read-only by default; if exposed, hstack ships its own auth + TLS (the upstream dashboard has none).
 
+## 📊 Dashboard
+
+Hermes ships a web dashboard (port `9119`) with a full read-only JSON API. `/hermes-dashboard` turns it
+on **safely** — bound to localhost, accessed over an SSH tunnel or an authenticated HTTPS proxy. The
+upstream dashboard has **no built-in auth**, so hstack never exposes it raw. The API contract for building
+a custom frontend is in [`reference/api-endpoints.md`](reference/api-endpoints.md).
+
+```bash
+ssh -L 9119:127.0.0.1:9119 user@your-vps      # then open http://127.0.0.1:9119
+```
+
 ## Honest positioning
 
 Hermes is genuinely good at: **persistent cross-project memory**, an **unmatched messaging-gateway breadth**, "it just runs," and **$6–10/mo cost predictability**. It is *not* "an agent that grows with you / self-improving" — memory is structured note-taking against a tight character budget. hstack describes things as they are.
 
-## Blog / guides
+## 📝 Blog & guides
 
-- [Set up Hermes Agent — beginner's guide](blog/01-hermes-setup-guide.md) (the manual way)
-- [One command instead of ten screenshots — hstack](blog/02-hermes-one-command.md)
+- [Deploy Your Own AI Agent in One Command with hstack](blog/deploy-ai-agent-one-command-hstack.md) — the flagship post
+- [Set up Hermes Agent — beginner's guide](blog/01-hermes-setup-guide.md) — the manual way, with provider walkthroughs
+- [One command instead of ten screenshots](blog/02-hermes-one-command.md)
+
+## 🤝 Contributing
+
+hstack's moat is its accumulated knowledge of what breaks. **Found a new Hermes failure mode and fix?**
+That's the most valuable contribution you can make.
+
+1. Fork the repo and create a branch.
+2. Add or update a `skills/<name>/SKILL.md`, or add an entry to [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) (symptom → cause → fix, with the GitHub issue # if there is one).
+3. Keep skills tight: frontmatter, the exact commands, the verification, and the pitfall it pre-solves.
+4. Open a PR. Every catalogued failure makes the next person's deploy more reliable.
+
+New platform, host, or memory provider? Add a skill — no architecture change needed.
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Built by Paarth. Sponsored by Digital Crew.
+[MIT](LICENSE) — free to use, fork, and modify. Built by **Paarth**. Sponsored by **Digital Crew**.
+
+<p align="center"><sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research or Hostinger.</sub></p>
