@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/banner-terminal.svg" alt="hstack — The Agent Deployment System. Terminal banner with the command palette." width="100%">
-</p>
-
 <h1 align="center">hstack</h1>
 
 <p align="center">
@@ -28,11 +24,7 @@
   <a href="reference/TROUBLESHOOTING.md">Troubleshooting</a>
 </p>
 
-<p align="center">
-  <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent dashboard showing the agent online, connected platforms, and the deploy pipeline." width="100%">
-</p>
-
-<p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · Sponsored by Digital Crew</em></p>
+<p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with Digital Crew</em></p>
 
 ---
 
@@ -224,6 +216,6 @@ New platform, host, or memory provider? Add a skill — no architecture change n
 
 ## License
 
-[MIT](LICENSE) — free to use, fork, and modify. Built by **Paarth**. Sponsored by **Digital Crew**.
+[MIT](LICENSE) — free to use, fork, and modify. Built by **Paarth**. In collaboration with **Digital Crew**.
 
 <p align="center"><sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research or Hostinger.</sub></p>

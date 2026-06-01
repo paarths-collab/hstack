@@ -106,6 +106,6 @@ know that going in.
 4. Say "hello" to your new agent.
 
 **Repo:** [github.com/paarths-collab/hstack](https://github.com/paarths-collab/hstack) · MIT licensed ·
-Built by Paarth · Sponsored by Digital Crew.
+Built by Paarth · In collaboration with Digital Crew.
 
 → Prefer to understand every step first? Read [the manual beginner's guide](01-hermes-setup-guide.md).
