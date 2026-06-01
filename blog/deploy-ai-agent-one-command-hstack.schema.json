@@ -1,0 +1,32 @@
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "BlogPosting",
+      "headline": "Deploy Your Own AI Agent in One Command with hstack",
+      "description": "Self-host a Hermes Agent on a VPS in one Claude Code command. hstack automates install, model, messaging platforms, memory, and autostart, and pre-solves the real failures that break manual setups.",
+      "datePublished": "2026-06-01",
+      "dateModified": "2026-06-01",
+      "author": { "@type": "Person", "name": "Paarth", "affiliation": { "@type": "Organization", "name": "Digital Crew" } },
+      "publisher": { "@type": "Organization", "name": "Digital Crew" },
+      "image": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80",
+      "mainEntityOfPage": { "@type": "WebPage", "@id": "https://example.com/blog/deploy-ai-agent-one-command-hstack" },
+      "keywords": "hermes agent, self-hosted ai, ai agent, claude code, telegram bot, vps, hstack"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        { "@type": "Question", "name": "Do I need to know how to code to use hstack?",
+          "acceptedAnswer": { "@type": "Answer", "text": "No. Claude Code does the terminal work. You paste one command and answer plain questions. The Hostinger one-click path requires no terminal at all; copying a token from Telegram is the only manual skill involved." } },
+        { "@type": "Question", "name": "How much does running a self-hosted Hermes Agent cost?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Roughly $6-10 per month in model API fees for typical personal use, plus a VPS from about $4-7 per month, per community cost breakdowns. That is well below hosted assistant tiers around $100 per month." } },
+        { "@type": "Question", "name": "Is the dashboard safe to expose on the internet?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Not by default. The upstream Hermes dashboard has no built-in authentication and can read your secrets. hstack binds it to localhost and recommends access over an SSH tunnel, or an authenticated HTTPS reverse proxy for remote access." } },
+        { "@type": "Question", "name": "Which messaging platform should I start with?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Telegram, because it is the only fully headless option: setup is pure token and numeric user ID, with no QR scan or OAuth. WhatsApp, Discord, Slack, and Mattermost are supported and can be added afterward." } },
+        { "@type": "Question", "name": "What happens when Hermes releases a new version?",
+          "acceptedAnswer": { "@type": "Answer", "text": "hstack pins a known-good version (v0.15.0) so a future release cannot silently break your setup. When you choose to upgrade, the update command backs up first, updates, and re-verifies that every platform still responds." } }
+      ]
+    }
+  ]
+}

@@ -95,22 +95,15 @@ official wizard doesn't warn you about — failures documented in Hermes' own is
 testing, these are the ones that actually break a manual deployment. The chart below shows the single
 most expensive one: fixed overhead on every request.
 
-<svg role="img" aria-label="Bar chart showing roughly 73 percent of each Hermes request is fixed token overhead: 8,759 tokens for tool definitions, 5,176 for the system prompt, and about 5,000 of actual user content out of roughly 19,000 total" viewBox="0 0 640 220" xmlns="http://www.w3.org/2000/svg" style="max-width:100%;height:auto;font-family:system-ui,sans-serif">
-  <text x="0" y="20" fill="#e7eaf0" font-size="15" font-weight="700">Where every Hermes request's tokens go (v0.6.0)</text>
-  <g font-size="13" fill="#c9d1d9">
-    <text x="0" y="62">Tool definitions</text>
-    <rect x="150" y="50" width="420" height="18" rx="3" fill="#f87171"/>
-    <text x="580" y="64" fill="#f87171" font-weight="700">8,759</text>
-    <text x="0" y="102">System prompt</text>
-    <rect x="150" y="90" width="248" height="18" rx="3" fill="#fbbf24"/>
-    <text x="408" y="104" fill="#fbbf24" font-weight="700">5,176</text>
-    <text x="0" y="142">Actual user content</text>
-    <rect x="150" y="130" width="240" height="18" rx="3" fill="#5ee2b5"/>
-    <text x="400" y="144" fill="#5ee2b5" font-weight="700">~5,000</text>
-  </g>
-  <text x="0" y="190" fill="#8b949e" font-size="12">~73% of each request is fixed overhead before you type a word.</text>
-  <text x="0" y="210" fill="#8b949e" font-size="11">Source: NousResearch/hermes-agent GitHub issue #4379</text>
-</svg>
+**Where every Hermes request's tokens go (v0.6.0):**
+
+| Component | Tokens | Share |
+|-----------|-------:|------:|
+| Tool definitions (incl. browser tools unused on chat) | 8,759 | 46% |
+| System prompt (SOUL.md + skills catalog) | 5,176 | 27% |
+| Actual user content | ~5,000 | ~27% |
+
+*~73% of each request is fixed overhead before you type a word. Source: [NousResearch/hermes-agent #4379](https://github.com/NousResearch/hermes-agent/issues/4379).*
 
 Here are the documented failures hstack handles so you never hit them:
 
@@ -210,37 +203,4 @@ Prefer to understand each step first? Read the companion [beginner's setup guide
 *Written by Paarth · Digital Crew. hstack is independent open-source software; Hermes Agent is a project
 of Nous Research. Hostinger is the recommended deploy target, and other VPS providers are fully supported.*
 
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@graph": [
-    {
-      "@type": "BlogPosting",
-      "headline": "Deploy Your Own AI Agent in One Command with hstack",
-      "description": "Self-host a Hermes Agent on a VPS in one Claude Code command. hstack automates install, model, messaging platforms, memory, and autostart, and pre-solves the real failures that break manual setups.",
-      "datePublished": "2026-06-01",
-      "dateModified": "2026-06-01",
-      "author": { "@type": "Person", "name": "Paarth", "affiliation": { "@type": "Organization", "name": "Digital Crew" } },
-      "publisher": { "@type": "Organization", "name": "Digital Crew" },
-      "image": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80",
-      "mainEntityOfPage": { "@type": "WebPage", "@id": "https://example.com/blog/deploy-ai-agent-one-command-hstack" },
-      "keywords": "hermes agent, self-hosted ai, ai agent, claude code, telegram bot, vps, hstack"
-    },
-    {
-      "@type": "FAQPage",
-      "mainEntity": [
-        { "@type": "Question", "name": "Do I need to know how to code to use hstack?",
-          "acceptedAnswer": { "@type": "Answer", "text": "No. Claude Code does the terminal work. You paste one command and answer plain questions. The Hostinger one-click path requires no terminal at all; copying a token from Telegram is the only manual skill involved." } },
-        { "@type": "Question", "name": "How much does running a self-hosted Hermes Agent cost?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Roughly $6-10 per month in model API fees for typical personal use, plus a VPS from about $4-7 per month, per community cost breakdowns. That is well below hosted assistant tiers around $100 per month." } },
-        { "@type": "Question", "name": "Is the dashboard safe to expose on the internet?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Not by default. The upstream Hermes dashboard has no built-in authentication and can read your secrets. hstack binds it to localhost and recommends access over an SSH tunnel, or an authenticated HTTPS reverse proxy for remote access." } },
-        { "@type": "Question", "name": "Which messaging platform should I start with?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Telegram, because it is the only fully headless option: setup is pure token and numeric user ID, with no QR scan or OAuth. WhatsApp, Discord, Slack, and Mattermost are supported and can be added afterward." } },
-        { "@type": "Question", "name": "What happens when Hermes releases a new version?",
-          "acceptedAnswer": { "@type": "Answer", "text": "hstack pins a known-good version (v0.15.0) so a future release cannot silently break your setup. When you choose to upgrade, the update command backs up first, updates, and re-verifies that every platform still responds." } }
-      ]
-    }
-  ]
-}
-</script>
+<!-- SEO schema (BlogPosting + FAQPage JSON-LD) is in deploy-ai-agent-one-command-hstack.schema.json — inject it into the page <head> at publish time, not into the rendered body. -->
