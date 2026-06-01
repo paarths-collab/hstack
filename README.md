@@ -76,7 +76,9 @@ hstack is **the production layer Hermes is missing** — a self-healing, secured
 
 > **Requirements:** [Claude Code](https://claude.com/claude-code), Git, and a server to deploy to (a fresh Ubuntu 24.04 VPS works — Hostinger one-click is the easiest; DigitalOcean / Hetzner / any VPS also supported).
 
-Open Claude Code and paste this:
+### The one command
+
+Open [Claude Code](https://claude.com/claude-code) and paste this **single command**:
 
 ```
 Install hstack: run
@@ -85,9 +87,30 @@ Install hstack: run
 Then add an "hstack" section to CLAUDE.md listing the commands, and run /hermes-deploy.
 ```
 
-Claude installs the toolkit, then `/hermes-deploy` walks you through the whole thing — stopping only for the ~5 things a machine can't do (mint a bot token, paste an API key, scan a QR, click OAuth, send the first "hello").
+That's the whole install. Claude registers the toolkit, then `/hermes-deploy` runs the entire setup
+end-to-end — install → model → platforms → skills → memory → personality → home channel → autostart →
+verify. It stops only for the ~5 things a machine can't do.
 
-**Windows:** install under WSL2 — Hermes has no native Windows support.
+> **Windows:** install under WSL2 — Hermes has no native Windows support.
+
+### What you'll need — and how to get each
+
+You don't need to prepare any of this in advance. **During `/hermes-deploy`, Claude pauses at each step
+and tells you exactly where to click and what to copy.** This table is just a reference for what it'll ask.
+
+| You provide | Where to get it (Claude walks you through it) | Needed for |
+|-------------|-----------------------------------------------|------------|
+| **Server access** | **Hostinger:** hPanel → Docker Manager → Compose → one-click deploy → search "Hermes". **Other VPS:** your SSH host, user, and password/key. | Install |
+| **Model API key** | **OpenRouter (easiest):** [openrouter.ai](https://openrouter.ai) → Keys → Create Key → copy `sk-or-...`. **Or OpenAI:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys). | Model |
+| **Telegram bot token** | In Telegram, message **@BotFather** → `/newbot` → name it → username ends in `bot` → copy the token. | Telegram |
+| **Your Telegram user ID** | In Telegram, message **@userinfobot** → it replies with your numeric ID. | Telegram allowlist |
+| **Discord bot token + intents** | [discord.com/developers](https://discord.com/developers/applications) → New Application → Bot → Reset Token. Enable **Message Content** + **Server Members** intents. Invite via the OAuth2 URL. | Discord |
+| **Your phone (WhatsApp)** | Scan the QR Claude shows: WhatsApp → Settings → Linked Devices → Link a Device. Allowlist = your number, country code, no `+`. | WhatsApp |
+| **Slack tokens** | [api.slack.com/apps](https://api.slack.com/apps) → create app → enable Socket Mode → copy the Bot token (`xoxb-`) and App token (`xapp-`). | Slack |
+| **Google AI key** *(optional)* | Free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — only for image/audio features. | Extras |
+
+Claude never asks you to paste secrets into the chat carelessly — it writes each one to `~/.hermes/.env`
+via `hermes config set` (and `chmod 600`s it), so your keys stay out of logs and history.
 
 ---
 
