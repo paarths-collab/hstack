@@ -27,9 +27,9 @@ This guide explains exactly what that command does, why it is reliable where man
 ## Key takeaways
 
 - **One paste, ~5 questions, ~30 minutes** to a live agent on your phone, no terminal expertise required.
-- **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak that crashes the agent after a day, ~73% fixed token overhead, silent capability failures and a dashboard with no authentication.
+- **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak that crashes the agent after a day, ~73% fixed token overhead, and silent capability failures.
 - **It pins a known-good Hermes version (v0.15.2, the current stable release)** so a future release cannot silently break your setup.
-- **Secure by default:** localhost-bound, allowlist-enforced, secrets written to `.env` with `chmod 600`, dashboard never exposed without auth.
+- **Secure by default:** localhost-bound, allowlist-enforced, secrets written to `.env` with `chmod 600`, no open bots.
 - **Multi-VPS with Hostinger as the one-click default;** DigitalOcean, Hetzner and any VPS are supported.
 - **Running cost is roughly $10–17/month** all-in, versus ~$100/month for a premium hosted assistant.
 
@@ -41,15 +41,14 @@ This guide explains exactly what that command does, why it is reliable where man
 4. [What `/hermes-deploy` actually does](#4-what-hermes-deploy-actually-does)
 5. [The reliability layer: what hstack pre-solves](#5-the-reliability-layer-what-hstack-pre-solves)
 6. [The command library](#6-the-command-library)
-7. [The dashboard](#7-the-dashboard)
-8. [What you'll actually do with your agent](#8-what-youll-actually-do-with-your-agent)
-9. [Manual vs one-command](#9-manual-vs-one-command)
-10. [Where it deploys](#10-where-it-deploys)
-11. [Security defaults](#11-security-defaults)
-12. [What's real vs what's marketing](#12-whats-real-vs-whats-marketing)
-13. [Migrating from OpenClaw](#13-migrating-from-openclaw)
-14. [FAQ](#14-faq)
-15. [Get started](#15-get-started)
+7. [What you'll actually do with your agent](#7-what-youll-actually-do-with-your-agent)
+8. [Manual vs one-command](#8-manual-vs-one-command)
+9. [Where it deploys](#9-where-it-deploys)
+10. [Security defaults](#10-security-defaults)
+11. [What's real vs what's marketing](#11-whats-real-vs-whats-marketing)
+12. [Migrating from OpenClaw](#12-migrating-from-openclaw)
+13. [FAQ](#13-faq)
+14. [Get started](#14-get-started)
 
 ---
 
@@ -225,13 +224,9 @@ Issue #16677 shows that a model 429 (rate limit), 401 (auth), or timeout can cra
 
 Built-in memory caps at roughly 1,375 characters for the user profile and 2,200 for agent memory (issue #32156). When full, the agent burns turns consolidating instead of working and nothing surfaces this to you. **hstack** explains the ceiling during setup and makes it a one-step move to attach an external memory provider (correctly installing its dependency, which the stock setup forgets to do).
 
-### A dashboard with no authentication
-
-The Hermes dashboard binds to localhost and reads your `.env` full of keys, but it has no built-in password. Bind it to `0.0.0.0` and anyone can read your credentials and security firms have found hundreds of thousands of self-hosted AI servers exposed exactly this way. **hstack** keeps the dashboard loopback-bound by default and never exposes it without its own authentication and HTTPS in front.
-
 ### Platform and host-specific traps
 
-hstack also bakes in the smaller, version-specific landmines: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open and pins a known-good, dashboard-working version so a later release cannot silently change behavior under you.
+hstack also bakes in the smaller, version-specific landmines: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open and pins a known-good, current-stable version so a later release cannot silently change behavior under you.
 
 The full, continuously-updated catalogue with issue numbers lives in the repo's [`reference/TROUBLESHOOTING.md`](https://github.com/paarths-collab/hstack/blob/main/reference/TROUBLESHOOTING.md). This accumulated knowledge, not the install script, is what hstack really is.
 
@@ -247,7 +242,6 @@ hstack pre-solves these during deploy, but if you are debugging an existing setu
 | Gateway crash-loops | Stale `gateway.pid` after a crash | `/hermes-restart` (clears the lock) |
 | Memory balloons, then OOM | The gateway leak over ~a day | Nightly restart cron (hstack adds this) |
 | Vision/web "doesn't work," no error | Auxiliary model not keyed | Add a provider key |
-| Dashboard reloads in a loop / won't load | v0.15.0's loopback-mode dashboard bug | Pin v0.15.2 (fixed in v0.15.1), hstack's default |
 
 When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repairs it.
 
@@ -286,27 +280,12 @@ When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repair
 - **`/hermes-update`**, safe update with backup and re-verify.
 - **`/hermes-fix`**, diagnose and repair common failures.
 - **`/hermes-backup`**, back up config and sessions.
-- **`/hermes-dashboard`**, turn the dashboard on, safely.
 
 This is the difference between a one-time install script and a tool you live with. When something needs attention months later, you do not re-learn Hermes internals, you run `/hermes-status` or `/hermes-fix` and let Claude handle it.
 
 ---
 
-## 7. The dashboard
-
-Hermes ships a built-in web dashboard on port 9119 with a full read-only JSON API, status, conversations, scheduled tasks, logs and cost. `/hermes-dashboard` turns it on the safe way.
-
-Because the upstream dashboard has no built-in authentication, hstack binds it to localhost and gives you access over an SSH tunnel:
-
-```bash
-ssh -L 9119:127.0.0.1:9119 user@your-vps # then open http://127.0.0.1:9119
-```
-
-If you want remote, always-on access, hstack puts an authenticated HTTPS reverse proxy in front rather than exposing the raw port. The API contract for building a custom frontend on top of it lives in [`reference/api-endpoints.md`](https://github.com/paarths-collab/hstack/blob/main/reference/api-endpoints.md).
-
----
-
-## 8. What you'll actually do with your agent
+## 7. What you'll actually do with your agent
 
 Once it is live, the question becomes "what should it do for me?" These are real workflows people run on Hermes today.
 
@@ -362,7 +341,7 @@ This is the difference between a script you run once and a tool you actually kee
 
 ---
 
-## 9. Manual vs one-command
+## 8. Manual vs one-command
 
 Both paths end at the same place, a working, self-hosted agent. The difference is how you spend your time and which mistakes you make.
 
@@ -395,7 +374,7 @@ hstack does not lock you in. It is plain Markdown skills plus a small script; ev
 
 ---
 
-## 10. Where it deploys
+## 9. Where it deploys
 
 hstack runs on any VPS, with **Hostinger as the recommended one-click default** because its one-click Docker deploy is genuinely the easiest path for a non-technical user, no terminal at all. Other providers work as the advanced, SSH-based path.
 
@@ -407,14 +386,13 @@ A practical minimum is 1 vCPU and 2 GB of RAM when the model runs via an API; ad
 
 ---
 
-## 11. Security defaults
+## 10. Security defaults
 
 hstack is secure by default because the ecosystem's default is not. Out of the box:
 
 - **Localhost binding.** Nothing is exposed to the network unless you explicitly, knowingly opt in.
 - **Allowlists enforced.** No open bots, every platform requires an allowed-users list.
 - **Secrets locked down.** Keys go to `~/.hermes/.env` with `chmod 600`, never to `config.yaml` and never into chat.
-- **Dashboard never exposed raw.** Loopback-bound; remote access only behind authenticated HTTPS.
 - **No sudo installs.** Avoids the root-owned-file permission failures and the wider attack surface.
 - **Sandbox-friendly.** Encourages running the agent's terminal work in a container rather than directly on the host.
 
@@ -422,7 +400,7 @@ This matters because self-hosted AI servers are routinely found exposed to the i
 
 ---
 
-## 12. What's real vs what's marketing
+## 11. What's real vs what's marketing
 
 hstack does not oversell Hermes and neither should you. Here is the candid version.
 
@@ -430,19 +408,19 @@ hstack does not oversell Hermes and neither should you. Here is the candid versi
 
 **Overstated:** the "agent that grows with you / self-improving" framing. In reality, memory is a fixed ~1,375 / ~2,200 character budget, the agent writes small markdown files. It is structured note-taking against a tight budget, not open-ended learning. Headline performance numbers are usually vendor-internal.
 
-**Real gotchas (all handled by hstack):** large fixed token overhead per request, a gateway memory leak over ~a day, silently-degrading auxiliary features and a no-auth dashboard.
+**Real gotchas (all handled by hstack):** large fixed token overhead per request, a gateway memory leak over ~a day, and silently-degrading auxiliary features.
 
 Why the honesty? Because the self-hosted-agent space has a credibility problem, inflated claims and a flood of near-identical marketing posts. A tool that tells you the truth about its own foundation is one you can actually trust to run your agent.
 
 ---
 
-## 13. Migrating from OpenClaw
+## 12. Migrating from OpenClaw
 
 If you are coming from OpenClaw, Hermes has a built-in migration that imports your settings, memory, skills and API keys (`hermes claw migrate`). hstack wraps this with two safeguards: it **backs up first** and it helps you **re-verify imported skills** before trusting them, OpenClaw's marketplace had a documented supply-chain problem with malicious skills, so importing blindly is a real risk. The migration is also a major reason people are moving to Hermes in the first place: a string of security issues on the other side, against Hermes' "it just runs" reputation.
 
 ---
 
-## 14. FAQ
+## 13. FAQ
 
 ### Do I really only need one command?
 
@@ -460,9 +438,9 @@ The installer puts the binary on your machine, that part was never hard. hstack 
 
 Roughly $10–17/month all-in: $4–7 for the VPS and $6–10 for model API fees on a cost-effective model like DeepSeek V4. That is well below premium hosted assistant tiers around $100/month.
 
-### Is it safe? What about the dashboard?
+### Is it safe?
 
-hstack is secure by default: localhost binding, enforced allowlists, locked-down secrets. The dashboard, which has no built-in authentication upstream, is kept loopback-bound and accessed over an SSH tunnel, or put behind authenticated HTTPS for remote use. It is never exposed raw.
+hstack is secure by default: localhost binding, enforced allowlists, and locked-down secrets (written to `.env` with `chmod 600`, never to chat). Network exposure is always an explicit, warned opt-in.
 
 ### Which model should I use?
 
@@ -538,7 +516,7 @@ Yes. The agent runs on your server, not your laptop. hstack installs the gateway
 
 ---
 
-## 15. Get started
+## 14. Get started
 
 After the deploy finishes, you will have:
 
@@ -546,7 +524,7 @@ After the deploy finishes, you will have:
 - It replying to you on at least one messaging platform (Telegram and any others you added).
 - A pinned, known-good version that will not break under you.
 - Autostart on reboot, a nightly restart to dodge the memory leak and a nightly backup.
-- Secure defaults: localhost-bound dashboard, enforced allowlists, locked-down secrets.
+- Secure defaults: enforced allowlists, locked-down secrets, localhost binding.
 - A library of commands (`/hermes-status`, `/hermes-fix`, `/hermes-update`, …) for everything after.
 
 To get there:

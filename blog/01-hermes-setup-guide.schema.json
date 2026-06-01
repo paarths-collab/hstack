@@ -4,7 +4,7 @@
     {
       "@type": "BlogPosting",
       "headline": "How to Set Up Your Own AI Agent (Self-Hosted Hermes): The Complete Beginner's Guide",
-      "description": "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, dashboard, security, and cost, for beginners and devs.",
+      "description": "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, security, and cost, for beginners and devs.",
       "datePublished": "2026-06-01",
       "dateModified": "2026-06-01",
       "author": { "@type": "Person", "name": "Paarth", "affiliation": { "@type": "Organization", "name": "Digital Crew" } },

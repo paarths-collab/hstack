@@ -1,6 +1,6 @@
 ---
 title: "Self-Hosted AI Agent Setup: The Complete Hermes Guide"
-description: "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, dashboard, security and cost, for beginners and devs."
+description: "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, security and cost, for beginners and devs."
 date: "2026-06-01"
 lastmod: "2026-06-01"
 author: "Paarth · Digital Crew"
@@ -10,7 +10,7 @@ canonical: "https://YOUR-DOMAIN.example/blog/hermes-agent-setup-guide"
 image: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80"
 image_alt: "A code editor on a screen, representing setting up a self-hosted AI agent on a server"
 og_title: "Self-Hosted AI Agent Setup: The Complete Hermes Guide"
-og_description: "Deploy a self-hosted Hermes AI agent on a VPS step by step, install, model, messaging, memory, dashboard, security and cost."
+og_description: "Deploy a self-hosted Hermes AI agent on a VPS step by step, install, model, messaging, memory, security and cost."
 og_image: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80"
 twitter_card: "summary_large_image"
 ---
@@ -32,7 +32,7 @@ Imagine texting an AI on Telegram that is genuinely *yours*. It remembers your p
 - **The standout feature is persistent memory**, it remembers context across sessions and projects, which is what most users say sets it apart.
 - **It reaches you where you already are:** Telegram, Discord, Slack, WhatsApp, Signal, Matrix, email, SMS and Home Assistant.
 - **Running cost is roughly $6–10/month** in model API fees for typical personal use, plus the VPS.
-- **The setup has real traps**, a PATH issue that breaks the first run, a tiny fixed memory ceiling, a dashboard with no built-in password and silent capability failures, all of which this guide pre-empts.
+- **The setup has real traps**, a PATH issue that breaks the first run, a tiny fixed memory ceiling and silent capability failures, all of which this guide pre-empts.
 - **Pin a known-good version (`hermes-agent==0.15.2`)**, the current stable release, so a future release cannot silently break your setup.
 
 ## Table of contents
@@ -47,15 +47,14 @@ Imagine texting an AI on Telegram that is genuinely *yours*. It remembers your p
 8. [Step 5, Connect a messaging platform](#8-step-5-connect-a-messaging-platform)
 9. [Step 6, Memory and personality](#9-step-6-memory-and-personality)
 10. [Step 7, Scheduled tasks (cron)](#10-step-7-scheduled-tasks-cron)
-11. [Step 8, The dashboard](#11-step-8-the-dashboard)
-12. [Step 9, Keep it running](#12-step-9-keep-it-running)
-13. [Security hardening](#13-security-hardening)
-14. [Cost optimization](#14-cost-optimization)
-15. [Common mistakes and troubleshooting](#15-common-mistakes-and-troubleshooting)
-16. [What's real vs what's marketing](#16-whats-real-vs-whats-marketing)
-17. [Coming from OpenClaw](#17-coming-from-openclaw)
-18. [FAQ](#18-faq)
-19. [The one-command shortcut](#19-the-one-command-shortcut)
+11. [Step 8, Keep it running](#11-step-8-keep-it-running)
+12. [Security hardening](#12-security-hardening)
+13. [Cost optimization](#13-cost-optimization)
+14. [Common mistakes and troubleshooting](#14-common-mistakes-and-troubleshooting)
+15. [What's real vs what's marketing](#15-whats-real-vs-whats-marketing)
+16. [Coming from OpenClaw](#16-coming-from-openclaw)
+17. [FAQ](#17-faq)
+18. [The one-command shortcut](#18-the-one-command-shortcut)
 
 ---
 
@@ -126,7 +125,7 @@ You need three things: a server, a model and (optionally) a messaging account to
 
 **A messaging account:** a Telegram account is the easiest starting point and costs nothing.
 
-> **A note on Windows:** Hermes installs natively on Windows, the CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`. WSL2 also works if you prefer it (only the browser-based dashboard chat pane benefits from it). That said, for an *always-on* agent you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
+> **A note on Windows:** Hermes installs natively on Windows, the CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`. WSL2 also works if you prefer it. That said, for an *always-on* agent you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
 
 ---
 
@@ -189,7 +188,7 @@ hermes --version
 
 ### Why pin the version?
 
-Hermes ships releases under two numbering schemes for the *same* build, a GitHub tag like `v2026.5.29.2` and a PyPI version like `0.15.2`. Installing the unpinned latest means a future release can change behavior or introduce a regression under you. Pinning `0.15.2`, the current stable release, gives you a reproducible base. It is also the version you want for the dashboard: v0.15.0 shipped a dashboard reload loop in loopback (localhost) mode, v0.15.1 hotfixed it the same day and v0.15.2 followed with a packaging fix. When you later choose to upgrade past it, you do so deliberately.
+Hermes ships releases under two numbering schemes for the *same* build, a GitHub tag like `v2026.5.29.2` and a PyPI version like `0.15.2`. Installing the unpinned latest means a future release can change behavior or introduce a regression under you. Pinning `0.15.2`, the current stable release, gives you a reproducible base. When you later choose to upgrade past it, you do so deliberately.
 
 ### The #1 beginner trap: "command not found"
 
@@ -401,21 +400,7 @@ Remember the design constraint from the official docs: a cron job runs in a *fre
 
 ---
 
-## 11. Step 8, The dashboard
-
-Hermes ships a built-in web dashboard on port **9119** that shows status, recent conversations, scheduled tasks, logs and cost. Enable it with the `HERMES_DASHBOARD=1` environment variable (or `hermes dashboard` natively).
-
-**Do not expose it to the open internet.** The dashboard has *no built-in authentication*, its only protection is binding to localhost and it can read your `.env` full of API keys. The safe way to use it is over an SSH tunnel from your laptop:
-
-```bash
-ssh -L 9119:127.0.0.1:9119 user@your-vps # then open http://127.0.0.1:9119
-```
-
-If you genuinely need remote access, put a reverse proxy (Caddy or Nginx) with HTTPS and a password in front of it, never the raw port. More on this in the security section.
-
----
-
-## 12. Step 9, Keep it running
+## 11. Step 8, Keep it running
 
 A chat that dies when you close your terminal is not an assistant. Make the gateway durable.
 
@@ -427,12 +412,11 @@ A chat that dies when you close your terminal is not an assistant. Make the gate
 
 ---
 
-## 13. Security hardening
+## 12. Security hardening
 
 Self-hosted AI agents have a poor security track record, not because the software is bad, but because people deploy it carelessly. Security firms have found *hundreds of thousands* of self-hosted AI servers exposed to the open internet with no authentication. Do not be one of them. Here is the checklist.
 
 - **Allowlist everything.** Set `*_ALLOWED_USERS` for every platform. Never enable an "allow all users" mode on an agent that can run terminal commands.
-- **Keep the dashboard local.** Bind to `127.0.0.1`. Reach it via SSH tunnel or Tailscale. If you must expose it, use HTTPS + a password via a reverse proxy and keep the software patched, there is a known authentication-bypass class of vulnerability (the "BadHost" Host-header bug) in the web framework many agent dashboards are built on.
 - **Lock down secrets.** `chmod 600 ~/.hermes/.env`. Never paste keys into chat. Never commit `.env` to git.
 - **Never install as root/sudo.** It breaks file permissions and widens your attack surface.
 - **Sandbox risky work.** Set the terminal backend to Docker (`TERMINAL_BACKEND=docker`) so the agent runs commands in a container, not directly on your host. Several experienced users scope the agent tightly, for example, allowing it to reach a home machine only through a Tailscale tag.
@@ -442,7 +426,7 @@ The theme: localhost by default, explicit and authenticated when remote, least p
 
 ---
 
-## 14. Cost optimization
+## 13. Cost optimization
 
 The whole appeal of self-hosting is cost control, so it is worth doing deliberately.
 
@@ -470,7 +454,7 @@ That means roughly **70%+ of each request can be fixed overhead.** Three levers 
 
 ---
 
-## 15. Common mistakes and troubleshooting
+## 14. Common mistakes and troubleshooting
 
 The single highest-value table in this guide. Most "Hermes is broken" reports are one of these.
 
@@ -488,13 +472,12 @@ The single highest-value table in this guide. Most "Hermes is broken" reports ar
 | Gateway crash-loops every 30s | Stale `gateway.pid` after a crash | `gateway stop`, remove the PID + lock files, `gateway start` |
 | Memory grows to many GB, then OOM | A gateway memory leak over ~a day | Add a nightly `gateway restart` cron; pin a stable version |
 | Agent "forgets" / acts weird | Stale or full memory files | Ask it to read its memory aloud; prune; consider external memory |
-| Dashboard reloads in a loop / won't load | v0.15.0's loopback-mode dashboard bug | Upgrade to v0.15.2 (fixed in v0.15.1), hstack's default pin |
 
 When in doubt, `hermes doctor` runs a diagnostic and `hermes logs gateway -n 50` shows recent gateway activity.
 
 ---
 
-## 16. What's real vs what's marketing
+## 15. What's real vs what's marketing
 
 Being honest about a tool builds more trust than hyping it and the self-hosted-agent space is noisy. Here is the candid version.
 
@@ -512,19 +495,18 @@ Being honest about a tool builds more trust than hyping it and the self-hosted-a
 - A large fraction of each request can be fixed token overhead, watch your costs.
 - The gateway can leak memory and crash after roughly a day of uptime, restart it nightly.
 - Auxiliary-powered features can fail silently if a key is missing.
-- The dashboard has no built-in authentication.
 
 None of this means Hermes is a bad choice, it is a genuinely good one. It just means you should go in with clear eyes, which is exactly why this guide pre-empts each issue.
 
 ---
 
-## 17. Coming from OpenClaw
+## 16. Coming from OpenClaw
 
 If you are migrating from OpenClaw, Hermes has a built-in path: `hermes claw migrate` imports your settings, memory, skills and API keys. Two cautions: **back up first** and **re-verify the imported skills**, OpenClaw's skill marketplace had a documented supply-chain problem with malicious skills, so do not import blindly. Diff what comes over before trusting it.
 
 ---
 
-## 18. FAQ
+## 17. FAQ
 
 ### Do I need to know how to code to set up Hermes?
 
@@ -562,17 +544,13 @@ The agent and its memory are local, but it needs a model. With a local model via
 
 You have hit the memory ceiling (~1,375 / ~2,200 characters). It is consolidating to make room. Prune old notes or attach an external memory provider.
 
-### Is the dashboard safe to put online?
-
-Not by default, it has no authentication. Use an SSH tunnel, or put it behind HTTPS + a password via a reverse proxy.
-
 ### Can it run on a Raspberry Pi?
 
 Yes, if the model runs via an API. People run Hermes 24/7 on a Raspberry Pi 5. Local models on a Pi are not realistic.
 
 ---
 
-## 19. The one-command shortcut
+## 18. The one-command shortcut
 
 Everything above works and the first time you do it by hand, you will understand your agent far better for it. But it is a lot of steps and every one has a trap.
 

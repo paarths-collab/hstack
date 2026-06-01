@@ -17,7 +17,7 @@ Do every step you can autonomously; stop and ask the user ONLY for the things a 
 3. **Which messaging platform(s)?** Recommend **Telegram first** (fully headless). Others optional.
 
 Announce the plan, then proceed. Use the absolute binary path `~/.local/bin/hermes` everywhere (PATH
-is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (current stable, dashboard-working).
+is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (the current stable release).
 
 ## The 8 steps (delegate to the sub-skills)
 1. **Install** → run the `/hermes-install` procedure. Verify `hermes --version` and `hermes -z 'reply OK'` later.

@@ -16,3 +16,6 @@ Thumbs.db
 # scratch
 tmp/
 scratch/
+
+# untracked frontend/dashboard work — kept locally, not part of the published toolkit
+frontend/

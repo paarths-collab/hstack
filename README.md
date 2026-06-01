@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-compatible-58a6ff" alt="Claude Code compatible">
   <img src="https://img.shields.io/badge/Agent%20Skills-compatible-2dd4bf" alt="Agent Skills compatible">
-  <img src="https://img.shields.io/badge/Commands-19-f59e0b" alt="19 commands">
+  <img src="https://img.shields.io/badge/Commands-18-f59e0b" alt="18 commands">
   <img src="https://img.shields.io/badge/Hermes-v0.15.2%20pinned-9d6bff" alt="Hermes v0.15.2 pinned">
   <img src="https://img.shields.io/badge/Platforms-Telegram%20·%20WhatsApp%20·%20Discord%20·%20Slack-229ED9" alt="Platforms">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
@@ -29,7 +29,7 @@
 </p>
 
 <p align="center">
-  <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent dashboard showing the agent online, connected platforms, and the deploy pipeline." width="100%">
+  <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent status panel showing the agent online, connected platforms, and the deploy pipeline." width="100%">
 </p>
 
 <p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with <a href="https://www.digitalcrew.tech/en">Digital Crew Technology</a></em></p>
@@ -50,14 +50,13 @@
 - [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
 - [🌍 Deploy targets](#-deploy-targets)
 - [🔐 Security defaults](#-security-defaults)
-- [📊 Dashboard](#-dashboard)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
 
 ## Why hstack exists
 
-Installing Hermes was never the hard part — it ships its own `curl | bash`. **The pain is everything after**: the gateway that crashes after a day, 73% token overhead that runs up surprise bills, capabilities that silently die when a key is missing, allowlists that lock you out, and a dashboard with no built-in auth.
+Installing Hermes was never the hard part — it ships its own `curl | bash`. **The pain is everything after**: the gateway that crashes after a day, 73% token overhead that runs up surprise bills, capabilities that silently die when a key is missing, and allowlists that lock you out.
 
 hstack is **the production layer Hermes is missing** — a self-healing, secured, observable deploy in one Claude Code command, for people who want self-hosting without living in a terminal.
 
@@ -66,9 +65,9 @@ hstack is **the production layer Hermes is missing** — a self-healing, secured
 ## What you get
 
 - **`/hermes-deploy`** — the whole setup end-to-end: install → model → platforms → skills → memory → personality → home channel → autostart → verify.
-- **A library of small commands** for everything after — restart, status, update, fix, backup, dashboard.
+- **A library of small commands** for everything after — restart, status, update, fix, and backup.
 - **Reliability baked in** — every known trap pre-solved (PATH breakage, the OOM leak, the stale gateway lock, the OAuth-vs-API-key fork, the WhatsApp LID bug). hstack pins a known-good Hermes version.
-- **Secure by default** — localhost-bound, allowlist-enforced, secrets `chmod 600`, no dashboard exposed without auth.
+- **Secure by default** — localhost-bound, allowlist-enforced, secrets `chmod 600`, no open bots.
 
 ---
 
@@ -149,7 +148,6 @@ via `hermes config set` (and `chmod 600`s it), so your keys stay out of logs and
 | `/hermes-update` | Safe update with backup + re-verify. |
 | `/hermes-fix` | Diagnose + repair common failures. |
 | `/hermes-backup` | Back up config + sessions. |
-| `/hermes-dashboard` | Turn on the monitoring dashboard, safely. |
 
 ---
 
@@ -188,7 +186,6 @@ Every item below is a real, logged failure mode hstack handles so you don't hit 
 - **Silent capability degradation** (vision/web/compression die with no key) → capability-aware wiring + warnings.
 - **A provider 429 takes the whole gateway offline** ([#16677](https://github.com/NousResearch/hermes-agent/issues/16677)) → context-window validation, fallback.
 - **Tiny invisible memory ceiling** (~1,375 / ~2,200 chars) → surfaced, with one-click external memory.
-- **Dashboard has no auth** → localhost-bound by default; never exposed without auth + HTTPS.
 
 See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full catalogue.
 
@@ -210,18 +207,6 @@ Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
-- Dashboard is read-only by default; if exposed, hstack ships its own auth + TLS (the upstream dashboard has none).
-
-## 📊 Dashboard
-
-Hermes ships a web dashboard (port `9119`) with a full read-only JSON API. `/hermes-dashboard` turns it
-on **safely** — bound to localhost, accessed over an SSH tunnel or an authenticated HTTPS proxy. The
-upstream dashboard has **no built-in auth**, so hstack never exposes it raw. The API contract for building
-a custom frontend is in [`reference/api-endpoints.md`](reference/api-endpoints.md).
-
-```bash
-ssh -L 9119:127.0.0.1:9119 user@your-vps      # then open http://127.0.0.1:9119
-```
 
 ## Honest positioning
 

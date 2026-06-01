@@ -51,7 +51,7 @@
     <text x="1166" y="156">/hermes-deploy</text>
     <text x="1166" y="186">/platform-telegram</text>
     <text x="1166" y="216">/hermes-status</text>
-    <text x="1166" y="246">/hermes-dashboard</text>
+    <text x="1166" y="246">/hermes-backup</text>
     <text x="1166" y="276" fill="#f0871f">/hermes-update <tspan fill="#9c8467">&lt;flag&gt;</tspan></text>
     <text x="1166" y="306">/hermes-fix</text>
   </g>

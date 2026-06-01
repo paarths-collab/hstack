@@ -15,10 +15,9 @@ description: Install Hermes Agent reliably (local or over SSH), pinned to a know
 # 1. Hard prerequisites (git missing = hard failure). NEVER use sudo for the installer itself.
 command -v git >/dev/null || sudo apt-get update && sudo apt-get install -y git curl ca-certificates bash
 
-# 2. Install — PINNED for reproducibility (default v0.15.2: current stable, working dashboard).
-#    GitHub tag v2026.5.29.2 == PyPI 0.15.2 are the same release. We pin 0.15.2 because v0.15.0
-#    shipped a dashboard reload loop in loopback (localhost) mode — exactly how we bind it —
-#    which v0.15.1 hotfixed and v0.15.2 followed with a packaging fix.
+# 2. Install — PINNED for reproducibility (default v0.15.2: the current stable release).
+#    GitHub tag v2026.5.29.2 == PyPI 0.15.2 are the same release. Pinning a known-good version
+#    keeps installs reproducible; upgrade deliberately with /hermes-update.
 pip install "hermes-agent==0.15.2" && hermes postinstall
 
 # 3. Make hermes resolvable in THIS shell (rc file is not reloaded automatically).
