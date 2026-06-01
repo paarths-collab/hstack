@@ -41,7 +41,7 @@ end-to-end setup. Other commands:
 - Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /hermes-soul /hermes-home /hermes-cron
 - Platforms: /platform-telegram /platform-discord /platform-whatsapp /platform-slack /platform-mattermost
 - Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup /hermes-dashboard
-Always prefer the absolute hermes path (~/.local/bin/hermes); pin Hermes v0.15.0; never expose the
+Always prefer the absolute hermes path (~/.local/bin/hermes); pin Hermes v0.15.2; never expose the
 dashboard without auth + HTTPS.
 $MARK_END"
 

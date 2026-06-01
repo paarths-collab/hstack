@@ -22,7 +22,7 @@ This guide explains exactly what that command does, why it is reliable where man
 
 - **One paste, ~5 questions, ~30 minutes** to a live agent on your phone — no terminal expertise required.
 - **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak that crashes the agent after a day, ~73% fixed token overhead, silent capability failures, and a dashboard with no authentication.
-- **It pins a known-good Hermes version (v0.15.0)** so a future release cannot silently break your setup.
+- **It pins a known-good Hermes version (v0.15.2, the current stable release)** so a future release cannot silently break your setup.
 - **Secure by default:** localhost-bound, allowlist-enforced, secrets written to `.env` with `chmod 600`, dashboard never exposed without auth.
 - **Multi-VPS with Hostinger as the one-click default;** DigitalOcean, Hetzner, and any VPS are supported.
 - **Running cost is roughly $10–17/month** all-in, versus ~$100/month for a premium hosted assistant.
@@ -162,7 +162,7 @@ Claude: Open hPanel → Docker Manager → Compose → one-click deploy, search 
 You:    Done — here are the admin credentials.
 
 Claude: Connected to the web terminal. Hermes is already installed by the one-click
-        image — confirming version... `hermes --version` → 0.15.0. ✓
+        image — confirming version... `hermes --version` → 0.15.2. ✓
         Which model? I recommend DeepSeek V4 (cheapest quality) or your ChatGPT login.
 You:    DeepSeek V4
 
@@ -242,7 +242,7 @@ hstack pre-solves these during deploy, but if you are debugging an existing setu
 | Gateway crash-loops | Stale `gateway.pid` after a crash | `/hermes-restart` (clears the lock) |
 | Memory balloons, then OOM | The gateway leak over ~a day | Nightly restart cron (hstack adds this) |
 | Vision/web "doesn't work," no error | Auxiliary model not keyed | Add a provider key |
-| Dashboard won't load | A version-specific dashboard regression | Pin a known-good version — v0.15.0 (hstack's default) |
+| Dashboard reloads in a loop / won't load | v0.15.0's loopback-mode dashboard bug | Pin v0.15.2 (fixed in v0.15.1) — hstack's default |
 
 When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repairs it.
 
@@ -469,7 +469,7 @@ Telegram — it is the only fully headless option (pure token and numeric ID, no
 
 ### What happens when Hermes releases a new version?
 
-Nothing breaks, because hstack pins a known-good version (v0.15.0). When you choose to upgrade, `/hermes-update` backs up first, updates, and re-verifies that every platform still responds.
+Nothing breaks, because hstack pins a known-good version (v0.15.2, the current stable release). When you choose to upgrade past it, `/hermes-update` backs up first, updates, and re-verifies that every platform still responds.
 
 ### Can I move my agent to a different server later?
 

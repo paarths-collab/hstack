@@ -37,8 +37,9 @@ ssh -L 9119:127.0.0.1:9119 user@vps
 ```
 
 ## Version note
-`v0.15.2`'s dashboard wheel is broken (missing `hermes_cli.dashboard_auth`, #34701). Verify the module
-imports; if not, pin **v0.15.0** (hstack's default).
+v0.15.0's dashboard had a 401 reload loop in loopback (localhost) mode — the exact mode hstack uses.
+It was hotfixed in v0.15.1 and v0.15.2 added a packaging fix, so pin **v0.15.2** (hstack's default)
+for a working dashboard.
 
 ## Verify
 `curl -fsS http://127.0.0.1:9119/api/status` returns JSON; `curl http://localhost:8642/health` → `{"status":"ok"}`.

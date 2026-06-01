@@ -25,7 +25,7 @@
         { "@type": "Question", "name": "Which messaging platform should I start with?",
           "acceptedAnswer": { "@type": "Answer", "text": "Telegram, because it is the only fully headless option: setup is pure token and numeric user ID, with no QR scan or OAuth. WhatsApp, Discord, Slack, and Mattermost are supported and can be added afterward." } },
         { "@type": "Question", "name": "What happens when Hermes releases a new version?",
-          "acceptedAnswer": { "@type": "Answer", "text": "hstack pins a known-good version (v0.15.0) so a future release cannot silently break your setup. When you choose to upgrade, the update command backs up first, updates, and re-verifies that every platform still responds." } }
+          "acceptedAnswer": { "@type": "Answer", "text": "hstack pins a known-good version (v0.15.2, the current stable release) so a future release cannot silently break your setup. When you choose to upgrade, the update command backs up first, updates, and re-verifies that every platform still responds." } }
       ]
     }
   ]

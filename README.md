@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Claude%20Code-compatible-58a6ff" alt="Claude Code compatible">
   <img src="https://img.shields.io/badge/Agent%20Skills-compatible-2dd4bf" alt="Agent Skills compatible">
   <img src="https://img.shields.io/badge/Commands-19-f59e0b" alt="19 commands">
-  <img src="https://img.shields.io/badge/Hermes-v0.15.0%20pinned-9d6bff" alt="Hermes v0.15.0 pinned">
+  <img src="https://img.shields.io/badge/Hermes-v0.15.2%20pinned-9d6bff" alt="Hermes v0.15.2 pinned">
   <img src="https://img.shields.io/badge/Platforms-Telegram%20·%20WhatsApp%20·%20Discord%20·%20Slack-229ED9" alt="Platforms">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
 </p>

@@ -47,5 +47,5 @@ found — that compounding knowledge is hstack's moat.
 ## Dashboard
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Dashboard crashes on startup | `v0.15.2` wheel missing `hermes_cli.dashboard_auth` (#34701) | pin `v0.15.0` |
+| Dashboard reloads in a loop (loopback mode) | v0.15.0's stale-token reload guard treated the 401 identity probe as a rotated session | upgrade to `v0.15.2` (fixed in v0.15.1) |
 | Credentials exposed | dashboard has no auth, bound `0.0.0.0` | bind `127.0.0.1`; SSH tunnel or HTTPS+password proxy; patch Starlette ≥1.0.1 (BadHost) |

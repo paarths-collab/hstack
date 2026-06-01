@@ -42,7 +42,7 @@
     <!-- card title row -->
     <circle cx="22" cy="26" r="5" fill="#4ec94e"/>
     <text x="38" y="31" font-family="ui-monospace, monospace" font-size="13" font-weight="700" fill="#4ec94e">ONLINE</text>
-    <text x="318" y="31" text-anchor="end" font-family="ui-monospace, monospace" font-size="11" fill="#6b5640">hermes v0.15.0</text>
+    <text x="318" y="31" text-anchor="end" font-family="ui-monospace, monospace" font-size="11" fill="#6b5640">hermes v0.15.2</text>
     <line x1="16" y1="44" x2="324" y2="44" stroke="#2a1f16"/>
     <!-- headline -->
     <text x="22" y="78" font-family="-apple-system, Segoe UI, sans-serif" font-size="20" font-weight="800" fill="#f3e3d0">Your agent is online ✅</text>

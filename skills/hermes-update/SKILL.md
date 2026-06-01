@@ -19,5 +19,5 @@ HERMES="$HOME/.local/bin/hermes"
 ## Pitfalls
 - The curl/`update` path tracks moving `main` — prefer bumping the **pinned** pip version for reproducibility.
 - After updating, **re-verify each platform** still responds (config keys can change between versions).
-- Avoid Docker image `v2026.4.23` (UID perms regression) and `v0.15.2` if you use the dashboard (#34701).
+- Avoid Docker image `v2026.4.23` (UID perms regression). For the dashboard, stay on `v0.15.2` or newer — v0.15.0 had a loopback reload loop, fixed in v0.15.1.
 - Re-check `hermes <cmd> --help` if a command behaves differently — flags evolve.

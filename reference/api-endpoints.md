@@ -33,7 +33,7 @@ const headers  = {};                 // 9119 localhost needs none; add Bearer fo
 - A monitoring dashboard must issue **GET only**. Never wire POST/PUT/DELETE into a public view.
 - **Never bind `0.0.0.0` / expose to the internet without your own password + HTTPS.** If remote, put Caddy/Traefik (HTTPS + basic-auth) in front and pin Starlette ≥1.0.1 (BadHost CVE-2026-48710).
 - **CORS:** a frontend on a *different* origin can't call `:9119` directly. Either serve the frontend same-origin behind the proxy (`API_BASE=""`), or use the **8642** API server with `API_SERVER_CORS_ORIGINS` set.
-- Pin Hermes **v0.15.0** for the dashboard — `v0.15.2`'s dashboard wheel is broken (#34701).
+- Pin Hermes **v0.15.2** for the dashboard — v0.15.0 had a loopback-mode reload loop, fixed in v0.15.1; v0.15.2 is current stable.
 
 ---
 
@@ -48,7 +48,7 @@ GET /api/status
 ✅ Returns: version, gateway running state, platform connectivity, active session count. The official Status page **polls this every 5s** — do the same.
 ⚠️ Likely shape:
 ```jsonc
-{ "version": "0.15.0",
+{ "version": "0.15.2",
   "gateway": { "running": true },          // may be a string "running" — handle both
   "platforms": [ { "name": "Telegram", "connected": true }, ... ],
   "sessions": { "active": 3 },

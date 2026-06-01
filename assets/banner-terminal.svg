@@ -58,6 +58,6 @@
 
   <!-- bottom status strip -->
   <line x1="20" y1="398" x2="1180" y2="398" stroke="#2a1f16"/>
-  <text x="34" y="418" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">· PINNED · STABLE        HERMES v0.15.0</text>
+  <text x="34" y="418" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">· PINNED · STABLE        HERMES v0.15.2</text>
   <text x="1166" y="418" text-anchor="end" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">github.com/paarths-collab/hstack</text>
 </svg>

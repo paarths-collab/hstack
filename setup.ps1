@@ -35,7 +35,7 @@ One command to deploy and operate a self-hosted Hermes Agent. Run /hermes-deploy
 setup. Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /hermes-soul /hermes-home
 /hermes-cron. Platforms: /platform-telegram /platform-discord /platform-whatsapp /platform-slack
 /platform-mattermost. Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup
-/hermes-dashboard. Pin Hermes v0.15.0; never expose the dashboard without auth + HTTPS.
+/hermes-dashboard. Pin Hermes v0.15.2; never expose the dashboard without auth + HTTPS.
 $markEnd
 "@
 

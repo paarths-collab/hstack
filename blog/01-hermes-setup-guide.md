@@ -22,7 +22,7 @@ Imagine texting an AI on Telegram that is genuinely *yours*. It remembers your p
 - **It reaches you where you already are:** Telegram, Discord, Slack, WhatsApp, Signal, Matrix, email, SMS, and Home Assistant.
 - **Running cost is roughly $6–10/month** in model API fees for typical personal use, plus the VPS.
 - **The setup has real traps** — a PATH issue that breaks the first run, a tiny fixed memory ceiling, a dashboard with no built-in password, and silent capability failures — all of which this guide pre-empts.
-- **Pin a known-good version (`hermes-agent==0.15.0`)** so a future release cannot silently break your setup.
+- **Pin a known-good version (`hermes-agent==0.15.2`)** — the current stable release — so a future release cannot silently break your setup.
 
 ## Table of contents
 
@@ -167,7 +167,7 @@ For everyone else, SSH into your server and run the following. Read the comments
 sudo apt-get update && sudo apt-get install -y git curl ca-certificates
 
 # 2. Install a known-good, PINNED version (not the moving latest).
-pip install "hermes-agent==0.15.0" && hermes postinstall
+pip install "hermes-agent==0.15.2" && hermes postinstall
 
 # 3. Reload your shell so the `hermes` command is found.
 source ~/.bashrc
@@ -178,7 +178,7 @@ hermes --version
 
 ### Why pin the version?
 
-Hermes ships releases under two numbering schemes for the *same* build — a GitHub tag like `v2026.5.29.2` and a PyPI version like `0.15.2`. Installing the unpinned latest means a future release can change behavior or introduce a regression under you. Pinning `0.15.0` (the well-tested "Velocity Release") gives you a stable, reproducible base. When you later choose to upgrade, you do it deliberately.
+Hermes ships releases under two numbering schemes for the *same* build — a GitHub tag like `v2026.5.29.2` and a PyPI version like `0.15.2`. Installing the unpinned latest means a future release can change behavior or introduce a regression under you. Pinning `0.15.2` — the current stable release — gives you a reproducible base. It is also the version you want for the dashboard: v0.15.0 shipped a dashboard reload loop in loopback (localhost) mode, v0.15.1 hotfixed it the same day, and v0.15.2 followed with a packaging fix. When you later choose to upgrade past it, you do so deliberately.
 
 ### The #1 beginner trap: "command not found"
 
@@ -477,7 +477,7 @@ The single highest-value table in this guide. Most "Hermes is broken" reports ar
 | Gateway crash-loops every 30s | Stale `gateway.pid` after a crash | `gateway stop`, remove the PID + lock files, `gateway start` |
 | Memory grows to many GB, then OOM | A gateway memory leak over ~a day | Add a nightly `gateway restart` cron; pin a stable version |
 | Agent "forgets" / acts weird | Stale or full memory files | Ask it to read its memory aloud; prune; consider external memory |
-| Dashboard won't load | Version-specific dashboard bug | Pin v0.15.0, which has a working dashboard |
+| Dashboard reloads in a loop / won't load | v0.15.0's loopback-mode dashboard bug | Upgrade to v0.15.2 (fixed in v0.15.1) — hstack's default pin |
 
 When in doubt, `hermes doctor` runs a diagnostic, and `hermes logs gateway -n 50` shows recent gateway activity.
 
@@ -537,7 +537,7 @@ Yes, in the sense that everything lives on your server: memory, conversations, a
 
 ### What happens when a new Hermes version comes out?
 
-Nothing, until you upgrade — that is the point of pinning `0.15.0`. When you decide to upgrade, back up first (`hermes backup`), then update, then re-verify each platform still responds.
+Nothing, until you upgrade — that is the point of pinning `0.15.2`. When you decide to upgrade, back up first (`hermes backup`), then update, then re-verify each platform still responds.
 
 ### Can multiple people use one agent?
 
