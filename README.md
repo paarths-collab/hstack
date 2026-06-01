@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner-terminal.svg" alt="hstack — The Agent Deployment System. Terminal banner with the command palette." width="100%">
+</p>
+
 <h1 align="center">hstack</h1>
 
 <p align="center">
@@ -22,6 +26,10 @@
   <a href="#-deploy-targets">Deploy targets</a> ·
   <a href="blog/deploy-ai-agent-one-command-hstack.md">Blog</a> ·
   <a href="reference/TROUBLESHOOTING.md">Troubleshooting</a>
+</p>
+
+<p align="center">
+  <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent dashboard showing the agent online, connected platforms, and the deploy pipeline." width="100%">
 </p>
 
 <p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with Digital Crew</em></p>

@@ -1,0 +1,63 @@
+<svg width="1200" height="440" viewBox="0 0 1200 440" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="hstack — the agent deployment system. Terminal banner with command palette.">
+  <defs>
+    <linearGradient id="copper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7b15e"/>
+      <stop offset="0.45" stop-color="#f0871f"/>
+      <stop offset="1" stop-color="#b8530c"/>
+    </linearGradient>
+    <linearGradient id="winbg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1d1510"/>
+      <stop offset="1" stop-color="#140e0a"/>
+    </linearGradient>
+    <radialGradient id="emberglow" cx="0.74" cy="0.42" r="0.5">
+      <stop offset="0" stop-color="#f0871f" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#f0871f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- window -->
+  <rect x="8" y="8" width="1184" height="424" rx="14" fill="url(#winbg)" stroke="#3a2a1e" stroke-width="2"/>
+  <rect x="8" y="8" width="1184" height="424" rx="14" fill="url(#emberglow)"/>
+
+  <!-- title bar -->
+  <path d="M8 22 a14 14 0 0 1 14 -14 h1156 a14 14 0 0 1 14 14 v24 h-1184 z" fill="#15100c"/>
+  <text x="500" y="31" font-family="ui-monospace, Menlo, monospace" font-size="13" fill="#7a6248">hstack — Terminal — /hermes-deploy</text>
+  <circle cx="1118" cy="30" r="6" fill="#f0b429"/><circle cx="1140" cy="30" r="6" fill="#4ec94e"/><circle cx="1162" cy="30" r="6" fill="#e8553a"/>
+
+  <!-- top status strip -->
+  <text x="34" y="78" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">TTY · CLAUDE-CODE        HOOK · LIVE        ACTIVE</text>
+  <text x="1166" y="78" text-anchor="end" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">UPTIME 04:12:33</text>
+
+  <!-- 3D extruded HSTACK -->
+  <g font-family="'Arial Black', Impact, sans-serif" font-size="150" font-weight="900" letter-spacing="2">
+    <!-- extrude shadow (down-right) -->
+    <g fill="#5e2c08">
+      <text x="62" y="252">HSTACK</text><text x="64" y="254">HSTACK</text><text x="66" y="256">HSTACK</text>
+      <text x="68" y="258">HSTACK</text><text x="70" y="260">HSTACK</text><text x="72" y="262">HSTACK</text>
+      <text x="74" y="264">HSTACK</text><text x="76" y="266">HSTACK</text>
+    </g>
+    <!-- top face -->
+    <text x="60" y="250" fill="url(#copper)" stroke="#fcd9a6" stroke-width="1.2">HSTACK</text>
+  </g>
+
+  <!-- underline + tagline -->
+  <rect x="64" y="288" width="430" height="3" fill="url(#copper)"/>
+  <text x="64" y="330" font-family="-apple-system, Segoe UI, Roboto, sans-serif" font-size="27" font-weight="700" fill="#f3e3d0">The Agent Deployment System</text>
+  <text x="64" y="364" font-family="ui-monospace, monospace" font-size="13" fill="#9c8467" letter-spacing="2">· 19 COMMANDS · 5-MIN DEPLOY · SELF-HEALING · SECURE BY DEFAULT ·</text>
+
+  <!-- command palette -->
+  <text x="1166" y="118" text-anchor="end" font-family="ui-monospace, monospace" font-size="12" fill="#6b5640" letter-spacing="3">— COMMAND PALETTE —</text>
+  <g text-anchor="end" font-family="ui-monospace, monospace" font-size="20" fill="#d9824a">
+    <text x="1166" y="156">/hermes-deploy</text>
+    <text x="1166" y="186">/platform-telegram</text>
+    <text x="1166" y="216">/hermes-status</text>
+    <text x="1166" y="246">/hermes-dashboard</text>
+    <text x="1166" y="276" fill="#f0871f">/hermes-update <tspan fill="#9c8467">&lt;flag&gt;</tspan></text>
+    <text x="1166" y="306">/hermes-fix</text>
+  </g>
+
+  <!-- bottom status strip -->
+  <line x1="20" y1="398" x2="1180" y2="398" stroke="#2a1f16"/>
+  <text x="34" y="418" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">· PINNED · STABLE        HERMES v0.15.0</text>
+  <text x="1166" y="418" text-anchor="end" font-family="ui-monospace, monospace" font-size="11" fill="#5b4734" letter-spacing="2">github.com/paarths-collab/hstack</text>
+</svg>
