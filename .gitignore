@@ -1,0 +1,18 @@
+# local state / secrets — never commit
+*.env
+.env
+.env.*
+*.key
+secrets/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# scratch
+tmp/
+scratch/
