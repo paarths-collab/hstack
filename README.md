@@ -229,9 +229,8 @@ Hermes is genuinely good at: **persistent cross-project memory**, an **unmatched
 
 ## 📝 Blog & guides
 
-- [Deploy Your Own AI Agent in One Command with hstack](blog/deploy-ai-agent-one-command-hstack.md) — the flagship post
-- [Set up Hermes Agent — beginner's guide](blog/01-hermes-setup-guide.md) — the manual way, with provider walkthroughs
-- [One command instead of ten screenshots](blog/02-hermes-one-command.md)
+- [Deploy Your Own AI Agent in One Command with hstack](blog/deploy-ai-agent-one-command-hstack.md) — the one-command guide
+- [Set up Hermes Agent — the complete beginner's guide](blog/01-hermes-setup-guide.md) — the manual way, with provider walkthroughs
 
 ## 🤝 Contributing
 
