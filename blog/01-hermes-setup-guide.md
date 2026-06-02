@@ -2,7 +2,7 @@
 title: "Self-Hosted AI Agent Setup: The Complete Hermes Guide"
 description: "Set up a self-hosted Hermes AI agent on a VPS step by step: install, model, Telegram, memory, security and cost, for beginners and devs."
 date: "2026-06-01"
-lastmod: "2026-06-01"
+lastmod: "2026-06-02"
 author: "Paarth · Digital Crew"
 tags: [hermes-agent, self-hosted-ai, telegram-bot, vps, ai-agent, hostinger, digitalocean, beginner]
 # TODO: replace with your real self-referential canonical URL before publishing
@@ -133,7 +133,7 @@ You need three things: a server, a model and (optionally) a messaging account to
 
 A VPS is a small always-on computer in the cloud. You will install Hermes on it so your agent runs 24/7, independent of your laptop. Pick one of the three paths below.
 
-### Hostinger (recommended, easiest, one-click)
+### Hostinger (one-click)
 
 Hostinger is the friendliest path for non-developers because it has a **one-click Docker deploy** for Hermes, no terminal required to get the software installed.
 
@@ -521,6 +521,21 @@ If you are migrating from OpenClaw, Hermes has a built-in path: `hermes claw mig
 
 ---
 
+## Coming soon: Digital Crew-style specialist agents/plugins
+
+Alongside the core setup flow, we are working on optional specialist agents/plugins modeled on the Digital Crew style, each with a clear scope:
+
+- **Sophie** for planning and coordination tasks.
+- **Claire** for writing and editing support.
+- **Max** for implementation and integration-heavy coding work.
+- **Camille** for QA, verification, and release-readiness checks.
+- **Kate** for UI/content quality and consistency review.
+- **Andre** for ops routines and reliability automation.
+
+The intent is to keep setup simple while making repeated workflows easier to delegate when you want that structure.
+
+---
+
 ## 17. FAQ
 
 ### Do I need to know how to code to set up Hermes?
@@ -575,6 +590,6 @@ If you would rather skip the manual work, **hstack** turns Claude Code into the 
 
 ---
 
-**About the author:** Paarth builds [hstack](https://github.com/paarths-collab/hstack), an open-source toolkit for deploying self-hosted Hermes agents and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with Digital Crew. hstack is independent open-source software (MIT); Hermes Agent is a project of Nous Research. Hostinger is the recommended deploy target and other VPS providers are fully supported.
+**About the author:** Paarth builds [hstack](https://github.com/paarths-collab/hstack), an open-source toolkit for deploying self-hosted Hermes agents and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with Digital Crew. hstack is independent open-source software (MIT); Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are fully supported.
 
 <!-- SEO schema (BlogPosting + FAQPage JSON-LD) is in 01-hermes-setup-guide.schema.json, inject it into the page <head> at publish time, not into the rendered body. -->

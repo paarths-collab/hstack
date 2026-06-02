@@ -2,7 +2,7 @@
 title: "Deploy Your Own AI Agent in One Command with hstack"
 description: "Deploy a self-hosted Hermes AI agent on a VPS in one Claude Code command: hstack automates install, model, messaging, memory and security for you."
 date: "2026-06-01"
-lastmod: "2026-06-01"
+lastmod: "2026-06-02"
 author: "Paarth · Digital Crew"
 tags: [hermes-agent, self-hosted-ai, ai-agent, claude-code, telegram-bot, vps, hstack, one-command]
 # TODO: replace with your real self-referential canonical URL before publishing
@@ -30,7 +30,7 @@ This guide explains exactly what that command does, why it is reliable where man
 - **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak reported by long-running deploys, the fixed token overhead from tool definitions + system prompt on every request, and auxiliary-capability gaps when an aux slot is overridden without its key.
 - **It pins a known-good Hermes version (v0.15.2, the current stable release)** so a future release cannot silently break your setup.
 - **Secure by default:** localhost-bound, allowlist-enforced, secrets written to `.env` with `chmod 600`, no open bots.
-- **Multi-VPS with Hostinger as the one-click default;** DigitalOcean, Hetzner and any VPS are supported.
+- **Multi-VPS support:** Hostinger one-click, DigitalOcean, Hetzner, and any VPS are supported.
 - **Running cost is roughly $10–17/month** all-in, versus ~$100/month for a premium hosted assistant.
 
 ## Table of contents
@@ -376,9 +376,9 @@ hstack does not lock you in. It is plain Markdown skills plus a small script; ev
 
 ## 9. Where it deploys
 
-hstack runs on any VPS, with **Hostinger as the recommended one-click default** because its one-click Docker deploy is genuinely the easiest path for a non-technical user, no terminal at all. Other providers work as the advanced, SSH-based path.
+hstack runs on any VPS. Hostinger offers a one-click Docker deploy that is convenient for non-technical users, and other providers work well via SSH.
 
-- **Hostinger (recommended):** one-click Docker deploy, then paste the hstack command in the web terminal. KVM 2 (2 vCPU / 8 GB) is comfortable.
+- **Hostinger (one-click):** one-click Docker deploy, then paste the hstack command in the web terminal. KVM 2 (2 vCPU / 8 GB) is comfortable.
 - **DigitalOcean:** an Ubuntu 24.04 Droplet (2 GB+ RAM, ~$6–12/month), SSH in, paste the command.
 - **Hetzner / any VPS:** a CX22 (~€4/month) or any Ubuntu box works identically.
 
@@ -417,6 +417,21 @@ Why the honesty? Because the self-hosted-agent space has a credibility problem, 
 ## 12. Migrating from OpenClaw
 
 If you are coming from OpenClaw, Hermes has a built-in migration that imports your settings, memory, skills and API keys (`hermes claw migrate`). hstack wraps this with two safeguards: it **backs up first** and it helps you **re-verify imported skills** before trusting them, OpenClaw's marketplace had a documented supply-chain problem with malicious skills, so importing blindly is a real risk. The migration is also a major reason people are moving to Hermes in the first place: a string of security issues on the other side, against Hermes' "it just runs" reputation.
+
+---
+
+## Coming soon: Digital Crew-style specialist agents/plugins
+
+We are also preparing a small set of optional specialist agents/plugins for focused jobs, inspired by the Digital Crew working style. The goal is practical division of labor, not extra complexity:
+
+- **Sophie** for planning and project coordination.
+- **Claire** for writing/editing and comms polish.
+- **Max** for implementation-heavy coding and integrations.
+- **Camille** for QA, validation, and release checks.
+- **Kate** for UI/content quality and consistency passes.
+- **Andre** for operations workflows and reliability automation.
+
+As these ship, they will follow the same approach as the rest of hstack: explicit roles, composable commands, and clear handoffs you can inspect.
 
 ---
 
@@ -464,7 +479,7 @@ Run `/hermes-status` to see what is wrong, or `/hermes-fix` to diagnose and repa
 
 ### Is hstack affiliated with Nous Research or Hostinger?
 
-No. hstack is independent, open-source (MIT) software. Hermes Agent is a project of Nous Research; Hostinger is simply the recommended (and easiest) deploy target. Other VPS providers are fully supported.
+No. hstack is independent, open-source (MIT) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported.
 
 ### Can I run more than one agent?
 
@@ -529,7 +544,7 @@ After the deploy finishes, you will have:
 
 To get there:
 
-1. Pick a VPS, [Hostinger's one-click path](01-hermes-setup-guide.md#hostinger-recommended-easiest-one-click) is the easiest.
+1. Pick a VPS and provider path that fits your setup style, for example [Hostinger's one-click path](01-hermes-setup-guide.md#hostinger-one-click).
 2. Paste the hstack command into Claude Code.
 3. Answer the five prompts (token, key, name, platform, first "hello").
 4. Say hello to your new agent.
@@ -538,6 +553,6 @@ The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](h
 
 ---
 
-**About the author:** Paarth is the author of [hstack](https://github.com/paarths-collab/hstack) and built it after a four-hour manual Hermes deployment turned every documented failure mode into a lesson worth automating. Written in collaboration with Digital Crew. hstack is independent open-source software; Hermes Agent is a project of Nous Research. Hostinger is the recommended deploy target and other VPS providers are fully supported.
+**About the author:** Paarth is the author of [hstack](https://github.com/paarths-collab/hstack) and built it after a four-hour manual Hermes deployment turned every documented failure mode into a lesson worth automating. Written in collaboration with Digital Crew. hstack is independent open-source software; Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are supported deploy targets.
 
 <!-- SEO schema (BlogPosting + FAQPage JSON-LD) is in deploy-ai-agent-one-command-hstack.schema.json, inject it into the page <head> at publish time, not into the rendered body. -->
