@@ -12,7 +12,10 @@ echo "  source : $SKILLS_SRC"
 echo "  target : $CLAUDE_SKILLS"
 echo
 
-[ -d "$SKILLS_SRC" ] || { echo "ERROR: $SKILLS_SRC not found — run ./setup from inside the hstack repo."; exit 1; }
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup from inside the hstack repo."
+  exit 1
+}
 mkdir -p "$CLAUDE_SKILLS"
 
 # Register each skill by symlinking it into the Claude Code skills dir so it
@@ -25,7 +28,7 @@ for dir in "$SKILLS_SRC"/*/; do
   if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
   # symlink where supported; fall back to copy (e.g. Windows without dev mode)
   if ln -s "$dir" "$link" 2>/dev/null; then :; else cp -r "$dir" "$link"; fi
-  count=$((count+1))
+  count=$((count + 1))
 done
 echo "Registered $count skills."
 
@@ -45,15 +48,25 @@ Always prefer the absolute hermes path (~/.local/bin/hermes); pin Hermes v0.15.2
 allowlists and keep secrets in .env with chmod 600.
 $MARK_END"
 
-mkdir -p "$(dirname "$CLAUDE_MD")"; touch "$CLAUDE_MD"
+mkdir -p "$(dirname "$CLAUDE_MD")"
+touch "$CLAUDE_MD"
 if grep -q "$MARK_START" "$CLAUDE_MD" 2>/dev/null; then
   # replace existing block
-  tmp="$(mktemp)"; awk -v s="$MARK_START" -v e="$MARK_END" '
-    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$CLAUDE_MD" > "$tmp"
-  { cat "$tmp"; echo; echo "$SECTION"; } > "$CLAUDE_MD"; rm -f "$tmp"
+  tmp="$(mktemp)"
+  awk -v s="$MARK_START" -v e="$MARK_END" '
+    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$CLAUDE_MD" >"$tmp"
+  {
+    cat "$tmp"
+    echo
+    echo "$SECTION"
+  } >"$CLAUDE_MD"
+  rm -f "$tmp"
   echo "Updated hstack section in $CLAUDE_MD"
 else
-  { echo; echo "$SECTION"; } >> "$CLAUDE_MD"
+  {
+    echo
+    echo "$SECTION"
+  } >>"$CLAUDE_MD"
   echo "Added hstack section to $CLAUDE_MD"
 fi
 
