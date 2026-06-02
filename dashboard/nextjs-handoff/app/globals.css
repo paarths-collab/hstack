@@ -32,9 +32,9 @@
 }
 
 :root {
-  --bg:#E7E4DD; --panel:#FCFBF8; --card:#F5F2EB; --card-2:#FBF9F4;
-  --ink:#1A1712; --ink-soft:#7C7468; --ink-faint:#A8A092;
-  --line:#E6E0D2; --line-soft:#EFEAde;
+  --bg:#FFFFFF; --panel:#FFFFFF; --card:#F4F5F7; --card-2:#FAFBFC;
+  --ink:#16181D; --ink-soft:#6B7280; --ink-faint:#9AA1AC;
+  --line:#E7E9ED; --line-soft:#F0F1F4;
   --accent:#E2543A; --accent-deep:#C13D22; --accent-soft:#F8E2DA; --accent-tint:#FCEFE9;
   --ok:#1F8A5B; --ok-soft:#DCEDE2; --warn:#C8902B; --warn-soft:#F4E9D0; --bad:#C8402A;
   --ink-dark:#211D17; --ink-dark-2:#2C2820;

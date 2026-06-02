@@ -12,13 +12,13 @@ description: Install Hermes Agent reliably (local or over SSH), pinned to a know
 
 ## Procedure
 ```bash
-# 1. Hard prerequisites (git missing = hard failure). NEVER use sudo for the installer itself.
-command -v git >/dev/null || sudo apt-get update && sudo apt-get install -y git curl ca-certificates bash
+# 1. Prerequisites (curl needed). NEVER use sudo for the installer itself.
+command -v curl >/dev/null || sudo apt-get update && sudo apt-get install -y curl ca-certificates
 
-# 2. Install — PINNED for reproducibility (default v0.15.2: the current stable release).
-#    GitHub tag v2026.5.29.2 == PyPI 0.15.2 are the same release. Pinning a known-good version
-#    keeps installs reproducible; upgrade deliberately with /hermes-update.
-pip install "hermes-agent==0.15.2" && hermes postinstall
+# 2. Install — the OFFICIAL installer. --skip-setup keeps it non-interactive (we wire the
+#    provider + keys in /hermes-model via `hermes config set`); --skip-browser avoids the
+#    Chromium-deps failure on headless VPS. Gets the current stable build.
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --skip-browser
 
 # 3. Make hermes resolvable in THIS shell (rc file is not reloaded automatically).
 export PATH="$HOME/.local/bin:$PATH"
@@ -29,9 +29,9 @@ test -x "$HERMES" && "$HERMES" --version || { echo "FAIL: hermes not installed";
 "$HERMES" doctor 2>&1 | tee /tmp/hermes_doctor.log    # capture; do NOT gate on its exit code
 ```
 
-Alternative (curl installer — tracks moving `main`, less reproducible). If you must use it:
-`curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup --skip-browser`
-To pin through install.sh use `--commit <SHA>` (NOT `--branch <tag>` — `--branch` expects a branch).
+- **Windows (native, PowerShell):** `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`
+- **Attended / manual install:** run `hermes setup` (the interactive wizard for provider, model, and keys) instead of leaving it to /hermes-model.
+- **Pin a version** for reproducibility: `pip install "hermes-agent==0.15.2"` (current stable; GitHub tag `v2026.5.29.2` == PyPI `0.15.2` are the same build), or pass `--commit <SHA>` to install.sh. Then upgrade deliberately with /hermes-update.
 
 ## Pitfalls (pre-solve these)
 - **"hermes: command not found" after a successful install** — the #1 churn point. The rc-file PATH
@@ -42,7 +42,7 @@ To pin through install.sh use `--commit <SHA>` (NOT `--branch <tag>` — `--bran
   sudo install exists: `sudo rm /usr/local/bin/hermes` then reinstall.
 - **Docker UID:** pin a tagged image (avoid `v2026.4.23`; avoid `main`/`latest` on UID-99 NAS hosts);
   honor `HERMES_UID`/`HERMES_GID`; run CLI + gateway as the same UID.
-- **Windows:** no native support — use WSL2.
+- **Windows:** installs natively via PowerShell (`irm https://hermes-agent.nousresearch.com/install.ps1 | iex`); WSL2 optional. For an always-on agent, prefer a Linux VPS regardless.
 
 ## Verify
 `hermes --version` exits 0; toolchain present (`node --version`, `python3 --version`, `git --version`).

@@ -89,7 +89,7 @@ That is the entire install. Claude clones the toolkit (a library of small Markdo
 
 You do not need to prepare anything in advance. The deploy command is conversational: it asks where to deploy, which model to use and which messaging platforms you want, then it does each step and pauses only when it needs something from you.
 
-> **On Windows:** Hermes now runs natively, the CLI, gateway, TUI and tools all install without WSL (`iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)` in PowerShell). WSL2 is optional. But for an agent that answers 24/7 you still want it on an always-on Linux VPS rather than your laptop, which is the recommended target.
+> **On Windows:** Hermes now runs natively, the CLI, gateway, TUI and tools all install without WSL (`irm https://hermes-agent.nousresearch.com/install.ps1 | iex` in PowerShell). WSL2 is optional. But for an agent that answers 24/7 you still want it on an always-on Linux VPS rather than your laptop, which is the recommended target.
 
 ---
 

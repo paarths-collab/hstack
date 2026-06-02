@@ -6,15 +6,15 @@
 
 :root{
   /* paper / surfaces */
-  --bg:#E7E4DD;            /* outer canvas */
-  --panel:#FCFBF8;         /* big rounded surface */
-  --card:#F5F2EB;          /* bento card */
-  --card-2:#FBF9F4;        /* lighter card */
-  --ink:#1A1712;
-  --ink-soft:#7C7468;
-  --ink-faint:#A8A092;
-  --line:#E6E0D2;
-  --line-soft:#EFEAde;
+  --bg:#FFFFFF;            /* outer canvas — white */
+  --panel:#FFFFFF;         /* big rounded surface — white (separated by shadow) */
+  --card:#F4F5F7;          /* bento card — subtle gray so it reads on white */
+  --card-2:#FAFBFC;        /* lighter card */
+  --ink:#16181D;
+  --ink-soft:#6B7280;
+  --ink-faint:#9AA1AC;
+  --line:#E7E9ED;
+  --line-soft:#F0F1F4;
 
   /* accent — vermilion-orange (the image) */
   --accent:#E2543A;

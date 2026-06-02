@@ -21,3 +21,7 @@ scratch/
 dashboard/scraps/
 dashboard/uploads/
 **/.thumbnail
+
+# node / next build output (never commit these)
+node_modules/
+.next/

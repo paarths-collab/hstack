@@ -9,8 +9,9 @@ description: Safely update Hermes — back up first, update, then re-verify plat
 HERMES="$HOME/.local/bin/hermes"
 "$HERMES" backup                          # back up config + sessions FIRST
 # Pinned (recommended): bump the pin deliberately, e.g.
-#   pip install "hermes-agent==<new-version>" && hermes postinstall
-# Or: "$HERMES" update --backup
+#   pip install "hermes-agent==<new-version>"
+# Or use the built-in updater: "$HERMES" update --backup
+# Or re-run the official installer: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup
 "$HERMES" --version
 "$HERMES" gateway restart                 # clean restart (see /hermes-restart)
 "$HERMES" -z 'reply with OK' | grep -qi OK && echo "OK after update"

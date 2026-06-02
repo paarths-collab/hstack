@@ -125,7 +125,7 @@ You need three things: a server, a model and (optionally) a messaging account to
 
 **A messaging account:** a Telegram account is the easiest starting point and costs nothing.
 
-> **A note on Windows:** Hermes installs natively on Windows, the CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`. WSL2 also works if you prefer it. That said, for an *always-on* agent you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
+> **A note on Windows:** Hermes installs natively on Windows, the CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`. WSL2 also works if you prefer it. That said, for an *always-on* agent you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
 
 ---
 
@@ -170,25 +170,36 @@ Any VPS provider works, the steps are identical once you have an Ubuntu box and 
 
 > **Hostinger one-click users:** your Hermes is already installed. Open the web terminal and skip ahead to Step 3.
 
-For everyone else, SSH into your server and run the following. Read the comments, they prevent the two most common install failures.
+For everyone else, install Hermes with the **official one-line installer**, then run `hermes setup` to configure it. Do NOT run the installer with `sudo`.
+
+**macOS / Linux** — SSH into your server and run:
 
 ```bash
-# 1. Install prerequisites. Do NOT run the Hermes installer itself with sudo.
-sudo apt-get update && sudo apt-get install -y git curl ca-certificates
+# 1. Install (the official installer; grabs the current stable build).
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 
-# 2. Install a known-good, PINNED version (not the moving latest).
-pip install "hermes-agent==0.15.2" && hermes postinstall
-
-# 3. Reload your shell so the `hermes` command is found.
+# 2. Reload your shell so the `hermes` command is found.
 source ~/.bashrc
+
+# 3. Configure — interactive: pick provider, model, and paste keys.
+hermes setup
 
 # 4. Confirm it worked.
 hermes --version
 ```
 
-### Why pin the version?
+**Windows** — open PowerShell (native, no WSL needed) and run:
 
-Hermes ships releases under two numbering schemes for the *same* build, a GitHub tag like `v2026.5.29.2` and a PyPI version like `0.15.2`. Installing the unpinned latest means a future release can change behavior or introduce a regression under you. Pinning `0.15.2`, the current stable release, gives you a reproducible base. When you later choose to upgrade past it, you do so deliberately.
+```powershell
+irm https://hermes-agent.nousresearch.com/install.ps1 | iex
+hermes setup
+```
+
+`hermes setup` is the all-in-one configuration wizard — it walks you through choosing a provider and model and storing your API key. Step 3 below goes deeper on *which* model to pick (you can re-run that part anytime with `hermes model`).
+
+### A note on versions
+
+The installer pulls the **current stable build** (at the time of writing, PyPI `0.15.2` / GitHub tag `v2026.5.29.2` — the same release under two numbering schemes). If you specifically need to **lock** a version for reproducibility, install via pip instead — `pip install "hermes-agent==0.15.2"` — and upgrade deliberately later. For most people, the official installer is the right call.
 
 ### The #1 beginner trap: "command not found"
 
