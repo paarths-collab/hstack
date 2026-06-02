@@ -1,6 +1,6 @@
 ---
 name: hermes-deploy
-description: Deploy a self-hosted Hermes Agent end-to-end. Orchestrates install, model, platforms, skills, memory, personality, home channel, autostart, an optional web dashboard, and verification. Use when the user wants to set up Hermes from scratch on a server or locally.
+description: Deploy a self-hosted Hermes Agent end-to-end. Orchestrates install, model, platforms, skills, memory, personality, home channel, autostart, and verification. Use when the user wants to set up Hermes from scratch on a server or locally.
 ---
 
 # /hermes-deploy — full end-to-end Hermes Agent deploy
@@ -19,7 +19,7 @@ Do every step you can autonomously; stop and ask the user ONLY for the things a 
 Announce the plan, then proceed. Use the absolute binary path `~/.local/bin/hermes` everywhere (PATH
 is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (the current stable release).
 
-## The 9 steps (delegate to the sub-skills)
+## The 8 steps (delegate to the sub-skills)
 1. **Install** → run the `/hermes-install` procedure. Verify `hermes --version` and `hermes -z 'reply OK'` later.
 2. **Model** → `/hermes-model`. Ask the user for the API key. Validate ≥64K context. Smoke-test with `hermes -z`.
 3. **Skills** → `/hermes-skills`. Install the curated starter pack.
@@ -30,10 +30,9 @@ is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (the current stable r
 7. **Home channel** → `/hermes-home`. Set `*_HOME_CHANNEL` so cron/notifications have a target.
 8. **Autostart** → install the gateway as a service so it survives reboot (`/hermes-restart` covers the
    clean-restart + WSL/Docker specifics). Add a nightly `gateway restart` cron (mitigates the OOM leak #25315).
-9. **Dashboard (optional, recommended)** → offer the user a web interface. Enable the agent's dashboard
-   API (`HERMES_DASHBOARD=1`, bound to localhost), then run the `/dashboard` procedure to stand up Atlas
-   and point it at this agent over an SSH tunnel. Skip if the user only wants chat. Its rooms/tiles
-   self-populate from the agent's live capabilities, so it stays in sync as you add tools.
+ 
+## Coming soon
+We’re removing the current frontend dashboard for now. hstack will ship **agent plugins** (specialist workers) that boost Hermes with focused workflows (sales, HR, marketing, support, ops/admin, research) — inspired by the Digital Crew “Digital Workers” model.
 
 ## Verify (definition of done)
 - `hermes --version` prints and exits 0.

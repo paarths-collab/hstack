@@ -34,7 +34,7 @@ $markStart
 One command to deploy and operate a self-hosted Hermes Agent. Run /hermes-deploy for the full
 setup. Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /hermes-soul /hermes-home
 /hermes-cron. Platforms: /platform-telegram /platform-discord /platform-whatsapp /platform-slack
-/platform-mattermost. Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup /dashboard.
+/platform-mattermost. Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup.
 Pin Hermes v0.15.2; enforce allowlists and keep secrets in .env with chmod 600.
 $markEnd
 "@

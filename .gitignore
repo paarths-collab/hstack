@@ -17,11 +17,6 @@ Thumbs.db
 tmp/
 scratch/
 
-# dashboard: the app code IS tracked; dev artifacts (screenshots, uploads) are not
-dashboard/scraps/
-dashboard/uploads/
-**/.thumbnail
-
 # node / next build output (never commit these)
 node_modules/
 .next/

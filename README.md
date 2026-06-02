@@ -50,7 +50,7 @@
 - [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
 - [🌍 Deploy targets](#-deploy-targets)
 - [🔐 Security defaults](#-security-defaults)
-- [📊 Dashboard (Atlas)](#-dashboard-atlas)
+- [🧩 Agent plugins (coming soon)](#-agent-plugins-coming-soon)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
@@ -149,7 +149,6 @@ via `hermes config set` (and `chmod 600`s it), so your keys stay out of logs and
 | `/hermes-update` | Safe update with backup + re-verify. |
 | `/hermes-fix` | Diagnose + repair common failures. |
 | `/hermes-backup` | Back up config + sessions. |
-| `/dashboard` | Install the Atlas web dashboard + connect it to a running agent. |
 
 ---
 
@@ -210,14 +209,20 @@ Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
 
-## 📊 Dashboard (Atlas)
+## 🧩 Agent plugins (coming soon)
 
-Want a face for your agent? **Atlas** is hstack's read-only web dashboard ([`dashboard/`](dashboard)) — a cream/vermilion interface with a togglable retro **pixel** skin. It shows status, channels, schedule, activity, and cost, plus a live pixel **office**: each room is a Hermes toolset (Web, Browser, Terminal, Code, Memory, Channels, Media, Integrations·MCP…) and agents walk to the room of whatever tool they're running.
+We’re removing the current frontend dashboard for now (it isn’t in a publishable state). Next, hstack will grow **agent “plugins” that boost Hermes** — inspired by the Digital Crew “Digital Workers” model: specialist agents that operate the tools your team already uses.
 
-- **One command:** `/dashboard` installs it and connects it to an agent you already run; `/hermes-deploy` offers it at the end for new setups.
-- **Self-improving:** rooms and toolset tiles are built from the agent's **live capabilities** — add a new tool or MCP server and a new room + tile appear automatically, in both skins.
-- **Safe by design:** the data layer is **GET-only** (no mutating endpoint exists), localhost-bound, reached over an SSH tunnel or an authenticated HTTPS proxy — never `:9119` exposed raw. Unreachable agent → clearly-labelled **DEMO DATA**.
-- Two builds: a **zero-build HTML prototype** (just open it) and a **Next.js + Tailwind** app for production.
+Planned plugin agents (modeled after [Digital Crew Technology](https://www.digitalcrew.tech/en)):
+
+- **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
+- **Claire (Market Mastermind)** — researches markets/competitors/accounts and delivers actionable briefs.
+- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings.
+- **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
+- **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email/social/site.
+- **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
+
+**Status:** coming soon.
 
 ## Honest positioning
 
