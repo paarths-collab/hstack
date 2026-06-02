@@ -44,6 +44,70 @@ commands remotely — no manual copy-pasting needed.
 **Security reminder:** rotate or remove the throwaway password immediately after deploy is done
 (`passwd root` again, or `sudo passwd -l root` to lock it).
 
+#### Setting up key-based auth (no password needed after this)
+
+When the Bash tool can't do password auth interactively (it's non-interactive — it can't type at
+a prompt), use key-based auth instead. Full sequence:
+
+```bash
+# 1. Generate a keypair on the machine running the Bash tool
+ssh-keygen -t ed25519 -f ~/.ssh/hermes_vps -N "" -C "claude-code-hermes-deploy"
+
+# 2. Ask the user to add the public key on the VPS.
+#    IMPORTANT: always use printf, never echo >> — echo appends without a leading newline
+#    and will mangle the key onto the previous line if authorized_keys lacks a trailing newline.
+printf '\n%s\n' "$(cat ~/.ssh/hermes_vps.pub)" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+# 3. First connect — auto-trust the host key (normal on first connect)
+ssh -i ~/.ssh/hermes_vps -o StrictHostKeyChecking=accept-new root@<hostname>
+```
+
+**Why `printf '\n%s\n'` not `echo >>`:**
+`echo "key" >> authorized_keys` appends without a guaranteed leading newline. If the file's last
+line has no trailing newline, the result is two keys mashed together on one line:
+```
+...paarth@digitalcrewssh-ed25519 AAAA...claude-code-hermes-deploy
+```
+SSH parses `authorized_keys` one key per line — that merged line is invalid, auth silently fails.
+`printf '\n%s\n'` forces a newline *before* the key regardless of the file's existing state.
+
+**Detection:** if `Permission denied (publickey)` persists after adding the key, check for mangling:
+```bash
+cat ~/.ssh/authorized_keys | grep -c "^ssh-"   # should equal number of keys
+```
+If it returns fewer than expected, keys are merged. Fix with:
+```bash
+sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys
+```
+
+#### Verifying you're on the host, not inside a container
+
+Before adding an SSH key, **always confirm your shell is on the VPS host** — not inside a Docker
+container. Containers have their own `authorized_keys` that SSH on the host never reads.
+
+```bash
+whoami; hostname
+```
+
+- Prompt looks like `root@team` or `root@hostname` → you're on the **host** ✅
+- Prompt looks like `root@dd635306c545` (random hex string) → you're **inside a container** ❌
+  Exit the container first: `exit` or `Ctrl+D`
+
+#### Running remote commands via the Bash tool (once SSH works)
+
+Once key auth is established, pipe whole scripts over SSH — no copy-pasting:
+
+```bash
+ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
+# everything here runs on the VPS
+hermes --version
+hermes gateway status
+REMOTE
+```
+
+This is the pattern used for all remote install/config/fix steps once access is established.
+
 Announce the plan, then proceed. Use the absolute binary path `~/.local/bin/hermes` everywhere (PATH
 is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (the current stable release).
 

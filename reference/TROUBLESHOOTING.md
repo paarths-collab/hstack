@@ -4,14 +4,32 @@ Every entry is a real, logged failure with the fix hstack applies. This file gro
 found — that compounding knowledge is hstack's moat.
 
 ## SSH access (VPS hand-off)
+
+Real failure chain from a documented deploy session — in the order they appeared:
+
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `ssh root@<host>` hangs or times out from Windows | SSH port 22 blocked by VPS firewall or Windows Firewall | In Hostinger hPanel → VPS → Firewall, confirm port 22 (TCP inbound) is open; or try `ssh -v` to see where it stalls |
-| `Permission denied (publickey)` | No password auth enabled, no key added | In hPanel → VPS → SSH Keys, add your public key; or enable password auth: `PasswordAuthentication yes` in `/etc/ssh/sshd_config` → `systemctl restart sshd` |
-| `ssh root@<host>` works from Windows but Bash tool can't reach it | WSL2 network namespace isolation | Use `ssh -o StrictHostKeyChecking=no root@<host>` from the Bash tool; ensure WSL2 has internet (`curl -s https://example.com`) |
-| Forgot to rotate throwaway password after deploy | — | `passwd root` to set a strong password, or `sudo passwd -l root` to lock root login and use a sudo user instead |
+| `Host key verification failed` | First-ever connect; host key not in `known_hosts` | Add `-o StrictHostKeyChecking=accept-new` — auto-trusts on first connect, subsequent connects verify normally |
+| `Permission denied (publickey,password)` immediately after host-key fix | No key installed yet; Bash tool is non-interactive so can't type a password at a prompt; `sshpass` not installed | Generate a keypair (`ssh-keygen -t ed25519 -f ~/.ssh/hermes_vps -N ""`), authorize the public half on the VPS |
+| Key added but `Permission denied` persists | Key was added *inside a Docker container* (prompt `dd635306c545%`), not on the host — SSH reads the host's `authorized_keys`, not the container's | Run `whoami; hostname` before adding a key. Hex-string hostname = container. `exit` first, then re-add on the host |
+| Key added on the host but still `Permission denied` | Two keys mashed onto one line — `echo >>` appended without a leading newline, merging with the previous key: `...paarth@digitalcrewssh-ed25519 AAAA...` SSH parses one key per line; merged line = invalid, silently ignored | **Always use `printf '\n%s\n' "key"` not `echo "key" >>`**. Fix merged keys: `sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys` |
+| `ssh root@<host>` works from Windows but Bash tool can't reach it | WSL2 network namespace isolation | `ssh -o StrictHostKeyChecking=accept-new -i ~/.ssh/hermes_vps root@<host>` from Bash tool; confirm WSL has internet: `curl -s https://example.com` |
+| Forgot to rotate throwaway password after deploy | — | `passwd root` (new strong password) or `sudo passwd -l root` (lock root login, use sudo user) |
 
-> **Fastest hand-off:** user runs `ssh root@<hostname>` from their Windows terminal to confirm it works, then shares the hostname + password/key path. Claude Code's Bash tool then SSHs in directly and runs all install/config commands remotely — no manual copy-pasting.
+> **Detection — are keys merged?**
+> ```bash
+> grep -c "^ssh-" ~/.ssh/authorized_keys   # should equal number of keys you added
+> ```
+> If count is wrong, keys are on the same line. Use the `sed` fix above.
+
+> **Fastest hand-off:** user runs `ssh root@<hostname>` from their Windows terminal to confirm it works, then shares the hostname + credential. Claude Code's Bash tool then SSHs in and drives everything remotely — no copy-pasting.
+
+> **Remote script pattern** (once key auth works):
+> ```bash
+> ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
+> # commands here run on the VPS
+> REMOTE
+> ```
 
 ## Install
 | Symptom | Cause | Fix |
