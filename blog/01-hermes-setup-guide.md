@@ -521,18 +521,18 @@ If you are migrating from OpenClaw, Hermes has a built-in path: `hermes claw mig
 
 ---
 
-## Coming soon: Digital Crew-style specialist agents/plugins
+## Coming soon: Digital Crew specialist agent plugins
 
-Alongside the core setup flow, we are working on optional specialist agents/plugins modeled on the Digital Crew style, each with a clear scope:
+Alongside the core setup flow, we are preparing a set of optional specialist agent plugins modeled on [Digital Crew Technology](https://www.digitalcrew.tech/en)'s real roster. Each one targets a specific business function, not a generic assistant role:
 
-- **Sophie** for planning and coordination tasks.
-- **Claire** for writing and editing support.
-- **Max** for implementation and integration-heavy coding work.
-- **Camille** for QA, verification, and release-readiness checks.
-- **Kate** for UI/content quality and consistency review.
-- **Andre** for ops routines and reliability automation.
+- **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
+- **Claire (Market Mastermind)** — researches markets, competitors, and target accounts, then delivers actionable briefs.
+- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings.
+- **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
+- **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email, social, and site.
+- **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
 
-The intent is to keep setup simple while making repeated workflows easier to delegate when you want that structure.
+**Status:** coming soon. The intent is to keep setup simple while making repeated business workflows easier to delegate when you want that structure. Track progress in the [Agent Plugins Roadmap](https://github.com/paarths-collab/hstack#-agent-plugins-roadmap).
 
 ---
 
