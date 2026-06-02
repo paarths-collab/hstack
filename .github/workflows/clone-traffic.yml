@@ -1,0 +1,37 @@
+name: Clone traffic
+
+# Persists GitHub's clone counts past its 14-day window. Clone count ≈ "how many
+# people ran the one-command install" (it's a git clone). Zero user telemetry.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily 06:17 UTC
+  workflow_dispatch: {} # run manually any time
+
+permissions:
+  contents: write # commit the updated history file
+
+concurrency:
+  group: clone-traffic
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Fetch + append clone traffic
+        env:
+          TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: node metrics/update-clone-traffic.mjs
+      - name: Commit if changed
+        run: |
+          git config user.name "hstack-metrics[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add metrics/clone-traffic.json
+          git diff --staged --quiet || git commit -m "chore(metrics): update clone traffic [skip ci]"
+          git push
