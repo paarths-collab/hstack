@@ -15,6 +15,7 @@ and a production **Next.js** app. Both read the agent's own JSON API and render:
 - **Overview / Channels / Schedule / Activity / Usage** — status, connected platforms, cron jobs, recent sessions, token cost.
 - **Visualize** — a live pixel "office" where each room is a Hermes **toolset** (Web, Browser, Terminal, Code, Memory, Channels, Media, Integrations·MCP, …) and agents walk to the room of whatever tool they're running.
 - **Self-improving:** rooms and toolset tiles are built from the agent's **live capabilities** (`/v1/capabilities`). Add a new tool or MCP server to your agent and a new room + tile appear automatically — in both the normal and pixel skins.
+- **Live activity trace:** when connected to a real agent, the office isn't random — Atlas walks to the room of whatever tool your agent actually just used, in order (e.g. research → Web room, then a recall → Memory room), polled from `/api/sessions` (~10s latency). With no agent reachable it falls back to representative demo motion.
 
 ## When to use this vs `/hermes-deploy`
 

@@ -169,7 +169,7 @@ function colorizeLog(m) {
 function Visualize({ data, caps, agentCount = 8 }) {
   const [paused, setPaused] = React.useState(false);
   const [sel, setSel] = React.useState(null);
-  const sim = useOfficeSim({ agentCount, paused, toolsets: caps && caps.toolsets });
+  const sim = useOfficeSim({ agentCount, paused, toolsets: caps && caps.toolsets, activity: data && data.sessions, live: !!(data && data.live) });
   const agents = sim.state.agents;
   const selAgent = agents.find(a => a.id === sel) || null;
   // Live toolsets drive the grid — a new tool the agent gains shows up here automatically.
@@ -186,7 +186,9 @@ function Visualize({ data, caps, agentCount = 8 }) {
 
   return (
     <div>
-      <SectionHead title="Visualize" sub="A live office for your agent. Atlas and its sub-agents walk between toolsets — watch which tool each is running and what it's working on, in real time." />
+      <SectionHead title="Visualize" sub={data.live
+        ? "Live — Atlas walks to each toolset as your agent actually uses it, traced from recent sessions (refreshed every ~10s)."
+        : "Demo — representative activity. Connect a live agent and Atlas traces its real tool use, room to room."} />
       <div className="viz">
         <div className="viz-stage">
           <World sim={sim} selectedId={sel} onSelectAgent={(id) => setSel(s => s === id ? null : id)} />

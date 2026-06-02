@@ -163,8 +163,38 @@ function pathBetween(from, to, byId) {
   return p;
 }
 
+// ───────── LIVE ACTIVITY (drive the office from real /api/sessions) ─────────
+// Map a real tool/session to the room it belongs in. Falls back to orchestration.
+function roomForTool(tool) {
+  if (!tool) return 'orchestration';
+  const t = String(tool).toLowerCase();
+  if (ALIASES[t]) return ALIASES[t];
+  if (CATALOG[t]) return t;
+  if (/browser|snapshot/.test(t)) return 'browser';
+  if (/memory|session_search|recall/.test(t)) return 'memory';
+  if (/web|firecrawl|extract|search/.test(t)) return 'web';
+  if (/ha_|home.?assist|mcp|^rl_/.test(t)) return 'mcp';
+  if (/vision|image|tts|text_to_speech|speech|audio/.test(t)) return 'media';
+  if (/read_file|patch|terminal|shell|process|file|bash/.test(t)) return 'terminal';
+  if (/execute_code|run_code|python|^code/.test(t)) return 'code';
+  if (/send_message|telegram|discord|slack|whatsapp|signal|mail|email|inbox|gmail|channel|list_chats/.test(t)) return 'channels';
+  if (/cron|schedule/.test(t)) return 'gateway';
+  if (/todo|delegate|clarify|plan/.test(t)) return 'orchestration';
+  return 'orchestration';
+}
+const KIND_BY_ROOM = { web: 'read', browser: 'browse', terminal: 'launch', code: 'create', memory: 'enrich', channels: 'reply', media: 'media', mcp: 'mcp', gateway: 'health', orchestration: 'sync' };
+function directedTaskFor(session, room) {
+  const tool = session.tool || room;
+  return { id: 'live_' + session.id, room, live: true, kind: KIND_BY_ROOM[room] || 'mcp',
+    title: session.summary || ('Used ' + tool),
+    bubbles: [tool, 'working…', '✓'],
+    log: [[tool, (session.summary || '').slice(0, 42) || 'task'], ['via', session.platform || '—'], ['ok', 'done']] };
+}
+
 // ───────── HOOK ─────────
-function useOfficeSim({ speed = 1, agentCount = 8, paused = false, toolsets = null } = {}) {
+// activity = recent sessions array (from /api/sessions). When `live`, the primary
+// agent (Atlas) traces that real activity room-to-room instead of the ambient sim.
+function useOfficeSim({ speed = 1, agentCount = 8, paused = false, toolsets = null, activity = null, live = false } = {}) {
   const [tick, setTick] = React.useState(0);
   const stateRef = React.useRef(null);
   const pausedRef = React.useRef(paused);
@@ -172,6 +202,19 @@ function useOfficeSim({ speed = 1, agentCount = 8, paused = false, toolsets = nu
   const sig = (toolsets && toolsets.length ? toolsets.join(',') : 'demo') + '|' + agentCount;
   const sigRef = React.useRef(null);
   if (!stateRef.current || sigRef.current !== sig) { sigRef.current = sig; stateRef.current = initialState(agentCount, toolsets); }
+
+  // Feed real activity in: diff /api/sessions and enqueue new ones for the live trace.
+  const seenRef = React.useRef(null);
+  if (!seenRef.current) seenRef.current = new Set();
+  const actSig = (activity || []).map(s => s && s.id).join(',');
+  React.useEffect(() => {
+    const st = stateRef.current; if (!st) return;
+    st.live = !!live;
+    if (!live || !activity) return;
+    const fresh = activity.filter(s => s && s.id && !seenRef.current.has(s.id));
+    fresh.sort((a, b) => String(a.updated || '').localeCompare(String(b.updated || ''))); // oldest first → natural order
+    for (const s of fresh) { seenRef.current.add(s.id); const room = st.byId[roomForTool(s.tool)] ? roomForTool(s.tool) : 'orchestration'; st.directedQueue.push(directedTaskFor(s, room)); }
+  }, [actSig, live]);
 
   React.useEffect(() => {
     let last = performance.now();
@@ -199,7 +242,7 @@ function initialState(agentCount, toolsets) {
     return { ...a, x: desk.x, y: desk.y, facing: desk.facing, mode: 'idle', path: [], target: null, task: null,
       workStartedAt: 0, workDuration: 0, progress: 0, log: [{ t: tnow(), m: 'spawned · ready' }], bubble: null, bubbleUntil: 0, idleSince: 0, lastSyncAt: 0, targetDesk: null, bubbleSchedule: [], logSchedule: [] };
   });
-  return { rooms, byId, taskPool, tasksByRoom, roster, overflow, agents };
+  return { rooms, byId, taskPool, tasksByRoom, roster, overflow, agents, directedQueue: [], live: false };
 }
 function tnow() { return new Date().toLocaleTimeString('en-US', { hour12: false }); }
 function pickRandom(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -245,12 +288,17 @@ function step(state, dt) {
         pushLog(a, '✓ done · ' + (a.task?.title || ''));
         if (a.task?.room === 'orchestration') a.lastSyncAt = now;
         a.task = null; a.workStartedAt = 0; a.workDuration = 0; a.progress = 0;
-        queueTask(state, a, chooseTask(state, a));
+        if (state.live) { a.mode = 'idle'; a.idleSince = now; } else { queueTask(state, a, chooseTask(state, a)); }
       }
       continue;
     }
     if (a.mode === 'idle') {
       a.idleSince = a.idleSince || now;
+      if (state.live) {
+        // Live mode: the primary agent (Atlas) traces real activity; others stand by.
+        if (a.id === state.agents[0].id && state.directedQueue.length) { queueTask(state, a, state.directedQueue.shift()); a.idleSince = 0; }
+        continue;
+      }
       if (now - a.idleSince > 1000 + Math.random() * 1400) { queueTask(state, a, chooseTask(state, a)); a.idleSince = 0; }
       continue;
     }
@@ -263,4 +311,4 @@ function step(state, dt) {
   }
 }
 
-Object.assign(window, { useOfficeSim, OFFICE_CATALOG: CATALOG, buildWorld });
+Object.assign(window, { useOfficeSim, OFFICE_CATALOG: CATALOG, buildWorld, roomForTool });

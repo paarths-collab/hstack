@@ -121,8 +121,8 @@ function Agent({ agent, selected, onClick }: any) {
 export function Visualize({ data, caps, agentCount = 8 }: { data: Bundle; caps: { toolsets: string[] }; agentCount?: number }) {
   const [paused, setPaused] = React.useState(false);
   const [sel, setSel] = React.useState<string | null>(null);
-  const live = caps && caps.toolsets && caps.toolsets.length ? caps.toolsets : ["web", "browser", "media", "memory", "terminal", "channels", "code", "mcp", "cron", "orchestration"];
-  const sim = useOfficeSim({ agentCount, paused, toolsets: live });
+  const liveTools = caps && caps.toolsets && caps.toolsets.length ? caps.toolsets : ["web", "browser", "media", "memory", "terminal", "channels", "code", "mcp", "cron", "orchestration"];
+  const sim = useOfficeSim({ agentCount, paused, toolsets: liveTools, activity: data && (data as any).sessions, live: !!(data && (data as any).live) });
   const agents = sim.state.agents;
   const selAgent = agents.find((a: any) => a.id === sel) || null;
   const feed: any[] = [];
@@ -133,7 +133,7 @@ export function Visualize({ data, caps, agentCount = 8 }: { data: Bundle; caps: 
     <div>
       <div style={{ marginBottom: 18 }}>
         <h2 style={{ fontSize: 26, fontWeight: 800, letterSpacing: "-.03em" }}>Visualize</h2>
-        <p style={{ color: "var(--ink-soft)", marginTop: 4 }}>A live office for your agent. Atlas and its sub-agents walk between toolsets — watch which tool each is running and what it&apos;s working on.</p>
+        <p style={{ color: "var(--ink-soft)", marginTop: 4 }}>{data.live ? "Live — Atlas walks to each toolset as your agent actually uses it, traced from recent sessions (refreshed every ~10s)." : "Demo — representative activity. Connect a live agent and Atlas traces its real tool use, room to room."}</p>
       </div>
       <div className="viz">
         <div className="viz-stage">
@@ -185,9 +185,9 @@ export function Visualize({ data, caps, agentCount = 8 }: { data: Bundle; caps: 
             </div>
           </Card>
           <Card className="p-5">
-            <div className="num" style={{ fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--ink-soft)", fontWeight: 700 }}>Active toolsets ({live.length})</div>
+            <div className="num" style={{ fontSize: 10.5, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--ink-soft)", fontWeight: 700 }}>Active toolsets ({liveTools.length})</div>
             <div className="toolgrid">
-              {live.map((id) => { const m = toolMeta(id); return <div key={id} className={"tl" + (m.known ? "" : " tl-new")} title={m.known ? "" : "New tool — auto-detected"}><span className="ti">▣</span>{m.label}{m.known ? "" : " ＋"}</div>; })}
+              {liveTools.map((id) => { const m = toolMeta(id); return <div key={id} className={"tl" + (m.known ? "" : " tl-new")} title={m.known ? "" : "New tool — auto-detected"}><span className="ti">▣</span>{m.label}{m.known ? "" : " ＋"}</div>; })}
             </div>
             {sim.overflow && sim.overflow.length ? <div className="sub" style={{ marginTop: 10, fontSize: 12 }}>+{sim.overflow.length} more tool{sim.overflow.length > 1 ? "s" : ""} (room cap reached)</div> : null}
           </Card>

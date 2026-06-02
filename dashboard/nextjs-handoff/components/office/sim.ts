@@ -137,13 +137,48 @@ function pathBetween(from: string, to: string, byId: Record<string, any>) {
   return p;
 }
 
-export function useOfficeSim({ agentCount = 8, paused = false, toolsets = null as string[] | null } = {}) {
+// ── LIVE ACTIVITY: drive the office from real /api/sessions ──
+function roomForTool(tool?: string) {
+  if (!tool) return "orchestration";
+  const t = String(tool).toLowerCase();
+  if (ALIASES[t]) return ALIASES[t];
+  if (CATALOG[t]) return t;
+  if (/browser|snapshot/.test(t)) return "browser";
+  if (/memory|session_search|recall/.test(t)) return "memory";
+  if (/web|firecrawl|extract|search/.test(t)) return "web";
+  if (/ha_|home.?assist|mcp|^rl_/.test(t)) return "mcp";
+  if (/vision|image|tts|text_to_speech|speech|audio/.test(t)) return "media";
+  if (/read_file|patch|terminal|shell|process|file|bash/.test(t)) return "terminal";
+  if (/execute_code|run_code|python|^code/.test(t)) return "code";
+  if (/send_message|telegram|discord|slack|whatsapp|signal|mail|email|inbox|gmail|channel|list_chats/.test(t)) return "channels";
+  if (/cron|schedule/.test(t)) return "gateway";
+  if (/todo|delegate|clarify|plan/.test(t)) return "orchestration";
+  return "orchestration";
+}
+const KIND_BY_ROOM: Record<string, string> = { web: "read", browser: "browse", terminal: "launch", code: "create", memory: "enrich", channels: "reply", media: "media", mcp: "mcp", gateway: "health", orchestration: "sync" };
+function directedTaskFor(s: any, room: string) {
+  const tool = s.tool || room;
+  return { id: "live_" + s.id, room, live: true, kind: KIND_BY_ROOM[room] || "mcp", title: s.summary || ("Used " + tool), bubbles: [tool, "working…", "✓"], log: [[tool, (s.summary || "").slice(0, 42) || "task"], ["via", s.platform || "—"], ["ok", "done"]] };
+}
+
+export function useOfficeSim({ agentCount = 8, paused = false, toolsets = null as string[] | null, activity = null as any[] | null, live = false } = {}) {
   const [, setTick] = React.useState(0);
   const stateRef = React.useRef<any>(null);
   const pausedRef = React.useRef(paused); pausedRef.current = paused;
   const sig = (toolsets && toolsets.length ? toolsets.join(",") : "demo") + "|" + agentCount;
   const sigRef = React.useRef<string | null>(null);
   if (!stateRef.current || sigRef.current !== sig) { sigRef.current = sig; stateRef.current = initialState(agentCount, toolsets); }
+  const seenRef = React.useRef<Set<string> | null>(null);
+  if (!seenRef.current) seenRef.current = new Set();
+  const actSig = (activity || []).map((s) => s && s.id).join(",");
+  React.useEffect(() => {
+    const st = stateRef.current; if (!st) return;
+    st.live = !!live;
+    if (!live || !activity) return;
+    const fresh = activity.filter((s) => s && s.id && !seenRef.current!.has(s.id));
+    fresh.sort((a, b) => String(a.updated || "").localeCompare(String(b.updated || "")));
+    for (const s of fresh) { seenRef.current!.add(s.id); const room = st.byId[roomForTool(s.tool)] ? roomForTool(s.tool) : "orchestration"; st.directedQueue.push(directedTaskFor(s, room)); }
+  }, [actSig, live]);
   React.useEffect(() => {
     let last = performance.now();
     const id = setInterval(() => { const now = performance.now(); const dt = Math.min(0.1, (now - last) / 1000); last = now; if (!pausedRef.current) step(stateRef.current, dt); setTick((t) => (t + 1) % 1e6); }, 50);
@@ -162,7 +197,7 @@ function initialState(agentCount: number, toolsets: string[] | null) {
     const room = byId[a.home] || byId.orchestration; const desk = room.desks[i % room.desks.length];
     return { ...a, x: desk.x, y: desk.y, facing: desk.facing, mode: "idle", path: [] as any[], target: null as any, task: null as any, workStartedAt: 0, workDuration: 0, progress: 0, log: [{ t: tnow(), m: "spawned · ready" }], bubble: null as string | null, bubbleUntil: 0, idleSince: 0, lastSyncAt: 0, targetDesk: null as any, bubbleSchedule: [] as any[], logSchedule: [] as any[] };
   });
-  return { rooms, byId, taskPool, tasksByRoom, roster, overflow, agents };
+  return { rooms, byId, taskPool, tasksByRoom, roster, overflow, agents, directedQueue: [] as any[], live: false };
 }
 const tnow = () => new Date().toLocaleTimeString("en-US", { hour12: false });
 const pick = <T,>(a: T[]) => a[Math.floor(Math.random() * a.length)];
@@ -196,10 +231,15 @@ function step(state: any, dt: number) {
       while (a.bubbleSchedule.length && a.bubbleSchedule[0].at <= now) setBubble(a, a.bubbleSchedule.shift().text, 2200);
       while (a.logSchedule.length && a.logSchedule[0].at <= now) pushLog(a, a.logSchedule.shift().row.join(" "));
       a.progress = Math.min(1, (now - a.workStartedAt) / a.workDuration);
-      if (now - a.workStartedAt >= a.workDuration) { pushLog(a, "✓ done · " + (a.task?.title || "")); if (a.task?.room === "orchestration") a.lastSyncAt = now; a.task = null; a.workStartedAt = 0; a.workDuration = 0; a.progress = 0; queueTask(state, a, chooseTask(state, a)); }
+      if (now - a.workStartedAt >= a.workDuration) { pushLog(a, "✓ done · " + (a.task?.title || "")); if (a.task?.room === "orchestration") a.lastSyncAt = now; a.task = null; a.workStartedAt = 0; a.workDuration = 0; a.progress = 0; if (state.live) { a.mode = "idle"; a.idleSince = now; } else { queueTask(state, a, chooseTask(state, a)); } }
       continue;
     }
-    if (a.mode === "idle") { a.idleSince = a.idleSince || now; if (now - a.idleSince > 1000 + Math.random() * 1400) { queueTask(state, a, chooseTask(state, a)); a.idleSince = 0; } continue; }
+    if (a.mode === "idle") {
+      a.idleSince = a.idleSince || now;
+      if (state.live) { if (a.id === state.agents[0].id && state.directedQueue.length) { queueTask(state, a, state.directedQueue.shift()); a.idleSince = 0; } continue; }
+      if (now - a.idleSince > 1000 + Math.random() * 1400) { queueTask(state, a, chooseTask(state, a)); a.idleSince = 0; }
+      continue;
+    }
     if (a.mode === "walking") {
       if (!a.target) { a.mode = a.task?.room === "orchestration" ? "syncing" : "working"; a.workStartedAt = 0; a.facing = a.targetDesk?.facing || "d"; continue; }
       const dx = a.target.x - a.x, dy = a.target.y - a.y, dist = Math.hypot(dx, dy), stp = SPEED * dt;
