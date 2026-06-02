@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Atlas · hstack — Hermes monitoring dashboard
+   Cream + vermilion design system (matches the reference image).
+   Add class `pixel` on <html> for the retro re-skin.
+   ============================================================ */
+
+@theme inline {
+  --color-background: var(--bg);
+  --color-foreground: var(--ink);
+  --color-card: var(--card);
+  --color-card-foreground: var(--ink);
+  --color-primary: var(--accent);
+  --color-primary-foreground: #fff;
+  --color-secondary: var(--card-2);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--card);
+  --color-muted-foreground: var(--ink-soft);
+  --color-destructive: var(--bad);
+  --color-destructive-foreground: #fff;
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--accent);
+  --font-sans: "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --animate-border-beam: border-beam calc(var(--duration) * 1s) infinite linear;
+}
+
+@keyframes border-beam {
+  to { offset-distance: 100%; }
+}
+
+:root {
+  --bg:#E7E4DD; --panel:#FCFBF8; --card:#F5F2EB; --card-2:#FBF9F4;
+  --ink:#1A1712; --ink-soft:#7C7468; --ink-faint:#A8A092;
+  --line:#E6E0D2; --line-soft:#EFEAde;
+  --accent:#E2543A; --accent-deep:#C13D22; --accent-soft:#F8E2DA; --accent-tint:#FCEFE9;
+  --ok:#1F8A5B; --ok-soft:#DCEDE2; --warn:#C8902B; --warn-soft:#F4E9D0; --bad:#C8402A;
+  --ink-dark:#211D17; --ink-dark-2:#2C2820;
+  --r-lg:28px; --r-md:22px; --r-sm:16px;
+}
+
+html.pixel {
+  --bg:#0d0b16; --panel:#161226; --card:#1e1830; --card-2:#241d3a;
+  --ink:#ECE7FF; --ink-soft:#9d93c4; --ink-faint:#6f6699; --line:#312a4d; --line-soft:#2a2442;
+  --accent:#ff6b3d; --accent-deep:#ff8a5c; --accent-soft:#3a2236; --accent-tint:#2c2036;
+  --ok:#52e0a0; --ok-soft:#173a2c; --warn:#ffd23d; --warn-soft:#3a3115;
+  --ink-dark:#0a0813; --ink-dark-2:#120f1f;
+}
+html.pixel body { font-family: "Press Start 2P", monospace; font-size: 12px; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-sans); margin: 0; -webkit-font-smoothing: antialiased; }
+.mono { font-family: var(--font-mono); }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+
+/* See office.css (imported below) for the Visualize world styles. */

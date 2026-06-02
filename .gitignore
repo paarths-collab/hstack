@@ -17,5 +17,7 @@ Thumbs.db
 tmp/
 scratch/
 
-# untracked frontend/dashboard work — kept locally, not part of the published toolkit
-frontend/
+# dashboard: the app code IS tracked; dev artifacts (screenshots, uploads) are not
+dashboard/scraps/
+dashboard/uploads/
+**/.thumbnail

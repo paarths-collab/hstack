@@ -13,7 +13,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-compatible-58a6ff" alt="Claude Code compatible">
   <img src="https://img.shields.io/badge/Agent%20Skills-compatible-2dd4bf" alt="Agent Skills compatible">
-  <img src="https://img.shields.io/badge/Commands-18-f59e0b" alt="18 commands">
+  <img src="https://img.shields.io/badge/Commands-19-f59e0b" alt="19 commands">
   <img src="https://img.shields.io/badge/Hermes-v0.15.2%20pinned-9d6bff" alt="Hermes v0.15.2 pinned">
   <img src="https://img.shields.io/badge/Platforms-Telegram%20·%20WhatsApp%20·%20Discord%20·%20Slack-229ED9" alt="Platforms">
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome">
@@ -50,6 +50,7 @@
 - [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
 - [🌍 Deploy targets](#-deploy-targets)
 - [🔐 Security defaults](#-security-defaults)
+- [📊 Dashboard (Atlas)](#-dashboard-atlas)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
@@ -148,6 +149,7 @@ via `hermes config set` (and `chmod 600`s it), so your keys stay out of logs and
 | `/hermes-update` | Safe update with backup + re-verify. |
 | `/hermes-fix` | Diagnose + repair common failures. |
 | `/hermes-backup` | Back up config + sessions. |
+| `/dashboard` | Install the Atlas web dashboard + connect it to a running agent. |
 
 ---
 
@@ -207,6 +209,15 @@ Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
+
+## 📊 Dashboard (Atlas)
+
+Want a face for your agent? **Atlas** is hstack's read-only web dashboard ([`dashboard/`](dashboard)) — a cream/vermilion interface with a togglable retro **pixel** skin. It shows status, channels, schedule, activity, and cost, plus a live pixel **office**: each room is a Hermes toolset (Web, Browser, Terminal, Code, Memory, Channels, Media, Integrations·MCP…) and agents walk to the room of whatever tool they're running.
+
+- **One command:** `/dashboard` installs it and connects it to an agent you already run; `/hermes-deploy` offers it at the end for new setups.
+- **Self-improving:** rooms and toolset tiles are built from the agent's **live capabilities** — add a new tool or MCP server and a new room + tile appear automatically, in both skins.
+- **Safe by design:** the data layer is **GET-only** (no mutating endpoint exists), localhost-bound, reached over an SSH tunnel or an authenticated HTTPS proxy — never `:9119` exposed raw. Unreachable agent → clearly-labelled **DEMO DATA**.
+- Two builds: a **zero-build HTML prototype** (just open it) and a **Next.js + Tailwind** app for production.
 
 ## Honest positioning
 
