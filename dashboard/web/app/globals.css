@@ -65,7 +65,7 @@
   --font-sans: "Inter", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
-  /* Atlas dashboard tokens (used by office.css) */
+  /* Atlas design tokens */
   --bg: #FFFFFF;
   --panel: #FFFFFF;
   --card-2: #FAFBFC;
@@ -74,14 +74,25 @@
   --ink-faint: #9AA1AC;
   --line: #E7E9ED;
   --line-soft: #F0F1F4;
+  --accent: #E2543A;
   --accent-deep: #C13D22;
   --accent-soft: #F8E2DA;
   --accent-tint: #FCEFE9;
   --ok: #1F8A5B;
+  --ok-soft: #DCEDE2;
   --warn: #C8902B;
+  --warn-soft: #F4E9D0;
   --bad: #C8402A;
+  --bad-soft: #F8DEDE;
   --ink-dark: #211D17;
+  --ink-dark-2: #2C2820;
+  --r-lg: 28px;
   --r-md: 22px;
+  --r-sm: 16px;
+  --shadow: 0 1px 2px rgba(40,33,22,.04), 0 12px 30px -18px rgba(40,33,22,.18);
+  --shadow-sm: 0 1px 2px rgba(40,33,22,.05);
+  --font-sans: "Hanken Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
 .dark {

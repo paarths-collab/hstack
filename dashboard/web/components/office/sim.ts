@@ -217,7 +217,7 @@ function chooseTask(state: any, a: any) {
 function currentRoomOf(state: any, a: any) { for (const r of state.rooms) if (a.x >= r.x && a.x <= r.x + r.w && a.y >= r.y && a.y <= r.y + r.h) return r.id; return a.home; }
 function queueTask(state: any, a: any, task: any) {
   const room = state.byId[task.room]; if (!room) return;
-  const desk = pick(room.desks); const path = pathBetween(currentRoomOf(state, a), task.room, state.byId);
+  const desk = pick(room.desks) as any; const path = pathBetween(currentRoomOf(state, a), task.room, state.byId);
   path.push({ x: room.waypoint.x, y: room.waypoint.y }); path.push({ x: desk.x, y: desk.y });
   a.task = task; a.targetDesk = desk; a.path = path; a.target = path[0]; a.mode = "walking"; a.progress = 0; a.workStartedAt = 0; pushLog(a, `task → ${task.title}`);
 }
