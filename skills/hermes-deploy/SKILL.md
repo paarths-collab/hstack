@@ -16,6 +16,34 @@ Do every step you can autonomously; stop and ask the user ONLY for the things a 
    Sonnet/GPT for quality). NEVER default to a local/small model — they hallucinate tool calls.
 3. **Which messaging platform(s)?** Recommend **Telegram first** (fully headless). Others optional.
 
+### Option A — SSH access (fastest path for VPS deploys)
+
+If the user wants to hand off a VPS deploy directly, ask them to confirm SSH is open and provide
+access via **one of two methods**:
+
+**Method 1 — throwaway password:**
+```
+User runs on their VPS:   passwd root        # set a short throwaway password
+User tells you:           root@<IP>  +  password
+You SSH via Bash:         ssh root@<IP>
+```
+
+**Method 2 — verify existing SSH works first:**
+```
+User runs from their Windows machine:   ssh root@<hostname>
+If it connects → they share the hostname/IP and key path (or password)
+```
+
+Example: if the user's VPS hostname is `srv1531840.hstgr.cloud`, the check command is:
+```
+ssh root@srv1531840.hstgr.cloud
+```
+Once SSH access is confirmed and credentials shared, use the Bash tool to run all install/config
+commands remotely — no manual copy-pasting needed.
+
+**Security reminder:** rotate or remove the throwaway password immediately after deploy is done
+(`passwd root` again, or `sudo passwd -l root` to lock it).
+
 Announce the plan, then proceed. Use the absolute binary path `~/.local/bin/hermes` everywhere (PATH
 is not refreshed in a fresh shell). Pin **Hermes v0.15.2** (the current stable release).
 

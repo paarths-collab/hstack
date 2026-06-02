@@ -3,6 +3,16 @@
 Every entry is a real, logged failure with the fix hstack applies. This file grows as new failures are
 found — that compounding knowledge is hstack's moat.
 
+## SSH access (VPS hand-off)
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `ssh root@<host>` hangs or times out from Windows | SSH port 22 blocked by VPS firewall or Windows Firewall | In Hostinger hPanel → VPS → Firewall, confirm port 22 (TCP inbound) is open; or try `ssh -v` to see where it stalls |
+| `Permission denied (publickey)` | No password auth enabled, no key added | In hPanel → VPS → SSH Keys, add your public key; or enable password auth: `PasswordAuthentication yes` in `/etc/ssh/sshd_config` → `systemctl restart sshd` |
+| `ssh root@<host>` works from Windows but Bash tool can't reach it | WSL2 network namespace isolation | Use `ssh -o StrictHostKeyChecking=no root@<host>` from the Bash tool; ensure WSL2 has internet (`curl -s https://example.com`) |
+| Forgot to rotate throwaway password after deploy | — | `passwd root` to set a strong password, or `sudo passwd -l root` to lock root login and use a sudo user instead |
+
+> **Fastest hand-off:** user runs `ssh root@<hostname>` from their Windows terminal to confirm it works, then shares the hostname + password/key path. Claude Code's Bash tool then SSHs in directly and runs all install/config commands remotely — no manual copy-pasting.
+
 ## Install
 | Symptom | Cause | Fix |
 |---------|-------|-----|
