@@ -24,15 +24,15 @@ found — that compounding knowledge is hstack's moat.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Whole gateway + all bots go offline on a provider error | 429/401/timeout → exit 75/TEMPFAIL → restart loop (#16677) | validate context windows; circuit-breaker/fallback; avoid known crash-loop combos |
-| Vision / web-summarization / compression silently stop working | auxiliary model not keyed (no error) | add the provider key (e.g. OpenRouter); show capability health |
+| Vision / web-summarization / compression silently stop working | an auxiliary slot overridden to a different provider without its key, OR main model can't do the feature | leave aux on `auto` (reuses main), or wire the override's key; pick a capable main model (e.g. one with vision) |
 | `Context length exceeded` on first long chat | misdetected context window | model must be ≥64K; aux/compression model context ≥ main |
 | Surprise per-token bill on a subscription | billing-mode silently flipped (`hermes.md` bug) | surface active billing mode; warn before API-credit burn |
-| ~73% of every request is overhead → big bills | 31 tool defs incl. browser tools on messaging gateways (#4379) | platform-aware tool loading; enable `prompt_caching`; lean SOUL.md |
+| Big per-request token bills | fixed overhead (tool defs + system prompt) on every call; browser tools loaded on text-only platforms | platform-aware tool loading; enable `prompt_caching`; lean SOUL.md |
 
 ## Memory
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Agent "spends turns consolidating" / "memory at 1,361/1,375 chars" | tiny fixed ceiling (~1,375 user / ~2,200 agent) | surface the meter; offer an external provider |
+| Agent "spends turns consolidating its memory" | built-in memory is a bounded character budget that has filled up | prune old notes; attach an external memory provider (mem0 / Supermemory / Honcho) |
 | External provider crashes with `ModuleNotFoundError` | `hermes memory setup` doesn't install the dep (#25086) | `uv pip install --python ~/.hermes/hermes-agent/venv/bin/python <pkg>` |
 | `~/.hermes` is multiple GB | ~3,000 session files, no auto-prune | prune sessions; nightly prune cron |
 

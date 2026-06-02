@@ -57,7 +57,7 @@
 
 ## Why hstack exists
 
-Installing Hermes was never the hard part — it ships its own `curl | bash`. **The pain is everything after**: the gateway that crashes after a day, 73% token overhead that runs up surprise bills, capabilities that silently die when a key is missing, and allowlists that lock you out.
+Installing Hermes was never the hard part — it ships its own `curl | bash`. **The pain is everything after**: long-running gateways that need babysitting, sizable fixed token overhead on every request, auxiliary capabilities that quietly stop when an aux slot is overridden without its key, and allowlists that lock you out.
 
 hstack is **the production layer Hermes is missing** — a self-healing, secured, observable deploy in one Claude Code command, for people who want self-hosting without living in a terminal.
 
@@ -184,10 +184,10 @@ Every item below is a real, logged failure mode hstack handles so you don't hit 
 
 - **PATH "command not found"** after a "successful" install → PATH-safe absolute paths + explicit reload.
 - **Gateway memory leak → OOM crash** ([#25315](https://github.com/NousResearch/hermes-agent/issues/25315)) → pinned version, memory cap, nightly restart, stale-PID clearing.
-- **73% token overhead → surprise bills** ([#4379](https://github.com/NousResearch/hermes-agent/issues/4379)) → prompt caching, lean SOUL.md, cost awareness.
-- **Silent capability degradation** (vision/web/compression die with no key) → capability-aware wiring + warnings.
+- **Fixed per-request overhead → surprise bills** (tool definitions + system prompt on every call; community reports the fixed share running well over half in some configurations) → prompt caching, lean SOUL.md, platform-aware tool loading.
+- **Auxiliary-capability gaps** (an aux slot overridden without its key — vision/web/compression silently stop) → capability-aware wiring + warnings; aux defaults left on `auto` to reuse the main model.
 - **A provider 429 takes the whole gateway offline** ([#16677](https://github.com/NousResearch/hermes-agent/issues/16677)) → context-window validation, fallback.
-- **Tiny invisible memory ceiling** (~1,375 / ~2,200 chars) → surfaced, with one-click external memory.
+- **Bounded memory budget** (built-in memory is structured note-taking against a finite budget — practitioners report turns spent consolidating once it fills) → budget surfaced, with one-click external memory.
 
 See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full catalogue.
 

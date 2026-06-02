@@ -14,11 +14,12 @@ HERMES="$HOME/.local/bin/hermes"
 "$HERMES" memory status
 ```
 
-## The memory ceiling — TELL THE USER THIS (it's the #1 daily frustration)
-Built-in memory is small and fixed: **~1,375 chars user profile, ~2,200 chars agent memory** (≈20 short
-notes). When it fills, the agent **spends turns consolidating instead of working**. This contradicts the
-"grows with you" marketing — it's structured note-taking against a tight budget. When it fills, offer an
-external provider.
+## The memory budget — TELL THE USER THIS (the #1 daily frustration)
+Built-in memory is **bounded**: structured note-taking against a finite character budget, not unbounded
+learning. The exact figure isn't called out on the docs' reference page, so describe it as "limited, will
+fill" rather than a specific number. When it fills, practitioners report the agent **spends turns
+consolidating instead of working** — that's your cue to prune or attach an external provider. This
+contradicts the "grows with you" marketing.
 
 ## Optional: external provider (e.g. mem0) — REQUIRES installing the python dep
 ```bash

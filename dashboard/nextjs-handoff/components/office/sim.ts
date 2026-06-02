@@ -30,6 +30,9 @@ const CATALOG: Record<string, { name: string; tag: string; tint: string; color: 
   terminal: { name: "Terminal & Files", tag: "terminal", tint: "tint-slate", color: "#6c7282", tasks: [
     { kind: "launch", title: "Run a command · terminal", bubbles: ["terminal", "$ ./backup.sh", "done ✓"], log: [["terminal", "./backup.sh"], ["git", "commit + push"], ["ok", "exit 0"]] },
     { kind: "update", title: "Edit a file · read_file + patch", bubbles: ["read_file", "patch", "saved"], log: [["read_file", "config.yaml"], ["patch", "+3 -1"], ["ok", "written"]] },
+    { kind: "create", title: "Write a new file · write_file", bubbles: ["write_file", "composing…", "saved ✓"], log: [["write_file", "notes/today.md"], ["ok", "+1 file"]] },
+    { kind: "read", title: "Search the codebase · search_files", bubbles: ["search_files", "scanning…"], log: [["search_files", '"TODO"'], ["ok", "12 matches"]] },
+    { kind: "health", title: "Manage background jobs · process", bubbles: ["process", "list", "ok"], log: [["process", "list"], ["ok", "2 running"]] },
   ] },
   code: { name: "Code", tag: "execute_code", tint: "tint-green", color: "#1f8a5b", tasks: [
     { kind: "create", title: "Run code · execute_code", bubbles: ["execute_code", "def main()…", "ran ✓"], log: [["execute_code", "python"], ["run", "exit 0"], ["ok", "output ready"]] },
@@ -145,10 +148,10 @@ function roomForTool(tool?: string) {
   if (CATALOG[t]) return t;
   if (/browser|snapshot/.test(t)) return "browser";
   if (/memory|session_search|recall/.test(t)) return "memory";
-  if (/web|firecrawl|extract|search/.test(t)) return "web";
+  if (/read_file|write_file|search_files|patch|terminal|shell|process|^file|bash/.test(t)) return "terminal";
+  if (/web|firecrawl|extract|^search$|web_search|x_search|google_search/.test(t)) return "web";
   if (/ha_|home.?assist|mcp|^rl_/.test(t)) return "mcp";
   if (/vision|image|tts|text_to_speech|speech|audio/.test(t)) return "media";
-  if (/read_file|patch|terminal|shell|process|file|bash/.test(t)) return "terminal";
   if (/execute_code|run_code|python|^code/.test(t)) return "code";
   if (/send_message|telegram|discord|slack|whatsapp|signal|mail|email|inbox|gmail|channel|list_chats/.test(t)) return "channels";
   if (/cron|schedule/.test(t)) return "gateway";

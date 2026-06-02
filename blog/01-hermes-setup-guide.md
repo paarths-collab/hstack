@@ -32,7 +32,7 @@ Imagine texting an AI on Telegram that is genuinely *yours*. It remembers your p
 - **The standout feature is persistent memory**, it remembers context across sessions and projects, which is what most users say sets it apart.
 - **It reaches you where you already are:** Telegram, Discord, Slack, WhatsApp, Signal, Matrix, email, SMS and Home Assistant.
 - **Running cost is roughly $6–10/month** in model API fees for typical personal use, plus the VPS.
-- **The setup has real traps**, a PATH issue that breaks the first run, a tiny fixed memory ceiling and silent capability failures, all of which this guide pre-empts.
+- **The setup has real traps**, a PATH issue that breaks the first run, a bounded memory budget that fills up, and auxiliary capabilities that need a provider that can serve them, all of which this guide pre-empts.
 - **Pin a known-good version (`hermes-agent==0.15.2`)**, the current stable release, so a future release cannot silently break your setup.
 
 ## Table of contents
@@ -222,12 +222,16 @@ hermes model
 
 You will choose a provider and a specific model. Here are the sensible options:
 
+Hermes supports a wide provider list: **OpenRouter** (400+ models), **Anthropic**, **OpenAI**, **Google / Gemini**, **Nous Portal** (300+), **X-AI / Grok**, **MiniMax**, plus a custom-endpoint option. Auth is either an API key or an **OAuth** browser flow (depending on the provider). The sensible defaults:
+
 | Choice | Best for | Notes |
 |--------|----------|-------|
+| **Nous Portal** | Easiest start | One subscription, main + aux + image gen + TTS + cloud browser. Setup is one step (see below). |
 | **OpenAI Codex (OAuth)** | Non-developers | Log in with your existing ChatGPT account, no new API account, no per-token bill. |
-| **DeepSeek V4** (via OpenRouter) | Cheapest quality | Around $0.30 per million input tokens; excellent value. |
-| **Claude Sonnet / GPT** | Highest quality | Pay-per-token; best reasoning. |
-| **Ollama (local)** | Privacy / free | Runs on your own hardware; needs a capable machine. |
+| **OpenRouter** | Cheapest quality | A single account fans out to 400+ models (DeepSeek, Llama, Qwen, etc.) at competitive rates; good catch-all. |
+| **Claude / GPT / Gemini direct** | Highest quality / lowest latency | Pay-per-token via Anthropic / OpenAI / Google directly. |
+| **X-AI (Grok) · MiniMax** | Specialty models | Direct providers if you want their specific models. |
+| **Ollama (local)** | Privacy / free | Runs on your own hardware; needs a capable machine. Set `-c 65536` to clear the 64K context minimum. |
 
 ### The easiest option: Nous Portal (one subscription, no key-juggling)
 
@@ -258,9 +262,9 @@ This writes the key to `~/.hermes/.env` (secrets) rather than `~/.hermes/config.
 chmod 600 ~/.hermes/.env
 ```
 
-### A subtle one: capability degradation
+### A subtle one: auxiliary models
 
-Some features, vision, web summarization and compression, are powered by *auxiliary* models. If the provider that powers them is not keyed, those features do not error loudly; they **silently stop working.** If you set up only one provider and later notice the agent "can't see images," this is usually why. Configure a provider (OpenRouter is a good catch-all) that covers these auxiliaries.
+Hermes runs one main model **plus eight auxiliary slots** for tasks like context compression, vision/image analysis, web-page summarization, approval scoring, MCP tool routing, session-title generation, and skill search. Per the docs, every auxiliary slot defaults to `auto` — meaning Hermes reuses your main model for that task too. So if your main model is capable (≥64K context, vision-able where you need it), the aux features work out of the box. The trap is if you **override** an aux slot to a different provider and forget to add that provider's key, or pick a main model that doesn't support vision — then the dependent feature stops working with no loud error. The fix is to either leave aux on `auto` or make sure any override has its key wired (a catch-all provider like OpenRouter is a good default).
 
 ---
 
@@ -385,7 +389,7 @@ If this file is empty, Hermes falls back to a generic "You are Hermes Agent" ide
 
 ### Understand the memory ceiling (this matters)
 
-Hermes' built-in memory is genuinely useful but **small and fixed**. The user profile caps at roughly **1,375 characters** and the agent memory at roughly **2,200 characters**, together about 20 short notes. When it fills, the agent starts spending turns consolidating its own memory instead of doing your work. This is the single most common day-to-day frustration and it directly contradicts the "grows with you" marketing: the memory is structured note-taking against a tight budget, not unbounded learning.
+Hermes' built-in memory is genuinely useful but **bounded**. It's structured note-taking against a character budget, not unbounded learning, and practitioners report that once it fills the agent starts spending turns consolidating its own memory instead of doing your work. The exact budget isn't called out on the docs' reference page, so treat it as "limited, will fill" rather than a precise number, and watch your sessions for "reorganizing memory" turns as the tell. The "grows with you" framing is aspirational; in practice it's a finite scratchpad.
 
 If you hit the ceiling, you can attach an external memory provider (mem0, Supermemory, Honcho and others). Note that some of these require installing a Python package into the Hermes virtual environment, the setup step reports success without doing this, so the agent crashes on first use if you skip it. For most people, the built-in memory is the right default; reach for an external provider only when you actually outgrow it.
 
@@ -499,7 +503,7 @@ Being honest about a tool builds more trust than hyping it and the self-hosted-a
 - Cheap, transparent, debuggable self-hosting: memory is flat files plus one SQLite database you can read with normal tools.
 
 **Overstated, adjust your expectations:**
-- "An agent that grows with you / self-improving." In reality, memory is a fixed ~1,375 / ~2,200 character budget; the agent writes small markdown files. It is structured note-taking, not open-ended learning.
+- "An agent that grows with you / self-improving." In reality, memory is a bounded character budget — the agent writes small markdown files and curates them. It is structured note-taking, not open-ended learning.
 - Headline performance numbers ("X% faster") are often vendor-internal benchmarks without independent confirmation.
 
 **Real gotchas to plan around:**
@@ -553,7 +557,7 @@ The agent and its memory are local, but it needs a model. With a local model via
 
 ### Why does my agent keep "reorganizing its memory"?
 
-You have hit the memory ceiling (~1,375 / ~2,200 characters). It is consolidating to make room. Prune old notes or attach an external memory provider.
+You have hit the memory budget. It is consolidating to make room. Prune old notes or attach an external memory provider.
 
 ### Can it run on a Raspberry Pi?
 

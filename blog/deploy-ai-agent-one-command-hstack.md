@@ -27,7 +27,7 @@ This guide explains exactly what that command does, why it is reliable where man
 ## Key takeaways
 
 - **One paste, ~5 questions, ~30 minutes** to a live agent on your phone, no terminal expertise required.
-- **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak that crashes the agent after a day, ~73% fixed token overhead, and silent capability failures.
+- **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak reported by long-running deploys, the fixed token overhead from tool definitions + system prompt on every request, and auxiliary-capability gaps when an aux slot is overridden without its key.
 - **It pins a known-good Hermes version (v0.15.2, the current stable release)** so a future release cannot silently break your setup.
 - **Secure by default:** localhost-bound, allowlist-enforced, secrets written to `.env` with `chmod 600`, no open bots.
 - **Multi-VPS with Hostinger as the one-click default;** DigitalOcean, Hetzner and any VPS are supported.
@@ -100,7 +100,7 @@ You will not be asked to gather these ahead of time. During `/hermes-deploy`, **
 | You provide | Where to get it (Claude walks you through it) | Needed for |
 |-------------|-----------------------------------------------|------------|
 | **Server access** | **Hostinger:** hPanel → Docker Manager → Compose → one-click deploy → search "Hermes". **Other VPS:** your SSH host, user and password/key. | Install |
-| **Model API key** | **Nous Portal (simplest):** one subscription covers the model, web search, image generation and TTS, Claude sets it up with `hermes setup --portal`, no separate keys to collect. **Or OpenRouter:** [openrouter.ai](https://openrouter.ai) → Keys → Create Key → copy `sk-or-...`. **Or OpenAI:** [platform.openai.com/api-keys](https://platform.openai.com/api-keys). **Or** log in with your existing ChatGPT account via OAuth. | Model |
+| **Model API key** | **Nous Portal (simplest):** one subscription covers the main model + auxiliaries + image gen + TTS + cloud browser. **Or pick a provider:** OpenRouter (400+ models, e.g. DeepSeek), Anthropic, OpenAI, Google/Gemini, X-AI/Grok, MiniMax — Claude pastes the key into `~/.hermes/config.yaml` for you. **Or OAuth** with your existing ChatGPT/Anthropic account where supported. | Model |
 | **Telegram bot token** | In Telegram, message **@BotFather** → `/newbot` → name it → username ends in `bot` → copy the token. | Telegram |
 | **Your Telegram user ID** | In Telegram, message **@userinfobot** → it replies with your numeric ID. | Telegram allowlist |
 | **Discord bot token + intents** | [discord.com/developers](https://discord.com/developers/applications) → New Application → Bot → Reset Token. Enable **Message Content** + **Server Members** intents. Invite via the OAuth2 URL. | Discord |
@@ -208,21 +208,21 @@ The single highest-churn failure. The installer adds `hermes` to your PATH in a 
 
 A documented leak (issue #25315) causes the gateway to grow from a few hundred megabytes to tens of gigabytes over roughly 20–35 hours of uptime, then get killed by the OS. A naive `Restart=always` service turns this into a crash loop. **hstack** pins a stable version, runs the gateway with sane limits, schedules a nightly restart as a mitigation and clears the stale PID file on startup so a crash does not wedge the next launch.
 
-### 73% token overhead → surprise bills
+### Fixed per-request overhead → surprise bills
 
-Issue #4379 documents that a large fraction of every request is fixed overhead, tool definitions and the system prompt, before you type a word. On messaging gateways this is worse, because browser tools that are useless on Telegram still get loaded. **hstack** enables prompt caching, keeps `SOUL.md` lean and avoids loading irrelevant tools, all of which directly lower the per-request token cost that drives your bill.
+Every request carries a sizable fixed overhead — tool definitions plus the system prompt — before you type a word. On messaging gateways it's worse, because browser tools that are useless on Telegram still get loaded. Practitioners have reported the fixed share running well over half of each request in some configurations. **hstack** enables prompt caching, keeps `SOUL.md` lean, and avoids loading irrelevant toolsets per platform, all of which directly lower the per-request token cost that drives your bill.
 
-### Silent capability degradation
+### Auxiliary-capability gaps
 
-Vision, web summarization and compression are powered by auxiliary models. If the provider that powers them is not keyed, those features do not throw an error, they quietly stop working, which is maddening to debug. **hstack** computes which capabilities will degrade given the keys you provided and warns you up front, rather than letting you discover it weeks later. (The cleanest way to avoid this class of problem entirely is **Nous Portal**, which powers the model and all the auxiliary capabilities from a single subscription, hstack will offer it during the model stage.)
+Hermes runs one main model **plus eight auxiliary slots** (context compression, vision/image analysis, web-page summarization, approval scoring, MCP tool routing, session-title generation, skill search). Per the docs, every aux slot defaults to `auto` — Hermes reuses your main model for that job, so if your main model is capable the aux features just work. The trap is when an aux slot is **overridden** to a different provider without that provider's key wired, or when the main model can't do (e.g.) vision. The dependent feature then quietly stops working with no loud error. **hstack** keeps aux on `auto` by default, computes which capabilities your chosen main model can serve, and warns you up front rather than letting you discover the gap weeks later. (The cleanest way to avoid this class of problem entirely is **Nous Portal**, which powers the main + auxiliaries from a single subscription, hstack will offer it during the model stage.)
 
 ### A provider error taking the whole gateway offline
 
 Issue #16677 shows that a model 429 (rate limit), 401 (auth), or timeout can crash the entire gateway process, taking every messaging bot offline with no user-facing error. **hstack** validates context-window minimums at setup, warns about provider/model combinations known to crash-loop and configures fallbacks so one provider hiccup does not silence your agent.
 
-### The tiny, invisible memory ceiling
+### The bounded memory budget
 
-Built-in memory caps at roughly 1,375 characters for the user profile and 2,200 for agent memory (issue #32156). When full, the agent burns turns consolidating instead of working and nothing surfaces this to you. **hstack** explains the ceiling during setup and makes it a one-step move to attach an external memory provider (correctly installing its dependency, which the stock setup forgets to do).
+Built-in memory is structured note-taking against a bounded character budget — not unbounded learning. When it fills, practitioners report the agent burns turns consolidating instead of working, and nothing surfaces that to you. **hstack** explains the budget during setup and makes it a one-step move to attach an external memory provider (correctly installing its dependency, which the stock setup forgets to do).
 
 ### Platform and host-specific traps
 
@@ -406,7 +406,7 @@ hstack does not oversell Hermes and neither should you. Here is the candid versi
 
 **Genuinely good:** persistent memory across projects (the most-praised feature), "it just runs" reliability, the widest messaging-platform support of any open agent and cheap, transparent self-hosting where memory is plain files you can read.
 
-**Overstated:** the "agent that grows with you / self-improving" framing. In reality, memory is a fixed ~1,375 / ~2,200 character budget, the agent writes small markdown files. It is structured note-taking against a tight budget, not open-ended learning. Headline performance numbers are usually vendor-internal.
+**Overstated:** the "agent that grows with you / self-improving" framing. In practice, memory is a bounded character budget — the agent writes small markdown files and curates them. It is structured note-taking against a budget, not open-ended learning. Headline performance numbers are usually vendor-internal.
 
 **Real gotchas (all handled by hstack):** large fixed token overhead per request, a gateway memory leak over ~a day, and silently-degrading auxiliary features.
 
@@ -444,7 +444,7 @@ hstack is secure by default: localhost binding, enforced allowlists, and locked-
 
 ### Which model should I use?
 
-For the best cost-to-quality ratio, DeepSeek V4 via OpenRouter. For maximum quality, Claude Sonnet or GPT. For zero new accounts, log in with your existing ChatGPT subscription. Any choice must support at least 64K context. You can switch anytime with `/hermes-model`.
+Hermes supports OpenRouter (400+ models), Anthropic, OpenAI, Google/Gemini, Nous Portal (300+), X-AI/Grok, and MiniMax. For the easiest start, **Nous Portal** (main + aux + image + TTS in one subscription). For cost-to-quality, OpenRouter routed to a frontier-class open model. For maximum quality, Anthropic/OpenAI/Google direct. For zero new accounts, OAuth with your existing ChatGPT subscription. **Any choice must support at least 64K context** — Hermes rejects smaller windows at startup. Switch anytime with `/hermes-model`.
 
 ### Which messaging platform should I start with?
 
