@@ -209,9 +209,7 @@ Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
 
-## 🧩 Agent plugins (coming soon)
-
-We’re removing the current frontend dashboard for now (it isn’t in a publishable state). Next, hstack will grow **agent “plugins” that boost Hermes** — inspired by the Digital Crew “Digital Workers” model: specialist agents that operate the tools your team already uses.
+## 🧩 Agent Plugins Roadmap
 
 Planned plugin agents (modeled after [Digital Crew Technology](https://www.digitalcrew.tech/en)):
 
