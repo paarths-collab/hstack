@@ -1,0 +1,42 @@
+name: Dashboard build
+
+on:
+  push:
+    paths:
+      - "dashboard/web/**"
+  pull_request:
+    paths:
+      - "dashboard/web/**"
+
+jobs:
+  build:
+    name: Next.js build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: dashboard/web/package-lock.json
+
+      - name: Install dependencies
+        # Use npm install (not ci) until a lockfile is committed.
+        # Once you run `npm install` locally and commit package-lock.json,
+        # change this back to `npm ci` for reproducible installs.
+        run: npm install
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Build
+        run: npm run build
+        env:
+          # Prevent the build failing due to missing HERMES_BASE at CI time —
+          # the rewrite is a runtime concern, not a build-time one.
+          HERMES_BASE: http://127.0.0.1:9119
