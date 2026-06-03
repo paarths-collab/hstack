@@ -51,6 +51,7 @@
 - [🌍 Deploy targets](#-deploy-targets)
 - [🔐 Security defaults](#-security-defaults)
 - [🧩 Agent plugins (coming soon)](#-agent-plugins-coming-soon)
+- [📊 Install metrics](#-install-metrics)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
@@ -225,6 +226,17 @@ Planned plugin agents (modeled after [Digital Crew Technology](https://www.digit
 ## Honest positioning
 
 Hermes is genuinely good at: **persistent cross-project memory**, an **unmatched messaging-gateway breadth**, "it just runs," and **$6–10/mo cost predictability**. It is *not* "an agent that grows with you / self-improving" — memory is structured note-taking against a tight character budget. hstack describes things as they are.
+
+## 📊 Install metrics
+
+The hstack install **is a `git clone`**, so GitHub counts every install automatically — no tracking code, no telemetry. The chart below updates daily via [`.github/workflows/clone-traffic.yml`](.github/workflows/clone-traffic.yml) and persists the full history in [`metrics/clone-traffic.json`](metrics/clone-traffic.json) (GitHub only keeps 14 days; we keep everything).
+
+<p align="center">
+  <img src="metrics/clone-traffic.svg" alt="Git clone traffic chart for paarths-collab/hstack" width="800">
+</p>
+
+> **Bars** = total clones per day &nbsp;·&nbsp; **Teal line** = unique cloners &nbsp;·&nbsp; Unique cloners ≈ "how many people ran the install command."
+> First-time setup: add a `TRAFFIC_TOKEN` secret (PAT with Administration:Read) — see [`metrics/README.md`](metrics/README.md).
 
 ## 📝 Blog & guides
 

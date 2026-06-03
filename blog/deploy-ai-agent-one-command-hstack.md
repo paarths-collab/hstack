@@ -420,18 +420,18 @@ If you are coming from OpenClaw, Hermes has a built-in migration that imports yo
 
 ---
 
-## Coming soon: Digital Crew-style specialist agents/plugins
+## Coming soon: Digital Crew specialist agent plugins
 
-We are also preparing a small set of optional specialist agents/plugins for focused jobs, inspired by the Digital Crew working style. The goal is practical division of labor, not extra complexity:
+We are also preparing a set of optional specialist agent plugins for hstack, modeled on [Digital Crew Technology](https://www.digitalcrew.tech/en)'s real-world roster. Each one wraps a focused business function rather than a generic chatbot:
 
-- **Sophie** for planning and project coordination.
-- **Claire** for writing/editing and comms polish.
-- **Max** for implementation-heavy coding and integrations.
-- **Camille** for QA, validation, and release checks.
-- **Kate** for UI/content quality and consistency passes.
-- **Andre** for operations workflows and reliability automation.
+- **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
+- **Claire (Market Mastermind)** — researches markets, competitors, and target accounts, then ships actionable briefs.
+- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings.
+- **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
+- **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email, social, and site.
+- **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
 
-As these ship, they will follow the same approach as the rest of hstack: explicit roles, composable commands, and clear handoffs you can inspect.
+**Status:** coming soon. Each plugin will follow the rest of hstack's approach: explicit roles, composable commands, and clear handoffs you can inspect. Track progress in the [Agent Plugins Roadmap](https://github.com/paarths-collab/hstack#-agent-plugins-roadmap).
 
 ---
 
