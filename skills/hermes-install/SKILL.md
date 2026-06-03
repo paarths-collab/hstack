@@ -18,7 +18,7 @@ command -v curl >/dev/null || sudo apt-get update && sudo apt-get install -y cur
 # 2. Install — the OFFICIAL installer. --skip-setup keeps it non-interactive (we wire the
 #    provider + keys in /hermes-model via `hermes config set`); --skip-browser avoids the
 #    Chromium-deps failure on headless VPS. Gets the current stable build.
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup --skip-browser
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup --skip-browser
 
 # 3. Make hermes resolvable in THIS shell (rc file is not reloaded automatically).
 export PATH="$HOME/.local/bin:$PATH"
@@ -29,7 +29,7 @@ test -x "$HERMES" && "$HERMES" --version || { echo "FAIL: hermes not installed";
 "$HERMES" doctor 2>&1 | tee /tmp/hermes_doctor.log    # capture; do NOT gate on its exit code
 ```
 
-- **Windows (native, PowerShell):** `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`
+- **Windows (native, PowerShell):** `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`
 - **Attended / manual install:** run `hermes setup` (the interactive wizard for provider, model, and keys) instead of leaving it to /hermes-model.
 - **Pin a version** for reproducibility: `pip install "hermes-agent==0.15.2"` (current stable; GitHub tag `v2026.5.29.2` == PyPI `0.15.2` are the same build), or pass `--commit <SHA>` to install.sh. Then upgrade deliberately with /hermes-update.
 
@@ -42,7 +42,7 @@ test -x "$HERMES" && "$HERMES" --version || { echo "FAIL: hermes not installed";
   sudo install exists: `sudo rm /usr/local/bin/hermes` then reinstall.
 - **Docker UID:** pin a tagged image (avoid `v2026.4.23`; avoid `main`/`latest` on UID-99 NAS hosts);
   honor `HERMES_UID`/`HERMES_GID`; run CLI + gateway as the same UID.
-- **Windows:** installs natively via PowerShell (`irm https://hermes-agent.nousresearch.com/install.ps1 | iex`); WSL2 optional. For an always-on agent, prefer a Linux VPS regardless.
+- **Windows:** installs natively via PowerShell (`iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`); WSL2 optional. For an always-on agent, prefer a Linux VPS regardless.
 
 ## Verify
 `hermes --version` exits 0; toolchain present (`node --version`, `python3 --version`, `git --version`).

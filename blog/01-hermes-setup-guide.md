@@ -129,7 +129,7 @@ You need three things: a server, a model and (optionally) a messaging account to
 
 **A messaging account:** a Telegram account is the easiest starting point and costs nothing.
 
-> **A note on Windows:** Hermes installs natively on Windows. The CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `irm https://hermes-agent.nousresearch.com/install.ps1 | iex`. WSL2 also works if you prefer it. For an *always-on* agent, though, you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
+> **A note on Windows:** Hermes installs natively on Windows. The CLI, gateway, TUI and tools all run without WSL. Open PowerShell and run `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`. WSL2 also works if you prefer it. For an *always-on* agent, though, you still want a Linux VPS running 24/7 rather than your personal machine, which is what this guide assumes.
 
 ---
 
@@ -182,7 +182,7 @@ For everyone else, install Hermes with the **official one-line installer**, then
 
 ```bash
 # 1. Install (the official installer; grabs the current stable build).
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 
 # 2. Reload your shell so the `hermes` command is found.
 source ~/.bashrc
@@ -197,7 +197,7 @@ hermes --version
 **Windows** — open PowerShell (native, no WSL needed) and run:
 
 ```powershell
-irm https://hermes-agent.nousresearch.com/install.ps1 | iex
+iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)
 hermes setup
 ```
 

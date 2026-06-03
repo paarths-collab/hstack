@@ -37,7 +37,7 @@ Real failure chain from a documented deploy session — in the order they appear
 | `hermes: command not found` after a successful install | rc-file PATH edit didn't reach the live shell; login/systemd/launchd inherit minimal PATH | `export PATH="$HOME/.local/bin:$PATH"`; use the absolute `~/.local/bin/hermes`; `source ~/.bashrc` |
 | Install fails on a headless VPS | Chromium/Playwright system libs (#1 headless failure) | install with `--skip-browser` |
 | Permission errors during/after install | a prior `sudo` install left root-owned files | `sudo rm /usr/local/bin/hermes`; reinstall **without** sudo |
-| Windows install fails | PowerShell execution policy blocks the installer | Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` then retry `irm https://hermes-agent.nousresearch.com/install.ps1 \| iex`; WSL2 also works |
+| Windows install fails | Execution policy blocks the script | Run `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser` then retry. Full Windows install: `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)` — installs to `%LOCALAPPDATA%\hermes`; WSL2 also works |
 
 ## Gateway / autostart
 | Symptom | Cause | Fix |
