@@ -49,8 +49,9 @@
 - [⚙️ How it works](#️-how-it-works)
 - [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
 - [🌍 Deploy targets](#-deploy-targets)
+- [🔑 SSH hand-off (VPS deploys)](#-ssh-hand-off-vps-deploys)
 - [🔐 Security defaults](#-security-defaults)
-- [🧩 Agent plugins (coming soon)](#-agent-plugins-coming-soon)
+- [🧩 Agent plugins](#-agent-plugins)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
@@ -204,23 +205,106 @@ hstack works on **any VPS**, with **Hostinger as the recommended one-click defau
 
 Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 
+## 🔑 SSH hand-off (VPS deploys)
+
+The fastest way to let Claude Code drive a remote deploy is to give it SSH access — once the key
+is on the box, it runs every install/config/fix command directly with no copy-pasting.
+
+### Getting connected
+
+**Step 1 — confirm SSH works from your machine first:**
+```bash
+ssh root@<your-vps-hostname>    # e.g. ssh root@srv1531840.hstgr.cloud
+```
+If it connects → share the hostname + key path (or a throwaway password). Claude Code's Bash
+tool will SSH in and drive everything from there.
+
+**Step 2 — set up key-based auth (required — the Bash tool can't type passwords interactively):**
+```bash
+# Generate a keypair
+ssh-keygen -t ed25519 -f ~/.ssh/hermes_vps -N "" -C "claude-code-hermes-deploy"
+
+# Authorize it on the VPS — always use printf, never echo >>
+printf '\n%s\n' "$(cat ~/.ssh/hermes_vps.pub)" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+
+# First connect — auto-trust the host key
+ssh -i ~/.ssh/hermes_vps -o StrictHostKeyChecking=accept-new root@<hostname>
+```
+
+**Step 3 — run remote commands via the Bash tool:**
+```bash
+ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
+# everything here runs on the VPS
+hermes --version
+REMOTE
+```
+
+### Common SSH failures (real failure chain, in order)
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Host key verification failed` | First connect; key not in `known_hosts` | Add `-o StrictHostKeyChecking=accept-new` |
+| `Permission denied (publickey,password)` | No key installed; Bash tool can't type a password | Generate keypair, add public key to VPS |
+| Key added but `Permission denied` persists | Key added **inside a Docker container**, not on the host — SSH ignores it | Run `whoami; hostname` first. Hex string = container. `exit`, then re-add on the host. |
+| Still `Permission denied` after adding on host | Two keys mashed onto one line by `echo >>` — SSH ignores merged lines | Use `printf '\n%s\n'` not `echo >>`. Fix: `sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys` |
+| Works from Windows but not from Bash tool | WSL2 network isolation | Use `-o StrictHostKeyChecking=accept-new -i ~/.ssh/hermes_vps` in the Bash tool; test with `curl -s https://example.com` |
+
+**Check for merged keys:**
+```bash
+grep -c "^ssh-" ~/.ssh/authorized_keys   # should equal number of keys added
+```
+
+**After deploy — rotate the throwaway password:**
+```bash
+passwd root          # set a strong one
+# or lock root login entirely:
+sudo passwd -l root
+```
+
+See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full SSH + install failure catalogue.
+
 ## 🔐 Security defaults
 
 - Localhost binding everywhere; network exposure is an explicit, warned opt-in.
 - Allowlists enforced (no open bots); secrets written to `.env` with `chmod 600`, never to `config.yaml` or chat.
 
-## 🧩 Agent Plugins Roadmap
+## 🧩 Agent Plugins
 
-Planned plugin agents (modeled after [Digital Crew Technology](https://www.digitalcrew.tech/en)):
+Specialist agents from [Digital Crew Technology](https://www.digitalcrew.tech/en) that plug into your Hermes deployment via the `hermes-mcp-add` skill:
 
-- **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
-- **Claire (Market Mastermind)** — researches markets/competitors/accounts and delivers actionable briefs.
-- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings.
-- **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
-- **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email/social/site.
-- **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
+### Max (Outbound Sales Force) — **available now**
 
-**Status:** coming soon.
+Max is an open-source, self-hosted AI sales rep that handles prospecting, personalised email outreach, LinkedIn follow-ups, and meeting booking. It exposes a full MCP server so Hermes can call all of its tools directly.
+
+| | |
+|---|---|
+| **Dashboard & API tokens** | [max.digitalcrew.tech](https://max.digitalcrew.tech/) |
+| **MCP endpoint** | `https://max-mcp.digitalcrew.tech/mcp` |
+| **Auth** | `Authorization: Bearer <token>` (get your token at the dashboard above) |
+| **Tools** | 91 tools — campaigns, leads, sequences, outreach, reporting |
+| **Pricing** | Open-source (self-host free) · Hosted pay-per-booking (~$20/meeting) |
+
+**Wire Max into your Hermes agent in one session:**
+```bash
+/hermes-mcp-add
+# URL:   https://max-mcp.digitalcrew.tech/mcp
+# Token: get from max.digitalcrew.tech → Settings → API Tokens
+# Name:  max-mcp
+```
+Full step-by-step (probe → register → token → reload → verify) is in [`skills/hermes-mcp-add/SKILL.md`](skills/hermes-mcp-add/SKILL.md).
+
+---
+
+### Coming soon
+
+- **Sophie (HR Business Partner)** — first-round interviews, candidate screening, shortlisting.
+- **Claire (Market Mastermind)** — market/competitor research, actionable briefs.
+- **Camille (Customer Support Champion)** — tier-1 support, customer health monitoring, churn risk.
+- **Kate (Marketing Maestro)** — campaigns, copy, content across email/social/site.
+- **André (Finance & Admin)** — invoicing, reporting, recurring admin.
+
+Track progress: [digitalcrew.tech/en](https://www.digitalcrew.tech/en)
 
 ## Honest positioning
 
