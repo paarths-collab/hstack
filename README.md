@@ -196,11 +196,11 @@ See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full 
 
 hstack works on **any VPS**, with **Hostinger as the recommended one-click default** (genuinely the easiest path for non-technical users). Provider guides:
 
-| Provider | Path | Difficulty |
-|----------|------|-----------|
-| **Hostinger** ⭐ | One-click Docker deploy — no terminal | Easiest |
-| **DigitalOcean** | Ubuntu Droplet + SSH | Medium |
-| **Hetzner / any VPS** | Ubuntu box + SSH (~€4/mo) | Medium |
+| Provider | Path |
+|----------|------|
+| **Hostinger** | One-click Docker deploy — no terminal |
+| **DigitalOcean** | Ubuntu Droplet + SSH |
+| **Hetzner / any VPS** | Ubuntu box + SSH (~€4/mo) |
 
 Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 
