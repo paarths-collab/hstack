@@ -1,11 +1,68 @@
 {
   "repo": "paarths-collab/hstack",
   "note": "Daily GitHub clone traffic, persisted past GitHub's 14-day window. Populated by .github/workflows/clone-traffic.yml. 'unique_cloners_approx' sums per-day unique cloners — the headline 'how many people ran the install command' proxy.",
-  "updated": "2026-06-03T02:26:43.598Z",
+  "updated": "2026-06-03T02:36:09.788Z",
   "totals": {
-    "days": 0,
-    "clones": 0,
-    "unique_cloners_approx": 0
+    "days": 14,
+    "clones": 115,
+    "unique_cloners_approx": 57
   },
-  "days": {}
+  "days": {
+    "2026-05-19": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-20": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-21": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-22": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-23": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-24": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-25": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-26": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-27": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-28": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-29": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-30": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-05-31": {
+      "count": 0,
+      "uniques": 0
+    },
+    "2026-06-01": {
+      "count": 115,
+      "uniques": 57
+    }
+  }
 }
