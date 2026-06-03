@@ -1,12 +1,11 @@
 ---
 title: "Deploy Your Own AI Agent in One Command with hstack"
-description: "Deploy a self-hosted Hermes AI agent on a VPS in one Claude Code command: hstack automates install, model, messaging, memory and security for you."
+description: "Deploy a self-hosted Hermes AI agent on a VPS in ~30 minutes with one Claude Code command: hstack automates install, model, messaging, memory and security for you."
 date: "2026-06-01"
-lastmod: "2026-06-02"
+lastmod: "2026-06-03"
 author: "Paarth · Digital Crew"
 tags: [hermes-agent, self-hosted-ai, ai-agent, claude-code, telegram-bot, vps, hstack, one-command]
-# TODO: replace with your real self-referential canonical URL before publishing
-canonical: "https://YOUR-DOMAIN.example/blog/deploy-ai-agent-one-command-hstack"
+canonical: "https://www.digitalcrew.tech/en/blog/deploy-ai-agent-one-command-hstack"
 image: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80"
 image_alt: "Close-up of a circuit board representing a self-hosted AI agent running on your own server"
 og_title: "Deploy Your Own AI Agent in One Command with hstack"
@@ -24,7 +23,9 @@ You can deploy a private, self-hosted AI agent, one that texts you on Telegram, 
 
 This guide explains exactly what that command does, why it is reliable where manual setups break and what you can build once your agent is live. If you would rather do it the manual way to understand every moving part first, read the companion post: [How to Set Up Your Own AI Agent (the manual guide)](01-hermes-setup-guide.md).
 
-## Key takeaways
+[INTERNAL-LINK: beginner's setup guide → 01-hermes-setup-guide.md]
+
+## Key Takeaways
 
 - **One paste, ~5 questions, ~30 minutes** to a live agent on your phone, no terminal expertise required.
 - **hstack pre-solves the failures that break manual setups:** the PATH "command not found" trap, a gateway memory leak reported by long-running deploys, the fixed token overhead from tool definitions + system prompt on every request, and auxiliary-capability gaps when an aux slot is overridden without its key.
@@ -54,19 +55,19 @@ This guide explains exactly what that command does, why it is reliable where man
 
 ## 1. The problem: setup was never the hard part
 
-Here is the uncomfortable truth about self-hosting an AI agent: installing it is easy. Hermes ships its own one-line installer. You can have the binary on a server in two minutes. The hard part, the part that eats your afternoon and makes people give up, is *everything after the install*.
+The uncomfortable truth about self-hosting an AI agent: installing it is easy. Hermes ships its own one-line installer. You can have the binary on a server in two minutes. The hard part, the one that eats your afternoon and makes people give up, is *everything after the install*.
 
-The author of hstack learned this firsthand. The first manual Hermes setup took about four hours. Every error was a wall: Docker networking that would not cooperate, a gateway that crashed and refused to restart, a WhatsApp allowlist that silently rejected the right number, a model that hit a context-window error on the first long message. None of these are exotic. They are the *normal* experience of setting up Hermes by hand and they are all documented in the project's own issue tracker.
+[PERSONAL EXPERIENCE] The author of hstack learned this firsthand. The first manual Hermes setup took about four hours. Every error was a wall: Docker networking that would not cooperate, a gateway that crashed and refused to restart, a WhatsApp allowlist that silently rejected the right number, a model that hit a context-window error on the first long message. None of these are exotic. They are the *normal* experience of setting up Hermes by hand, and they are all documented in the project's own [issue tracker](https://github.com/NousResearch/hermes-agent/issues).
 
-But something interesting happened during that four-hour slog. Once Claude Code had access to the server, it did roughly 90% of the work itself, it ran the installer, wrote the config, set the tokens, restarted the gateway and diagnosed failures. The human's job shrank to "paste the things a machine cannot mint": a bot token, an API key, a QR scan.
+Something interesting happened during that four-hour slog. Once Claude Code had access to the server, it did roughly 90% of the work itself: ran the installer, wrote the config, set the tokens, restarted the gateway and diagnosed failures. The human's job shrank to "paste the things a machine cannot mint" - a bot token, an API key, a QR scan.
 
-hstack productizes exactly that. It is the accumulated knowledge of every wall worth hitting, packaged so Claude Code can walk the whole path for you and stop only where a human is genuinely required. It is, in short, **the production layer that Hermes is missing**, for people who want a self-hosted agent without living in a terminal.
+hstack productizes exactly that. It is the accumulated knowledge of every wall worth hitting, packaged so Claude Code can walk the whole path for you and stop only where a human is genuinely required. In short, it is **the production layer that Hermes is missing**, for people who want a self-hosted agent without living in a terminal.
 
-There is a natural pattern here and it is the one hstack is built on: once a capable coding agent can reach your server, "just have Claude Code do it for you" is a remarkably effective way to install Hermes. hstack takes that pattern and makes it repeatable and reliable, instead of something you reinvent from scratch each time.
+There is a natural pattern here, and it is the one hstack is built on: once a capable coding agent can reach your server, "just have Claude Code do it for you" is a remarkably effective way to install Hermes. hstack makes that pattern repeatable and reliable, instead of something you reinvent from scratch each time.
 
 ### Why a command, not a hosted service?
 
-It is worth being clear about what hstack is *not*. It is not a SaaS that runs your agent for you, takes your keys and charges a monthly fee. There are plenty of "managed Hermes hosting" pitches out there, and they trade the entire point of self-hosting (ownership, privacy, low cost) for convenience.
+Worth being clear about what hstack is *not*. It is not a SaaS that runs your agent for you, takes your keys and charges a monthly fee. There are plenty of "managed Hermes hosting" pitches out there, and they trade the entire point of self-hosting (ownership, privacy, low cost) for convenience.
 
 hstack keeps the ownership and adds the convenience. Your agent runs on *your* server, under *your* keys, with its memory in plain files *you* can read. hstack is just the installer-and-operator layer, delivered as open-source Markdown skills that run inside the Claude Code you already use. There is no hstack account, no hstack server in the middle and nothing to cancel. If hstack vanished tomorrow, your agent would keep running exactly as it is.
 
@@ -114,39 +115,41 @@ Claude never asks you to leave secrets lying around in the chat. It writes each 
 
 ## 4. What `/hermes-deploy` actually does
 
-The orchestrator runs eight stages in order. Each one is hardened against a specific, documented failure, that hardening is the whole value and it is covered in detail in the next section. Here is what each stage does and what (if anything) it needs from you.
+The orchestrator runs eight stages in order. Each one is hardened against a specific, documented failure — that hardening is the whole value and it is covered in detail in the next section. The breakdown below shows what each stage does and what (if anything) it needs from you.
+
+[INTERNAL-LINK: stage details and failure modes → #5-the-reliability-layer-what-hstack-pre-solves]
 
 ### Stage 1, Install
 
-Claude installs Hermes on the target, pinned to a known-good version and made PATH-safe so the dreaded "command not found" never appears. It verifies the binary runs before moving on. On Hostinger's one-click image, Hermes is already present, so this stage just confirms it. **You provide:** nothing (or SSH access for a non-Hostinger VPS).
+Hermes is installed on the target, pinned to a known-good version and made PATH-safe so the dreaded "command not found" never appears. The binary is verified before moving on. On Hostinger's one-click image, Hermes is already present, so this stage just confirms it. **You provide:** nothing (or SSH access for a non-Hostinger VPS).
 
 ### Stage 2, Model
 
-Claude configures your provider and model, validates that the model meets the 64,000-token context minimum (smaller ones are rejected at startup), enables prompt caching to control cost and runs a smoke test that proves the agent can actually answer. If you would rather not juggle keys, Claude can set up **Nous Portal** (`hermes setup --portal`), one subscription that covers the model plus web search, image generation and TTS in a single step. **You provide:** an API key, an OAuth login, or a Nous Portal subscription.
+Your provider and model get configured, validated against the 64,000-token context minimum (smaller ones are rejected at startup), and prompt caching is enabled to control cost. A smoke test proves the agent can actually answer. If you would rather not juggle keys, the `hermes setup --portal` path covers the model plus web search, image generation and TTS in a single step. **You provide:** an API key, an OAuth login, or a Nous Portal subscription.
 
 ### Stage 3, Platforms
 
-Claude wires the messaging platforms you choose, handling the per-platform gotchas (Telegram's numeric-ID allowlist, Discord's two required intents, WhatsApp's QR pairing). It restarts the gateway with the "nudge" it needs after first setup. **You provide:** a bot token per platform and a QR scan for WhatsApp.
+The messaging platforms you choose get wired, handling per-platform gotchas: Telegram's numeric-ID allowlist, Discord's two required intents, WhatsApp's QR pairing. The gateway restarts with the nudge it needs after first setup. **You provide:** a bot token per platform and a QR scan for WhatsApp.
 
 ### Stage 4, Skills
 
-Claude installs a curated starter pack of skills from pre-trusted registries, resolving canonical names first so nothing fails on a version-dependent name. **You provide:** nothing.
+A curated starter pack of skills is installed from pre-trusted registries, resolving canonical names first so nothing fails on a version-dependent name. **You provide:** nothing.
 
 ### Stage 5, Memory
 
-Claude confirms built-in memory (always on) and explains its real ceiling so you are not surprised later. It only configures an external provider if you ask. **You provide:** nothing by default.
+Built-in memory (always on) is confirmed and its real ceiling explained so you are not surprised later. An external provider is only configured if you ask. **You provide:** nothing by default.
 
 ### Stage 6, Personality
 
-Claude writes a lean `SOUL.md`, your agent's name and style, directly to disk (not via an interactive wizard that could hang), kept small because it is injected on every message. **You provide:** a name and any style preference.
+A lean `SOUL.md` — your agent's name and style — gets written directly to disk rather than through an interactive wizard that could hang. It is kept small because it is injected on every message. **You provide:** a name and any style preference.
 
 ### Stage 7, Home channel
 
-Claude sets the home channel so scheduled tasks and notifications have somewhere durable to land. **You provide:** nothing (it uses the platform you already wired).
+The home channel is set so scheduled tasks and notifications have somewhere durable to land. **You provide:** nothing (it uses the platform you already wired).
 
 ### Stage 8, Autostart
 
-Claude installs the gateway as a service so it survives reboots, enables lingering where needed and adds a nightly restart cron to sidestep the memory leak. Then it runs a final verification: send a test, confirm a reply. **You provide:** the first "hello" from your phone.
+The gateway is installed as a service so it survives reboots, lingering is enabled where needed and a nightly restart cron is added to sidestep the memory leak. Then a final verification runs: send a test, confirm a reply. **You provide:** the first "hello" from your phone.
 
 The result: an empty server becomes an AI replying on your phone, with the only human steps being the handful of secrets and clicks a machine genuinely cannot perform.
 
@@ -192,47 +195,57 @@ Claude: Setting up autostart so it survives reboots, adding a nightly restart to
  ✅ Your agent is live. Try /hermes-status anytime.
 ```
 
-The whole thing is a guided conversation. You are never staring at a blank terminal wondering what to type next, Claude tells you the next move at every step.
+The whole thing is a guided conversation. You are never staring at a blank terminal wondering what to type next — the next move is always shown.
 
 ---
 
 ## 5. The reliability layer: what hstack pre-solves
 
-This is the heart of the project. Anyone can script `curl | bash`. The value is in pre-solving the failures that the official wizard does not warn you about, every one of which is documented in Hermes' own issue tracker or its FAQ. Here is the catalogue and how hstack handles each.
+Anyone can script `curl | bash`. The value is in pre-solving the failures that the official wizard does not warn you about, every one of which is documented in [Hermes' own issue tracker](https://github.com/NousResearch/hermes-agent/issues) or its FAQ. The catalogue below covers each failure and how hstack handles it.
+
+[UNIQUE INSIGHT] The failures below are not edge cases. They are the predictable, documented experience of a first manual deploy — collected by working through each one directly and cross-referencing them against reported issues.
 
 ### PATH "command not found" after a successful install
 
-The single highest-churn failure. The installer adds `hermes` to your PATH in a shell config file, but the live shell and background services like systemd and launchd, inherit a minimal PATH that does not include it. The result is a "command not found" right after a "success" message and most beginners assume the install failed. **hstack** uses the absolute binary path everywhere and prints the exact reload step, so this never blocks you.
+The single highest-churn failure. The installer adds `hermes` to your PATH in a shell config file, but the live shell and background services like systemd and launchd inherit a minimal PATH that does not include it. The result: a "command not found" right after a "success" message. Most beginners assume the install failed.
+
+**hstack** uses the absolute binary path everywhere and prints the exact reload step, so this never blocks you.
 
 ### Gateway memory leak → out-of-memory crash
 
-A documented leak (issue #25315) causes the gateway to grow from a few hundred megabytes to tens of gigabytes over roughly 20–35 hours of uptime, then get killed by the OS. A naive `Restart=always` service turns this into a crash loop. **hstack** pins a stable version, runs the gateway with sane limits, schedules a nightly restart as a mitigation and clears the stale PID file on startup so a crash does not wedge the next launch.
+A documented leak ([issue #25315](https://github.com/NousResearch/hermes-agent/issues/25315)) causes the gateway to grow from a few hundred megabytes to tens of gigabytes over roughly 20–35 hours of uptime, then get killed by the OS. A naive `Restart=always` service turns this into a crash loop.
+
+**hstack** pins a stable version, runs the gateway with sane limits, schedules a nightly restart as a mitigation and clears the stale PID file on startup so a crash does not wedge the next launch.
 
 ### Fixed per-request overhead → surprise bills
 
-Every request carries a sizable fixed overhead — tool definitions plus the system prompt — before you type a word. On messaging gateways it's worse, because browser tools that are useless on Telegram still get loaded. Practitioners have reported the fixed share running well over half of each request in some configurations. **hstack** enables prompt caching, keeps `SOUL.md` lean, and avoids loading irrelevant toolsets per platform, all of which directly lower the per-request token cost that drives your bill.
+Every request carries a sizable fixed overhead — tool definitions plus the system prompt — before you type a word. On messaging gateways it is worse, because browser tools useless on Telegram still get loaded. Practitioners have reported the fixed share running well over half of each request in some configurations.
+
+**hstack** enables prompt caching, keeps `SOUL.md` lean, and avoids loading irrelevant toolsets per platform. All of this directly lowers the per-request token cost that drives your bill.
 
 ### Auxiliary-capability gaps
 
-Hermes runs one main model **plus eight auxiliary slots** (context compression, vision/image analysis, web-page summarization, approval scoring, MCP tool routing, session-title generation, skill search). Per the docs, every aux slot defaults to `auto` — Hermes reuses your main model for that job, so if your main model is capable the aux features just work. The trap is when an aux slot is **overridden** to a different provider without that provider's key wired, or when the main model can't do (e.g.) vision. The dependent feature then quietly stops working with no loud error. **hstack** keeps aux on `auto` by default, computes which capabilities your chosen main model can serve, and warns you up front rather than letting you discover the gap weeks later. (The cleanest way to avoid this class of problem entirely is **Nous Portal**, which powers the main + auxiliaries from a single subscription, hstack will offer it during the model stage.)
+Hermes runs one main model plus eight auxiliary slots: context compression, vision/image analysis, web-page summarization, approval scoring, MCP tool routing, session-title generation and skill search. Every aux slot defaults to `auto` — Hermes reuses your main model for that job. It sounds fine. The trap is narrow but real.
+
+Override an aux slot to a different provider without wiring that provider's key, and the dependent feature quietly stops working. No loud error, just silence. **hstack** keeps aux on `auto` by default, computes which capabilities your chosen main model can serve, and warns you up front. The cleanest way to avoid this class of problem entirely is Nous Portal, which powers the main and auxiliaries from a single subscription — hstack will offer it during the model stage.
 
 ### A provider error taking the whole gateway offline
 
-Issue #16677 shows that a model 429 (rate limit), 401 (auth), or timeout can crash the entire gateway process, taking every messaging bot offline with no user-facing error. **hstack** validates context-window minimums at setup, warns about provider/model combinations known to crash-loop and configures fallbacks so one provider hiccup does not silence your agent.
+[Issue #16677](https://github.com/NousResearch/hermes-agent/issues/16677) documents that a model 429 (rate limit), 401 (auth), or timeout can crash the entire gateway process, taking every messaging bot offline with no user-facing error. **hstack** validates context-window minimums at setup, warns about provider/model combinations known to crash-loop and configures fallbacks so one provider hiccup does not silence your agent.
 
 ### The bounded memory budget
 
-Built-in memory is structured note-taking against a bounded character budget — not unbounded learning. When it fills, practitioners report the agent burns turns consolidating instead of working, and nothing surfaces that to you. **hstack** explains the budget during setup and makes it a one-step move to attach an external memory provider (correctly installing its dependency, which the stock setup forgets to do).
+Built-in memory is structured note-taking against a bounded character budget, not unbounded learning. When it fills, practitioners report the agent burns turns consolidating instead of working, and nothing surfaces that to you. **hstack** explains the budget during setup and makes it a one-step move to attach an external memory provider, correctly installing its dependency, which the stock setup forgets to do.
 
 ### Platform and host-specific traps
 
-hstack also bakes in the smaller, version-specific landmines: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open and pins a known-good, current-stable version so a later release cannot silently change behavior under you.
+hstack bakes in the smaller, version-specific landmines too: it avoids Docker image tags with a known UID-permissions regression, uses `tmux`/`nohup` instead of systemd on WSL (where the service install is buggy), enforces allowlists so no bot is left open and pins a known-good, current-stable version so a later release cannot silently change behavior under you.
 
 The full, continuously-updated catalogue with issue numbers lives in the repo's [`reference/TROUBLESHOOTING.md`](https://github.com/paarths-collab/hstack/blob/main/reference/TROUBLESHOOTING.md). This accumulated knowledge, not the install script, is what hstack really is.
 
 ### If something still goes wrong
 
-hstack pre-solves these during deploy, but if you are debugging an existing setup, this quick map covers the most common symptoms. (Running `/hermes-fix` applies these automatically.)
+hstack pre-solves these during deploy, but if you are debugging an existing setup, this quick map covers the most common symptoms. Running `/hermes-fix` applies these automatically.
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
@@ -245,6 +258,8 @@ hstack pre-solves these during deploy, but if you are debugging an existing setu
 
 When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repairs it.
 
+> **Citation capsule:** The Hermes gateway memory leak (reported as issue #25315) causes RAM to grow from a few hundred MB to tens of gigabytes over 20–35 hours of uptime, ultimately triggering an OS-level kill. A naive `Restart=always` service converts this into a crash loop. hstack's nightly restart cron is the documented mitigation. ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/issues), 2025)
+
 ---
 
 ## 6. The command library
@@ -253,41 +268,43 @@ When in doubt, `/hermes-status` shows the current state and `/hermes-fix` repair
 
 ### Orchestrator
 
-- **`/hermes-deploy`**, the full end-to-end deploy. The command most people run first.
+- **`/hermes-deploy`** — the full end-to-end deploy. The command most people run first and the one this guide is built around.
 
 ### Setup
 
-- **`/hermes-install`**, installs Hermes (local or over SSH), pinned and PATH-safe.
-- **`/hermes-model`**, configures provider, model and key; frontier-default, capability-aware.
-- **`/hermes-skills`**, installs a curated starter skill pack.
-- **`/hermes-memory`**, built-in by default, or attaches an external provider correctly.
-- **`/hermes-soul`**, writes the agent's name and personality to `SOUL.md`.
-- **`/hermes-home`**, sets the home channel for notifications and cron.
-- **`/hermes-cron`**, adds scheduled tasks in plain language.
+- **`/hermes-install`** — installs Hermes on a local machine or over SSH, pinned to a known-good version and PATH-safe.
+- **`/hermes-model`** — configures your provider, model and API key; frontier-default and capability-aware, so mismatched context windows are caught before they cause issues.
+- **`/hermes-skills`** — installs a curated starter skill pack from pre-trusted registries.
+- **`/hermes-memory`** — built-in memory is on by default; run this to attach an external provider correctly (including its dependency, which the stock docs skip).
+- **`/hermes-soul`** — writes the agent's name and personality to `SOUL.md`, kept lean to reduce per-message token cost.
+- **`/hermes-home`** — sets the home channel for notifications and scheduled tasks.
+- **`/hermes-cron`** — adds scheduled tasks in plain language; converts your local time to UTC automatically.
 
 ### Platforms
 
-- **`/platform-telegram`**, the reliable headless wedge.
-- **`/platform-discord`**, token plus the two required intents.
-- **`/platform-whatsapp`**, QR pairing, phone-number allowlist.
-- **`/platform-slack`**, Socket Mode, both tokens.
-- **`/platform-mattermost`**, self-hosted teams.
+- **`/platform-telegram`** — the reliable headless wedge; pure token and numeric ID, no QR.
+- **`/platform-discord`** — wires the token plus the two required privileged intents.
+- **`/platform-whatsapp`** — QR pairing and phone-number allowlist.
+- **`/platform-slack`** — Socket Mode with both the Bot token and App token.
+- **`/platform-mattermost`** — for self-hosted teams.
 
 ### Operations (the part that keeps your agent alive)
 
-- **`/hermes-status`**, health check: gateway, platforms, memory, logs.
-- **`/hermes-restart`**, clean restart that clears stale locks.
-- **`/hermes-update`**, safe update with backup and re-verify.
-- **`/hermes-fix`**, diagnose and repair common failures.
-- **`/hermes-backup`**, back up config and sessions.
+- **`/hermes-status`** — health check across gateway, platforms, memory and logs, in plain language.
+- **`/hermes-restart`** — clean restart that clears stale locks before bringing the gateway back up.
+- **`/hermes-update`** — backs up first, bumps the pinned version, then re-verifies every platform still responds before declaring success.
+- **`/hermes-fix`** — diagnose and repair common failures; applies the catalogued fix for whatever it finds.
+- **`/hermes-backup`** — snapshots config, memory and sessions so you can always roll back.
 
-This is the difference between a one-time install script and a tool you live with. When something needs attention months later, you do not re-learn Hermes internals, you run `/hermes-status` or `/hermes-fix` and let Claude handle it.
+This is the difference between a one-time install script and a tool you live with. When something needs attention months later, you do not re-learn Hermes internals — you run `/hermes-status` or `/hermes-fix` and let Claude handle it.
 
 ---
 
 ## 7. What you'll actually do with your agent
 
 Once it is live, the question becomes "what should it do for me?" These are real workflows people run on Hermes today.
+
+[INTERNAL-LINK: companion setup guide for deeper workflow examples → 01-hermes-setup-guide.md]
 
 ### A morning briefing
 
@@ -317,7 +334,7 @@ The common thread: this is a programmable, always-on assistant that reaches you 
 
 ### Recipes to try in your first week
 
-You set these up by just telling your agent in plain language, it writes the cron job itself and converts your local time to UTC. A few to start with:
+You set these up by just telling your agent in plain language — it writes the cron job itself and converts your local time to UTC. A few to start with:
 
 - *"Every weekday at 8am, summarize the top 5 AI stories from the last 24 hours and send them here."*
 - *"Every night at midnight, commit and push my notes repo to GitHub."*
@@ -329,7 +346,7 @@ Start with one. The value compounds as you add more and as the agent's memory of
 
 ### Day-2 operations: living with your agent
 
-Setup is day one. The reason hstack ships a command library is day two and beyond, the small, recurring things that otherwise mean re-learning Hermes internals each time.
+Setup is day one. The reason hstack ships a command library is day two and beyond — the small, recurring things that otherwise mean re-learning Hermes internals each time.
 
 - **Check on it:** `/hermes-status` reports gateway state, connected platforms, memory usage against the ceiling and recent errors, in plain language.
 - **Add a platform later:** decided you want Discord too? Run `/platform-discord`, it walks you through the token and intents without touching anything else.
@@ -382,7 +399,7 @@ hstack runs on any VPS. Hostinger offers a one-click Docker deploy that is conve
 - **DigitalOcean:** an Ubuntu 24.04 Droplet (2 GB+ RAM, ~$6–12/month), SSH in, paste the command.
 - **Hetzner / any VPS:** a CX22 (~€4/month) or any Ubuntu box works identically.
 
-A practical minimum is 1 vCPU and 2 GB of RAM when the model runs via an API; add headroom for browser automation. Always check renewal pricing, cheap intro rates often step up.
+A practical minimum is 1 vCPU and 2 GB of RAM when the model runs via an API; add headroom for browser automation. Always check renewal pricing — cheap intro rates often step up.
 
 ---
 
@@ -396,13 +413,13 @@ hstack is secure by default because the ecosystem's default is not. Out of the b
 - **No sudo installs.** Avoids the root-owned-file permission failures and the wider attack surface.
 - **Sandbox-friendly.** Encourages running the agent's terminal work in a container rather than directly on the host.
 
-This matters because self-hosted AI servers are routinely found exposed to the internet with no protection at all. hstack turning "secure" into the default, rather than an optional afterthought, is one of its most valuable features.
+This matters because self-hosted AI servers are routinely found exposed to the internet with no protection at all. Making "secure" the default, rather than an optional afterthought, is one of hstack's most valuable features.
 
 ---
 
 ## 11. What's real vs what's marketing
 
-hstack does not oversell Hermes and neither should you. Here is the candid version.
+hstack does not oversell Hermes and neither should you. The candid version:
 
 **Genuinely good:** persistent memory across projects (the most-praised feature), "it just runs" reliability, the widest messaging-platform support of any open agent and cheap, transparent self-hosting where memory is plain files you can read.
 
@@ -410,28 +427,19 @@ hstack does not oversell Hermes and neither should you. Here is the candid versi
 
 **Real gotchas (all handled by hstack):** large fixed token overhead per request, a gateway memory leak over ~a day, and silently-degrading auxiliary features.
 
-Why the honesty? Because the self-hosted-agent space has a credibility problem, inflated claims and a flood of near-identical marketing posts. A tool that tells you the truth about its own foundation is one you can actually trust to run your agent.
+Why the honesty? Because the self-hosted-agent space has a credibility problem: inflated claims and a flood of near-identical marketing posts. A tool that tells you the truth about its own foundation is one you can actually trust to run your agent.
 
 ---
 
 ## 12. Migrating from OpenClaw
 
-If you are coming from OpenClaw, Hermes has a built-in migration that imports your settings, memory, skills and API keys (`hermes claw migrate`). hstack wraps this with two safeguards: it **backs up first** and it helps you **re-verify imported skills** before trusting them, OpenClaw's marketplace had a documented supply-chain problem with malicious skills, so importing blindly is a real risk. The migration is also a major reason people are moving to Hermes in the first place: a string of security issues on the other side, against Hermes' "it just runs" reputation.
+If you are coming from OpenClaw, Hermes has a built-in migration that imports your settings, memory, skills and API keys (`hermes claw migrate`). hstack wraps this with two safeguards: it **backs up first** and it helps you **re-verify imported skills** before trusting them. OpenClaw's marketplace had a documented supply-chain problem with malicious skills, so importing blindly is a real risk. The migration is also a major reason people are moving to Hermes in the first place: a string of security issues on the other side, against Hermes' "it just runs" reputation.
 
 ---
 
-## Coming soon: Digital Crew specialist agent plugins
+## Coming soon: Digital Crew agent plugins
 
-We are also preparing a set of optional specialist agent plugins for hstack, modeled on [Digital Crew Technology](https://www.digitalcrew.tech/en)'s real-world roster. Each one wraps a focused business function rather than a generic chatbot:
-
-- **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
-- **Claire (Market Mastermind)** — researches markets, competitors, and target accounts, then ships actionable briefs.
-- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings.
-- **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
-- **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email, social, and site.
-- **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
-
-**Status:** coming soon. Each plugin will follow the rest of hstack's approach: explicit roles, composable commands, and clear handoffs you can inspect. Track progress in the [Agent Plugins Roadmap](https://github.com/paarths-collab/hstack#-agent-plugins-roadmap).
+Optional specialist agent plugins for hstack are in development. [Track progress and see the full roster in the Agent Plugins section of the repo.](https://github.com/paarths-collab/hstack#-agent-plugins)
 
 ---
 
@@ -447,7 +455,7 @@ No. Claude Code does the terminal work. You answer plain questions like "what sh
 
 ### How is this different from just running Hermes' own installer?
 
-The installer puts the binary on your machine, that part was never hard. hstack handles everything after: model and capability wiring, platform gotchas, memory, autostart, security and the dozen documented failure modes that the official wizard does not warn you about. It is the production layer, not a re-skinned installer.
+The installer puts the binary on your machine — that part was never hard. hstack handles everything after: model and capability wiring, platform gotchas, memory, autostart, security and the dozen documented failure modes that the official wizard does not warn you about. It is the production layer, not a re-skinned installer.
 
 ### How much does it cost to run?
 
@@ -463,7 +471,7 @@ Hermes supports OpenRouter (400+ models), Anthropic, OpenAI, Google/Gemini, Nous
 
 ### Which messaging platform should I start with?
 
-Telegram, it is the only fully headless option (pure token and numeric ID, no QR or OAuth). Add WhatsApp, Discord, Slack, or Mattermost afterward.
+Telegram — it is the only fully headless option (pure token and numeric ID, no QR or OAuth). Add WhatsApp, Discord, Slack, or Mattermost afterward.
 
 ### What happens when Hermes releases a new version?
 
@@ -491,7 +499,7 @@ Yes, via Ollama, if your hardware can run a genuinely capable model (small model
 
 ### How long does the whole deploy take?
 
-About 30 minutes end to end and most of that is waiting, for the install to finish, for the gateway to start, for you to create a bot token. The actual hands-on time is a few minutes of answering questions.
+About 30 minutes end to end and most of that is waiting — for the install to finish, for the gateway to start, for you to create a bot token. The actual hands-on time is a few minutes of answering questions.
 
 ### What does hstack install on my own machine?
 
@@ -503,11 +511,11 @@ Your agent's memory, conversations and config live on your server as local files
 
 ### Can I uninstall or undo it?
 
-Yes. The skills are just files, delete the `~/.claude/skills/hstack` folder and remove the hstack section from `CLAUDE.md`. On the server, Hermes is a normal install you can remove. Nothing is hidden or locked.
+Yes. The skills are just files — delete the `~/.claude/skills/hstack` folder and remove the hstack section from `CLAUDE.md`. On the server, Hermes is a normal install you can remove. Nothing is hidden or locked.
 
 ### What if I get stuck mid-deploy?
 
-`/hermes-deploy` is resumable in practice, each stage writes real config, so you can re-run it or run the individual command for the stage that failed (for example, `/hermes-model` or `/platform-telegram`). And because Claude is driving, you can simply tell it what went wrong and it will diagnose from the live state.
+`/hermes-deploy` is resumable in practice, each stage writes real config, so you can re-run it or run the individual command for the stage that failed (for example, `/hermes-model` or `/platform-telegram`). Because Claude is driving, you can simply tell it what went wrong and it will diagnose from the live state.
 
 ### Does hstack cost anything?
 
@@ -515,7 +523,7 @@ No. hstack itself is free and MIT-licensed. Your only costs are the VPS and the 
 
 ### Can I customize what the deploy sets up?
 
-Yes. The skills are plain Markdown, you can fork the repo and edit any `SKILL.md` to change defaults (a different starter model, an extra cron job, a custom `SOUL.md` template). Because there is no compiled binary, "customizing hstack" is just editing text files.
+Yes. The skills are plain Markdown — fork the repo and edit any `SKILL.md` to change defaults (a different starter model, an extra cron job, a custom `SOUL.md` template). Because there is no compiled binary, "customizing hstack" is just editing text files.
 
 ### What model context size do I actually need?
 
@@ -523,7 +531,7 @@ At least 64,000 tokens. Hermes rejects smaller windows at startup because multi-
 
 ### How do I add a second messaging platform after setup?
 
-Run the relevant platform command on its own, `/platform-discord`, `/platform-whatsapp`, `/platform-slack`, or `/platform-mattermost`. It wires only that platform and restarts the gateway, leaving everything else untouched.
+Run the relevant platform command on its own: `/platform-discord`, `/platform-whatsapp`, `/platform-slack`, or `/platform-mattermost`. It wires only that platform and restarts the gateway, leaving everything else untouched.
 
 ### Will my agent keep running if I close my laptop?
 
@@ -551,8 +559,82 @@ To get there:
 
 The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](https://github.com/paarths-collab/hstack)**. Prefer to understand each step first? Read the companion [beginner's setup guide](01-hermes-setup-guide.md).
 
+[INTERNAL-LINK: next logical step for readers → 01-hermes-setup-guide.md]
+
 ---
 
-**About the author:** Paarth is the author of [hstack](https://github.com/paarths-collab/hstack) and built it after a four-hour manual Hermes deployment turned every documented failure mode into a lesson worth automating. Written in collaboration with Digital Crew. hstack is independent open-source software; Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are supported deploy targets.
+**About the author:** [Paarth](https://github.com/paarths-collab) is the author of [hstack](https://github.com/paarths-collab/hstack) and built it after a four-hour manual Hermes deployment turned every documented failure mode into a lesson worth automating. Written in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en). hstack is independent open-source software; Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are supported deploy targets.
 
-<!-- SEO schema (BlogPosting + FAQPage JSON-LD) is in deploy-ai-agent-one-command-hstack.schema.json, inject it into the page <head> at publish time, not into the rendered body. -->
+<!-- FAQ schema (FAQPage JSON-LD) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Do I really only need one command?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "To install hstack and kick off the deploy, yes, one paste. The deploy itself is then conversational: it asks a handful of questions and pauses for the secrets only you can provide (a token, a key, a QR scan, the first hello). Everything mechanical is automated."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How much does it cost to run?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Roughly $10-17/month all-in: $4-7 for the VPS and $6-10 for model API fees on a cost-effective model like DeepSeek V4. That is well below premium hosted assistant tiers around $100/month."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does the whole deploy take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "About 30 minutes end to end and most of that is waiting - for the install to finish, for the gateway to start, for you to create a bot token. The actual hands-on time is a few minutes of answering questions."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is hstack affiliated with Nous Research or Hostinger?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. hstack is independent, open-source (MIT) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does hstack cost anything?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. hstack itself is free and MIT-licensed. Your only costs are the VPS and the model API fees, the same costs you would have setting Hermes up manually. hstack does not add a fee, a subscription, or a markup."
+      }
+    }
+  ]
+}
+</script>
+
+<!-- SEO schema (BlogPosting JSON-LD) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "Deploy Your Own AI Agent in One Command with hstack",
+  "description": "Deploy a self-hosted Hermes AI agent on a VPS in ~30 minutes with one Claude Code command: hstack automates install, model, messaging, memory and security for you.",
+  "author": {
+    "@type": "Person",
+    "name": "Paarth",
+    "url": "https://github.com/paarths-collab"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Digital Crew Technology",
+    "url": "https://www.digitalcrew.tech/en"
+  },
+  "datePublished": "2026-06-01",
+  "dateModified": "2026-06-03",
+  "url": "https://www.digitalcrew.tech/en/blog/deploy-ai-agent-one-command-hstack",
+  "image": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80"
+}
+</script>
