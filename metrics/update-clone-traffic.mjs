@@ -52,98 +52,101 @@ hist.updated = new Date().toISOString();
 writeFileSync(file, JSON.stringify(hist, null, 2) + "\n");
 console.log(`Tracked ${hist.totals.days} days · ${hist.totals.clones} clones · ~${hist.totals.unique_cloners_approx} unique cloners`);
 
-// ── Generate SVG chart ────────────────────────────────────────────────────────
+// ── Generate SVG chart (star-history style — cumulative line) ─────────────────
 const entries = Object.entries(hist.days); // [[date, {count, uniques}], ...]
 
-const W = 800, H = 260;
-const PAD = { top: 32, right: 24, bottom: 52, left: 44 };
+// Build cumulative series (skip leading zeros for a cleaner chart)
+let cumulative = 0;
+const points = [];
+for (const [date, v] of entries) {
+  cumulative += v.uniques;
+  if (cumulative > 0 || points.length > 0) points.push({ date, cum: cumulative });
+}
+// If no data yet, keep one zero point so placeholder still renders
+if (points.length === 0) points.push({ date: new Date().toISOString().slice(0, 10), cum: 0 });
+
+const W = 800, H = 400;
+const PAD = { top: 60, right: 40, bottom: 70, left: 72 };
 const chartW = W - PAD.left - PAD.right;
 const chartH = H - PAD.top - PAD.bottom;
-const BLUE  = "#3b82f6";
-const TEAL  = "#14b8a6";
-const GRID  = "#e5e7eb";
-const LABEL = "#6b7280";
-const TITLE = "#111827";
 
-let svgContent;
+const LINE   = "#e05c3a";   // star-history orange-red
+const AXIS   = "#1a1a1a";
+const GRID   = "#e8e8e8";
+const LABEL  = "#666666";
+const LEGEND_BG = "#ffffff";
 
-if (entries.length === 0) {
-  // Placeholder — no data collected yet
-  svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect width="${W}" height="${H}" rx="8" fill="#fafafa" stroke="${GRID}" stroke-width="1"/>
-  <text x="${W/2}" y="${H/2 - 10}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="${LABEL}">No clone data yet — workflow runs daily at 06:17 UTC.</text>
-  <text x="${W/2}" y="${H/2 + 14}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">See metrics/README.md for one-time setup (add TRAFFIC_TOKEN secret).</text>
-</svg>`;
-} else {
-  const maxCount = Math.max(...entries.map(([, v]) => v.count), 1);
-  const yMax = Math.ceil(maxCount / 5) * 5 || 5;
-  const slotW = chartW / entries.length;
-  const barW  = Math.max(4, Math.floor(slotW * 0.6));
+const maxCum = Math.max(...points.map(p => p.cum), 1);
 
-  const xScale = (i) => PAD.left + i * slotW + (slotW - barW) / 2;
-  const yScale = (v) => PAD.top + chartH - Math.round((v / yMax) * chartH);
-
-  // Y gridlines + labels
-  const TICKS = 4;
-  let gridLines = "";
-  for (let t = 0; t <= TICKS; t++) {
-    const val = Math.round((yMax / TICKS) * t);
-    const y = yScale(val);
-    gridLines += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + chartW}" y2="${y}" stroke="${GRID}" stroke-width="1"/>`;
-    gridLines += `<text x="${PAD.left - 6}" y="${y + 4}" text-anchor="end" font-family="system-ui,sans-serif" font-size="11" fill="${LABEL}">${val}</text>`;
-  }
-
-  // Bars (total clones) with tooltip titles
-  let bars = "";
-  entries.forEach(([date, v], i) => {
-    const x = xScale(i);
-    const y = yScale(v.count);
-    const h = chartH - (y - PAD.top);
-    bars += `<rect x="${x}" y="${y}" width="${barW}" height="${h}" rx="2" fill="${BLUE}" opacity="0.85"><title>${date}: ${v.count} clones, ${v.uniques} unique</title></rect>`;
-  });
-
-  // Unique cloners line + dots
-  const linePoints = entries.map(([, v], i) => `${xScale(i) + barW / 2},${yScale(v.uniques)}`).join(" ");
-  const dots = entries.map(([date, v], i) =>
-    `<circle cx="${xScale(i) + barW / 2}" cy="${yScale(v.uniques)}" r="3" fill="${TEAL}"><title>${date}: ${v.uniques} unique</title></circle>`
-  ).join("");
-
-  // X-axis date labels — show every Nth to avoid overlap
-  const every = Math.max(1, Math.ceil(entries.length / 10));
-  let xLabels = "";
-  entries.forEach(([date], i) => {
-    if (i % every !== 0 && i !== entries.length - 1) return;
-    const x = xScale(i) + barW / 2;
-    xLabels += `<text x="${x}" y="${PAD.top + chartH + 18}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" fill="${LABEL}">${date.slice(5)}</text>`;
-  });
-
-  // Legend
-  const legendItems = [
-    { color: BLUE, shape: "rect", label: `Clones  (total: ${hist.totals.clones})` },
-    { color: TEAL, shape: "line", label: `Unique cloners  (~${hist.totals.unique_cloners_approx})` },
-  ];
-  const legend = legendItems.map(({ color, shape, label }, i) => {
-    const lx = PAD.left + i * 230;
-    const ly = H - 14;
-    const icon = shape === "rect"
-      ? `<rect x="${lx}" y="${ly}" width="10" height="10" rx="2" fill="${color}"/>`
-      : `<line x1="${lx}" y1="${ly + 5}" x2="${lx + 10}" y2="${ly + 5}" stroke="${color}" stroke-width="2"/><circle cx="${lx + 5}" cy="${ly + 5}" r="3" fill="${color}"/>`;
-    return icon + `<text x="${lx + 14}" y="${ly + 9}" font-family="system-ui,sans-serif" font-size="11" fill="${LABEL}">${label}</text>`;
-  }).join("");
-
-  svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect width="${W}" height="${H}" rx="8" fill="#fff"/>
-  <text x="${PAD.left}" y="20" font-family="system-ui,sans-serif" font-size="13" font-weight="600" fill="${TITLE}">Git clone traffic — paarths-collab/hstack</text>
-  ${gridLines}
-  ${bars}
-  <polyline points="${linePoints}" fill="none" stroke="${TEAL}" stroke-width="2" stroke-linejoin="round"/>
-  ${dots}
-  ${xLabels}
-  ${legend}
-  <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + chartH}" stroke="${GRID}" stroke-width="1"/>
-  <line x1="${PAD.left}" y1="${PAD.top + chartH}" x2="${PAD.left + chartW}" y2="${PAD.top + chartH}" stroke="${GRID}" stroke-width="1"/>
-</svg>`;
+// Nice Y-axis ceiling
+function niceMax(v) {
+  if (v <= 10) return 10;
+  const mag = Math.pow(10, Math.floor(Math.log10(v)));
+  return Math.ceil(v / mag) * mag;
 }
+const yMax = niceMax(maxCum);
+
+// Format Y labels: 1000 → 1K
+function fmtY(v) {
+  if (v >= 1000) return (v / 1000) + "K";
+  return String(v);
+}
+
+const xScale = (i) => PAD.left + (i / Math.max(points.length - 1, 1)) * chartW;
+const yScale = (v) => PAD.top + chartH - (v / yMax) * chartH;
+
+// Y gridlines + labels (5 ticks)
+const TICKS = 5;
+let gridLines = "";
+for (let t = 0; t <= TICKS; t++) {
+  const val = Math.round((yMax / TICKS) * t);
+  const y = Math.round(yScale(val));
+  gridLines += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + chartW}" y2="${y}" stroke="${GRID}" stroke-width="1"/>`;
+  gridLines += `<text x="${PAD.left - 10}" y="${y + 4}" text-anchor="end" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">${fmtY(val)}</text>`;
+}
+
+// X-axis date labels — show ~6 evenly spaced
+const xEvery = Math.max(1, Math.ceil(points.length / 6));
+let xLabels = "";
+points.forEach(({ date }, i) => {
+  if (i % xEvery !== 0 && i !== points.length - 1) return;
+  const x = Math.round(xScale(i));
+  xLabels += `<text x="${x}" y="${PAD.top + chartH + 22}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">${date.slice(0, 7)}</text>`;
+});
+
+// The cumulative line path
+const linePts = points.map(({ cum }, i) => `${Math.round(xScale(i))},${Math.round(yScale(cum))}`).join(" ");
+
+// Legend box (top-left, like star-history)
+const legendX = PAD.left + 12, legendY = PAD.top + 12;
+const legendLabel = `paarths-collab/hstack`;
+const legendW = legendLabel.length * 7.2 + 32;
+const legend = `
+  <rect x="${legendX}" y="${legendY}" width="${legendW}" height="28" rx="4" fill="${LEGEND_BG}" stroke="#cccccc" stroke-width="1"/>
+  <circle cx="${legendX + 14}" cy="${legendY + 14}" r="5" fill="${LINE}"/>
+  <text x="${legendX + 24}" y="${legendY + 19}" font-family="system-ui,sans-serif" font-size="12" fill="${AXIS}">${legendLabel}</text>`;
+
+// Watermark bottom-right
+const watermark = `<text x="${W - PAD.right}" y="${H - 10}" text-anchor="end" font-family="system-ui,sans-serif" font-size="11" fill="#aaaaaa">hstack clone history</text>`;
+
+// Y-axis rotated label
+const yAxisLabel = `<text x="${-(PAD.top + chartH / 2)}" y="18" transform="rotate(-90)" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">Cumulative Cloners</text>`;
+
+// X-axis label
+const xAxisLabel = `<text x="${PAD.left + chartW / 2}" y="${H - 8}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">Date</text>`;
+
+const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect width="${W}" height="${H}" fill="#ffffff"/>
+  ${gridLines}
+  <polyline points="${linePts}" fill="none" stroke="${LINE}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  ${xLabels}
+  ${yAxisLabel}
+  ${xAxisLabel}
+  <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + chartH}" stroke="${AXIS}" stroke-width="1.5"/>
+  <line x1="${PAD.left}" y1="${PAD.top + chartH}" x2="${PAD.left + chartW}" y2="${PAD.top + chartH}" stroke="${AXIS}" stroke-width="1.5"/>
+  ${legend}
+  ${watermark}
+</svg>`;
 
 writeFileSync(svgFile, svgContent + "\n");
 console.log(`SVG chart written → metrics/clone-traffic.svg`);
