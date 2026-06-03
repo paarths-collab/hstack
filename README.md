@@ -38,7 +38,7 @@
   <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent status panel showing the agent online, connected platforms, and the deploy pipeline." width="100%">
 </p>
 
-<p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with <a href="https://www.digitalcrew.tech/en">Digital Crew Technology</a></em></p>
+<p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with <a href="https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack">Digital Crew Technology</a></em></p>
 
 ---
 
@@ -215,7 +215,7 @@ Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
 
 ## 🧩 Agent Plugins
 
-Specialist agents from [Digital Crew Technology](https://www.digitalcrew.tech/en) that plug into your Hermes deployment via the [`hermes-mcp-add`](skills/hermes-mcp-add/SKILL.md) skill.
+Specialist agents from [Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack) that plug into your Hermes deployment via the [`hermes-mcp-add`](skills/hermes-mcp-add/SKILL.md) skill.
 
 | Agent | Status | Details |
 |---|---|---|
@@ -249,6 +249,6 @@ New platform, host, or memory provider? Add a skill — no architecture change n
 
 ## License
 
-[MIT](LICENSE) — free to use, fork, and modify. Built by **Paarth**. In collaboration with **[Digital Crew Technology](https://www.digitalcrew.tech/en)**.
+[MIT](LICENSE) — free to use, fork, and modify. Built by **Paarth**. In collaboration with **[Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack)**.
 
 <p align="center"><sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research or Hostinger.</sub></p>

@@ -1,6 +1,6 @@
 # Max — Outbound Sales Force
 
-Max is an open-source AI sales rep built by [Digital Crew Technology](https://www.digitalcrew.tech/en).
+Max is an open-source AI sales rep built by [Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack).
 It handles prospecting, personalised email outreach, LinkedIn follow-ups, objection handling, and
 meeting booking — 24/7, no hiring required. It exposes a full MCP server with 91 tools, so your
 Hermes agent can call any Max action directly from chat.
@@ -28,7 +28,7 @@ Max advances through five experience levels (Rookie → Autonomous) as it handle
 
 | | |
 |---|---|
-| **Dashboard & API tokens** | [max.digitalcrew.tech](https://max.digitalcrew.tech/) |
+| **Dashboard & API tokens** | [max.digitalcrew.tech](https://max.digitalcrew.tech/?utm_source=github&utm_medium=repo&utm_campaign=hstack-max) |
 | **MCP endpoint** | `https://max-mcp.digitalcrew.tech/mcp` |
 | **Auth** | `Authorization: Bearer <token>` |
 | **Tools exposed** | 91 — campaigns, leads, sequences, outreach, analytics, reporting |
@@ -51,7 +51,7 @@ Max advances through five experience levels (Rookie → Autonomous) as it handle
 
 ## Getting your API token
 
-1. Go to **[max.digitalcrew.tech](https://max.digitalcrew.tech/)** and sign in.
+1. Go to **[max.digitalcrew.tech](https://max.digitalcrew.tech/?utm_source=github&utm_medium=repo&utm_campaign=hstack-max)** and sign in.
 2. Navigate to **Settings → API Tokens**.
 3. Create a new token — copy it immediately, it won't be shown again.
 4. Keep it in your `.env`; never paste it in chat or commit it to git.
@@ -93,6 +93,6 @@ error means the token didn't land; re-run step 3 of `hermes-mcp-add`.
 
 ---
 
-*Built by [Digital Crew Technology](https://www.digitalcrew.tech/en) · Integrated with hstack by Paarth*
+*Built by [Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack) · Integrated with hstack by Paarth*
 
 *If this saved you time → ⭐ [star hstack](https://github.com/paarths-collab/hstack)*
