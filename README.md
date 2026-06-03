@@ -10,6 +10,12 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/paarths-collab/hstack"><img src="https://img.shields.io/github/stars/paarths-collab/hstack?style=flat&label=⭐%20Star%20hstack&color=f59e0b" alt="Star hstack"></a>
+</p>
+
+<p align="center"><em>If hstack is saving you time, a ⭐ on <a href="https://github.com/paarths-collab/hstack">paarths-collab/hstack</a> goes a long way — it helps others find it.</em></p>
+
+<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-22c55e" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Claude%20Code-compatible-58a6ff" alt="Claude Code compatible">
   <img src="https://img.shields.io/badge/Agent%20Skills-compatible-2dd4bf" alt="Agent Skills compatible">
