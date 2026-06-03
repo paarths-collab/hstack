@@ -51,7 +51,6 @@
 - [🌍 Deploy targets](#-deploy-targets)
 - [🔐 Security defaults](#-security-defaults)
 - [🧩 Agent plugins (coming soon)](#-agent-plugins-coming-soon)
-- [📊 Install metrics](#-install-metrics)
 - [📝 Blog & guides](#-blog--guides)
 - [🤝 Contributing](#-contributing)
 - [License](#license)
@@ -226,12 +225,6 @@ Planned plugin agents (modeled after [Digital Crew Technology](https://www.digit
 ## Honest positioning
 
 Hermes is genuinely good at: **persistent cross-project memory**, an **unmatched messaging-gateway breadth**, "it just runs," and **$6–10/mo cost predictability**. It is *not* "an agent that grows with you / self-improving" — memory is structured note-taking against a tight character budget. hstack describes things as they are.
-
-## 📊 Install metrics
-
-<p align="center">
-  <img src="metrics/clone-traffic.svg" alt="Git clone traffic — paarths-collab/hstack" width="800">
-</p>
 
 ## 📝 Blog & guides
 
