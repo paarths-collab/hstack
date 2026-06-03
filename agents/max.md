@@ -1,9 +1,26 @@
 # Max — Outbound Sales Force
 
-Max is an open-source, self-hosted AI sales rep built by [Digital Crew Technology](https://www.digitalcrew.tech/en).
+Max is an open-source AI sales rep built by [Digital Crew Technology](https://www.digitalcrew.tech/en).
 It handles prospecting, personalised email outreach, LinkedIn follow-ups, objection handling, and
 meeting booking — 24/7, no hiring required. It exposes a full MCP server with 91 tools, so your
 Hermes agent can call any Max action directly from chat.
+
+> If hstack is saving you time, a ⭐ on [paarths-collab/hstack](https://github.com/paarths-collab/hstack) goes a long way — it helps others find it.
+
+---
+
+## Why Max
+
+Most outbound sales work is repetitive and time-sensitive: writing personalised emails, following up at the right moment, handling objections, logging replies, booking meetings. Done manually, it eats hours. Done with a junior hire, it's inconsistent. Max handles the whole loop autonomously — and because it's wired into Hermes via MCP, you can drive it from any messaging platform you already use (Telegram, Slack, Mattermost, Discord).
+
+**What this unlocks in practice:**
+
+- **Delegate a campaign from chat** — "Max, start a 3-step email sequence for leads in the SaaS space" → Max creates it, enrols leads, and reports back.
+- **Ask for a status update from anywhere** — "How did last week's outreach perform?" → Max pulls metrics and summarises them.
+- **Let Hermes hand off to Max automatically** — Hermes can detect sales-related intent in conversation and route directly to Max tools without you having to switch context.
+- **No separate dashboard tab** — everything Max can do is accessible as a natural-language command through your Hermes agent.
+
+Max advances through five experience levels (Rookie → Autonomous) as it handles more campaigns, improving its personalisation and objection-handling over time.
 
 ---
 
@@ -16,7 +33,19 @@ Hermes agent can call any Max action directly from chat.
 | **Auth** | `Authorization: Bearer <token>` |
 | **Tools exposed** | 91 — campaigns, leads, sequences, outreach, analytics, reporting |
 | **Pricing** | Open-source MIT (self-host free) · Hosted ~$20/meeting booked |
-| **Self-host install** | ~2 min via `git clone` + `npm install` + `.env` + `npm run dev` |
+
+---
+
+## What Max can do (tool categories)
+
+| Category | What you can ask | Example tools |
+|---|---|---|
+| **Campaigns** | Create, update, pause, or archive outreach campaigns | `list_campaigns`, `create_campaign`, `update_campaign` |
+| **Leads** | Add prospects, update status, check where a lead is in the funnel | `list_leads`, `add_lead`, `get_lead_status` |
+| **Sequences** | Build multi-step email/LinkedIn sequences; enrol or pause leads | `list_sequences`, `enroll_lead`, `pause_sequence` |
+| **Outreach** | Send emails, schedule follow-ups, log replies and objections | `send_email`, `schedule_followup`, `log_reply` |
+| **Meetings** | Check booked meetings, cancel or reschedule | `list_meetings`, `book_meeting`, `cancel_meeting` |
+| **Reporting** | Weekly performance summaries, campaign metrics, conversion rates | `get_weekly_report`, `get_campaign_metrics` |
 
 ---
 
@@ -64,49 +93,6 @@ error means the token didn't land; re-run step 3 of `hermes-mcp-add`.
 
 ---
 
-## What Max can do (tool categories)
+*Built by [Digital Crew Technology](https://www.digitalcrew.tech/en) · Integrated with hstack by Paarth*
 
-| Category | Example tools |
-|---|---|
-| Campaigns | `list_campaigns`, `get_campaign`, `create_campaign`, `update_campaign` |
-| Leads | `list_leads`, `add_lead`, `update_lead`, `get_lead_status` |
-| Sequences | `list_sequences`, `enroll_lead`, `pause_sequence` |
-| Outreach | `send_email`, `schedule_followup`, `log_reply` |
-| Meetings | `list_meetings`, `book_meeting`, `cancel_meeting` |
-| Reporting | `get_weekly_report`, `get_campaign_metrics` |
-
-Full list of all 91 tools appears in your Hermes logs after registration:
-```bash
-docker exec -u hermes <agent-container> hermes logs 2>&1 \
-  | grep "registered.*tool" | tail -3
-```
-
----
-
-## Self-hosting Max (optional)
-
-If you want Max on your own infrastructure instead of the hosted platform:
-
-```bash
-git clone https://github.com/digital-crew/max   # check exact repo at max.digitalcrew.tech
-cd max
-npm install
-cp .env.example .env
-# Fill in .env: AI provider key (OpenRouter/Claude/GPT), email credentials, CRM config
-npm run dev   # runs on localhost:3006
-```
-
-Point the MCP URL to your own instance instead of `max-mcp.digitalcrew.tech`.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `404` on `/mcp/<token>` | Token-in-path is not the right auth form for this server | Use `Authorization: Bearer` header instead |
-| `initialize` succeeds but tool calls fail with "Bearer token missing" | Auth is only enforced on `tools/call`, not `initialize` | Confirm token is set: `docker exec <agent> sh -c 'grep MCP_MAX /opt/data/.env'` |
-| Token set but gateway still uses old value | Gateway read `.env` at start and still has the old value in memory | `hermes gateway stop` + `hermes gateway run` (not `restart`) |
-| `Permission denied` writing `.env` | Container user mismatch | Run the `sed` command without `-u hermes`: `docker exec <agent> sh -c 'sed -i ...'` |
-
-See [`reference/TROUBLESHOOTING.md`](../reference/TROUBLESHOOTING.md) for gateway and platform failures.
+*If this saved you time → ⭐ [star hstack](https://github.com/paarths-collab/hstack)*
