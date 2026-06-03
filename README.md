@@ -229,14 +229,9 @@ Hermes is genuinely good at: **persistent cross-project memory**, an **unmatched
 
 ## 📊 Install metrics
 
-The hstack install **is a `git clone`**, so GitHub counts every install automatically — no tracking code, no telemetry. The chart below updates daily via [`.github/workflows/clone-traffic.yml`](.github/workflows/clone-traffic.yml) and persists the full history in [`metrics/clone-traffic.json`](metrics/clone-traffic.json) (GitHub only keeps 14 days; we keep everything).
-
 <p align="center">
-  <img src="metrics/clone-traffic.svg" alt="Git clone traffic chart for paarths-collab/hstack" width="800">
+  <img src="metrics/clone-traffic.svg" alt="Git clone traffic — paarths-collab/hstack" width="800">
 </p>
-
-> **Bars** = total clones per day &nbsp;·&nbsp; **Teal line** = unique cloners &nbsp;·&nbsp; Unique cloners ≈ "how many people ran the install command."
-> First-time setup: add a `TRAFFIC_TOKEN` secret (PAT with Administration:Read) — see [`metrics/README.md`](metrics/README.md).
 
 ## 📝 Blog & guides
 

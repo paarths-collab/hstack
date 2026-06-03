@@ -114,8 +114,12 @@ points.forEach(({ date }, i) => {
   xLabels += `<text x="${x}" y="${PAD.top + chartH + 22}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="${LABEL}">${date.slice(0, 7)}</text>`;
 });
 
-// The cumulative line path
+// The cumulative line path — polyline needs 2+ points; for 1 point use a circle dot
 const linePts = points.map(({ cum }, i) => `${Math.round(xScale(i))},${Math.round(yScale(cum))}`).join(" ");
+const lineElement = points.length < 2
+  ? `<circle cx="${Math.round(xScale(0))}" cy="${Math.round(yScale(points[0].cum))}" r="5" fill="${LINE}"/>`
+  : `<polyline points="${linePts}" fill="none" stroke="${LINE}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>` +
+    points.map(({ cum }, i) => `<circle cx="${Math.round(xScale(i))}" cy="${Math.round(yScale(cum))}" r="3" fill="${LINE}"/>`).join("");
 
 // Legend box (top-left, like star-history)
 const legendX = PAD.left + 12, legendY = PAD.top + 12;
@@ -138,7 +142,7 @@ const xAxisLabel = `<text x="${PAD.left + chartW / 2}" y="${H - 8}" text-anchor=
 const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <rect width="${W}" height="${H}" fill="#ffffff"/>
   ${gridLines}
-  <polyline points="${linePts}" fill="none" stroke="${LINE}" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  ${lineElement}
   ${xLabels}
   ${yAxisLabel}
   ${xAxisLabel}
