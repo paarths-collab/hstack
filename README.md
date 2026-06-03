@@ -49,7 +49,6 @@
 - [⚙️ How it works](#️-how-it-works)
 - [🛡️ Reliability — what hstack pre-solves](#-reliability--what-hstack-pre-solves)
 - [🌍 Deploy targets](#-deploy-targets)
-- [🔑 SSH hand-off (VPS deploys)](#-ssh-hand-off-vps-deploys)
 - [🔐 Security defaults](#-security-defaults)
 - [🧩 Agent plugins](#-agent-plugins)
 - [📝 Blog & guides](#-blog--guides)
@@ -204,65 +203,6 @@ hstack works on **any VPS**, with **Hostinger as the recommended one-click defau
 | **Hetzner / any VPS** | Ubuntu box + SSH (~€4/mo) | Medium |
 
 Full walkthroughs in the [beginner setup guide](blog/01-hermes-setup-guide.md).
-
-## 🔑 SSH hand-off (VPS deploys)
-
-The fastest way to let Claude Code drive a remote deploy is to give it SSH access — once the key
-is on the box, it runs every install/config/fix command directly with no copy-pasting.
-
-### Getting connected
-
-**Step 1 — confirm SSH works from your machine first:**
-```bash
-ssh root@<your-vps-hostname>    # e.g. ssh root@srv1531840.hstgr.cloud
-```
-If it connects → share the hostname + key path (or a throwaway password). Claude Code's Bash
-tool will SSH in and drive everything from there.
-
-**Step 2 — set up key-based auth (required — the Bash tool can't type passwords interactively):**
-```bash
-# Generate a keypair
-ssh-keygen -t ed25519 -f ~/.ssh/hermes_vps -N "" -C "claude-code-hermes-deploy"
-
-# Authorize it on the VPS — always use printf, never echo >>
-printf '\n%s\n' "$(cat ~/.ssh/hermes_vps.pub)" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-
-# First connect — auto-trust the host key
-ssh -i ~/.ssh/hermes_vps -o StrictHostKeyChecking=accept-new root@<hostname>
-```
-
-**Step 3 — run remote commands via the Bash tool:**
-```bash
-ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
-# everything here runs on the VPS
-hermes --version
-REMOTE
-```
-
-### Common SSH failures (real failure chain, in order)
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `Host key verification failed` | First connect; key not in `known_hosts` | Add `-o StrictHostKeyChecking=accept-new` |
-| `Permission denied (publickey,password)` | No key installed; Bash tool can't type a password | Generate keypair, add public key to VPS |
-| Key added but `Permission denied` persists | Key added **inside a Docker container**, not on the host — SSH ignores it | Run `whoami; hostname` first. Hex string = container. `exit`, then re-add on the host. |
-| Still `Permission denied` after adding on host | Two keys mashed onto one line by `echo >>` — SSH ignores merged lines | Use `printf '\n%s\n'` not `echo >>`. Fix: `sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys` |
-| Works from Windows but not from Bash tool | WSL2 network isolation | Use `-o StrictHostKeyChecking=accept-new -i ~/.ssh/hermes_vps` in the Bash tool; test with `curl -s https://example.com` |
-
-**Check for merged keys:**
-```bash
-grep -c "^ssh-" ~/.ssh/authorized_keys   # should equal number of keys added
-```
-
-**After deploy — rotate the throwaway password:**
-```bash
-passwd root          # set a strong one
-# or lock root login entirely:
-sudo passwd -l root
-```
-
-See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full SSH + install failure catalogue.
 
 ## 🔐 Security defaults
 
