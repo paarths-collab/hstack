@@ -6,17 +6,17 @@ lastmod: "2026-06-03"
 author: "Paarth · Digital Crew"
 tags: [hermes-agent, self-hosted-ai, ai-agent, claude-code, telegram-bot, vps, hstack, one-command]
 canonical: "https://www.digitalcrew.tech/en/blog/deploy-ai-agent-one-command-hstack"
-image: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80"
-image_alt: "Close-up of a circuit board representing a self-hosted AI agent running on your own server"
+image: "images/hero-deploy.png"
+image_alt: "A developer types one command into Claude Code and an AI agent pops out of the screen holding a phone with Telegram — live in minutes."
 og_title: "Deploy Your Own AI Agent in One Command with hstack"
 og_description: "Self-host a Hermes AI agent on a VPS in one Claude Code command. hstack automates install, model, messaging, memory, autostart and security."
-og_image: "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80"
+og_image: "https://www.digitalcrew.tech/en/blog/images/hero-deploy.png"
 twitter_card: "summary_large_image"
 ---
 
 # Deploy Your Own AI Agent in One Command with hstack
 
-![A circuit board, representing a self-hosted AI agent running on your own server.](https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80)
+![A developer types one command into Claude Code and an AI agent pops out of the screen holding a phone with Telegram — live in minutes.](images/hero-deploy.png)
 *Your own AI, on your own server, deployed from a single command.*
 
 You can deploy a private, self-hosted AI agent, one that texts you on Telegram, remembers your projects and quietly does scheduled work, by pasting **one command into Claude Code**. No four-hour setup, no Docker debugging, no chasing cryptic errors. [hstack](https://github.com/paarths-collab/hstack) turns Claude Code into the engineer who installs [Hermes Agent](https://github.com/NousResearch/hermes-agent), configures the model, wires your messaging apps and hardens the whole deployment for you. You answer about five questions; the tooling does the other 95%.
@@ -118,6 +118,9 @@ Claude never asks you to leave secrets lying around in the chat. It writes each 
 The orchestrator runs eight stages in order. Each one is hardened against a specific, documented failure — that hardening is the whole value and it is covered in detail in the next section. The breakdown below shows what each stage does and what (if anything) it needs from you.
 
 [INTERNAL-LINK: stage details and failure modes → #5-the-reliability-layer-what-hstack-pre-solves]
+
+![The eight stages of /hermes-deploy: Install → Model → Platforms → Skills → Memory → Personality → Home Channel → Autostart. Green checkmarks show automated steps; human icons show the two or three points where you provide a token or scan a QR.](images/pipeline.png)
+*Green checkmarks = automated. Human icons = the ~3 things only you can do.*
 
 ### Stage 1, Install
 
@@ -305,6 +308,9 @@ This is the difference between a one-time install script and a tool you live wit
 Once it is live, the question becomes "what should it do for me?" These are real workflows people run on Hermes today.
 
 [INTERNAL-LINK: companion setup guide for deeper workflow examples → 01-hermes-setup-guide.md]
+
+![Six use-case panels: Morning Briefing (coffee + notification summary), Email Sorting (inbox triage), Research Assistant (market trend chart), Smart Home (lights and thermostat control), Family Group Chat (shared household assistant), and Git and Coding Assistant (PR review + code suggestion).](images/use-cases.png)
+*Six things people do with their agent in the first week.*
 
 ### A morning briefing
 
@@ -635,6 +641,6 @@ The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](h
   "datePublished": "2026-06-01",
   "dateModified": "2026-06-03",
   "url": "https://www.digitalcrew.tech/en/blog/deploy-ai-agent-one-command-hstack",
-  "image": "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1200&q=80"
+  "image": "https://www.digitalcrew.tech/en/blog/images/hero-deploy.png"
 }
 </script>

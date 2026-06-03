@@ -6,17 +6,17 @@ lastmod: "2026-06-03"
 author: "Paarth · Digital Crew"
 tags: [hermes-agent, self-hosted-ai, telegram-bot, vps, ai-agent, hostinger, digitalocean, beginner]
 canonical: "https://www.digitalcrew.tech/en/blog/hermes-agent-setup-guide"
-image: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80"
-image_alt: "A code editor on a screen, representing setting up a self-hosted AI agent on a server"
+image: "images/hero-setup.png"
+image_alt: "A small $5 VPS server with a friendly robot sitting on top waving, connected by lines to Telegram, Discord, and WhatsApp logos — your own AI agent, cheap and reachable everywhere."
 og_title: "Self-Hosted AI Agent Setup: The Complete Hermes Guide"
 og_description: "Deploy a self-hosted Hermes AI agent on a VPS in about 30 minutes for $10–17/month all-in: install, model, Telegram, memory, security and cost."
-og_image: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80"
+og_image: "https://www.digitalcrew.tech/en/blog/images/hero-setup.png"
 twitter_card: "summary_large_image"
 ---
 
 # How to Set Up Your Own AI Agent (Self-Hosted Hermes): The Complete Beginner's Guide
 
-![A code editor on a screen showing terminal output, representing setting up a self-hosted AI agent on your own server.](https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80)
+![A small $5 VPS server with a friendly robot sitting on top waving, connected by lines to Telegram, Discord, and WhatsApp logos — your own AI agent, cheap and reachable everywhere.](images/hero-setup.png)
 *Your own AI agent, running on a server you control, built from an empty VPS.*
 
 Imagine texting an AI on Telegram that is genuinely *yours*. It remembers your projects across weeks, runs on a server you control, costs a few dollars a month instead of a flat subscription, and quietly does real work on a schedule: a morning news briefing, an inbox digest, a backup job, without you lifting a finger. That is what a self-hosted [Hermes Agent](https://github.com/NousResearch/hermes-agent) gives you, and this guide walks you through building one from an empty server, whether or not you have ever opened a terminal.
@@ -229,6 +229,9 @@ hermes model
 You'll choose a provider and a specific model. The sensible options are below.
 
 Hermes supports a wide provider list: **OpenRouter** (400+ models), **Anthropic**, **OpenAI**, **Google / Gemini**, **Nous Portal** (300+), **X-AI / Grok**, **MiniMax**, plus a custom-endpoint option. Auth is either an API key or an **OAuth** browser flow (depending on the provider). The sensible defaults:
+
+![A waiter robot holds a menu card titled "Today's Models" listing DeepSeek V3 (cheapest), Claude Sonnet (quality pick), GPT-4o (familiar), and Ollama at the bottom with an asterisk for "bring your own GPU."](images/model-menu.png)
+*Pick the brain that fits your budget and use case — you can swap it anytime with `/hermes-model`.*
 
 | Choice | Best for | Notes |
 |--------|----------|-------|
@@ -641,7 +644,7 @@ If you'd rather skip the manual work, **hstack** turns Claude Code into the engi
         "url": "https://www.digitalcrew.tech/en"
       },
       "url": "https://www.digitalcrew.tech/en/blog/hermes-agent-setup-guide",
-      "image": "https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1200&q=80"
+      "image": "https://www.digitalcrew.tech/en/blog/images/hero-setup.png"
     },
     {
       "@type": "FAQPage",
