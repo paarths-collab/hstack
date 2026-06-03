@@ -271,40 +271,16 @@ See [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) for the full 
 
 ## 🧩 Agent Plugins
 
-Specialist agents from [Digital Crew Technology](https://www.digitalcrew.tech/en) that plug into your Hermes deployment via the `hermes-mcp-add` skill:
+Specialist agents from [Digital Crew Technology](https://www.digitalcrew.tech/en) that plug into your Hermes deployment via the [`hermes-mcp-add`](skills/hermes-mcp-add/SKILL.md) skill.
 
-### Max (Outbound Sales Force) — **available now**
-
-Max is an open-source, self-hosted AI sales rep that handles prospecting, personalised email outreach, LinkedIn follow-ups, and meeting booking. It exposes a full MCP server so Hermes can call all of its tools directly.
-
-| | |
-|---|---|
-| **Dashboard & API tokens** | [max.digitalcrew.tech](https://max.digitalcrew.tech/) |
-| **MCP endpoint** | `https://max-mcp.digitalcrew.tech/mcp` |
-| **Auth** | `Authorization: Bearer <token>` (get your token at the dashboard above) |
-| **Tools** | 91 tools — campaigns, leads, sequences, outreach, reporting |
-| **Pricing** | Open-source (self-host free) · Hosted pay-per-booking (~$20/meeting) |
-
-**Wire Max into your Hermes agent in one session:**
-```bash
-/hermes-mcp-add
-# URL:   https://max-mcp.digitalcrew.tech/mcp
-# Token: get from max.digitalcrew.tech → Settings → API Tokens
-# Name:  max-mcp
-```
-Full step-by-step (probe → register → token → reload → verify) is in [`skills/hermes-mcp-add/SKILL.md`](skills/hermes-mcp-add/SKILL.md).
-
----
-
-### Coming soon
-
-- **Sophie (HR Business Partner)** — first-round interviews, candidate screening, shortlisting.
-- **Claire (Market Mastermind)** — market/competitor research, actionable briefs.
-- **Camille (Customer Support Champion)** — tier-1 support, customer health monitoring, churn risk.
-- **Kate (Marketing Maestro)** — campaigns, copy, content across email/social/site.
-- **André (Finance & Admin)** — invoicing, reporting, recurring admin.
-
-Track progress: [digitalcrew.tech/en](https://www.digitalcrew.tech/en)
+| Agent | Status | Details |
+|---|---|---|
+| **Max** — Outbound Sales Force | ✅ Available | [agents/max.md](agents/max.md) |
+| **Sophie** — HR Business Partner | 🔜 Coming soon | — |
+| **Claire** — Market Mastermind | 🔜 Coming soon | — |
+| **Camille** — Customer Support Champion | 🔜 Coming soon | — |
+| **Kate** — Marketing Maestro | 🔜 Coming soon | — |
+| **André** — Finance & Admin | 🔜 Coming soon | — |
 
 ## Honest positioning
 
