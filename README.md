@@ -97,8 +97,6 @@ That's the whole install. Claude registers the toolkit, then `/hermes-deploy` ru
 end-to-end — install → model → platforms → skills → memory → personality → home channel → autostart →
 verify. It stops only for the ~5 things a machine can't do.
 
-> **Windows:** install under WSL2 — Hermes has no native Windows support.
-
 ### What you'll need — and how to get each
 
 You don't need to prepare any of this in advance. **During `/hermes-deploy`, Claude pauses at each step
