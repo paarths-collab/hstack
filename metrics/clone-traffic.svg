@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="260" viewBox="0 0 800 260">
+  <rect width="800" height="260" rx="8" fill="#fafafa" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="400" y="120" text-anchor="middle" font-family="system-ui,sans-serif" font-size="14" fill="#6b7280">No clone data yet — workflow runs daily at 06:17 UTC.</text>
+  <text x="400" y="144" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#6b7280">See metrics/README.md for one-time setup (add TRAFFIC_TOKEN secret).</text>
+</svg>
