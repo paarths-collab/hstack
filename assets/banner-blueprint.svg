@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" width="1600" height="800" role="img" aria-label="hstack — Deploy your own AI agent in one command. The production layer for Hermes Agent.">
+  <!-- ============================================================
+       hstack engineering-blueprint banner.
+       Paper · electric blue · ink. Hard edges, hairline rules,
+       monospace registration marks, brutalist offset shadows.
+       ============================================================ -->
+
+  <defs>
+    <pattern id="dotgrid" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="1" fill="#0B0B10" opacity="0.06"/>
+    </pattern>
+    <style>
+      .display { font-family: "Bricolage Grotesque", "Archivo", system-ui, sans-serif; font-weight: 800; letter-spacing: -0.025em; }
+      .body    { font-family: "Hanken Grotesk", system-ui, sans-serif; font-weight: 500; }
+      .mono    { font-family: "Space Mono", ui-monospace, monospace; font-weight: 700; letter-spacing: 0.04em; }
+      .muted   { fill: #5A5A66; }
+      .faint   { fill: #87868F; }
+      .ink     { fill: #0B0B10; }
+      .blue    { fill: #1A14C8; }
+    </style>
+  </defs>
+
+  <!-- paper bg -->
+  <rect width="1600" height="800" fill="#F3F1E9"/>
+  <rect width="1600" height="800" fill="url(#dotgrid)"/>
+
+  <!-- spec strip — top header bar -->
+  <line x1="40" y1="68" x2="1560" y2="68" stroke="#0B0B10" stroke-width="1"/>
+  <g class="mono" font-size="14">
+    <text x="280" y="40" class="ink">HSTACK</text>
+    <text x="800" y="40" class="muted" text-anchor="middle">// PROD LAYER FOR HERMES AGENT</text>
+    <text x="1560" y="40" class="ink" text-anchor="end">OPEN SOURCE · MIT · v0.15.2</text>
+  </g>
+
+  <!-- registration crosshairs (corners) -->
+  <g stroke="#0B0B10" stroke-width="1.2" fill="none" opacity="0.65">
+    <g transform="translate(40 40)"><line x1="-9" y1="0" x2="9" y2="0"/><line x1="0" y1="-9" x2="0" y2="9"/></g>
+    <g transform="translate(1560 40)"><line x1="-9" y1="0" x2="9" y2="0"/><line x1="0" y1="-9" x2="0" y2="9"/></g>
+    <g transform="translate(40 760)"><line x1="-9" y1="0" x2="9" y2="0"/><line x1="0" y1="-9" x2="0" y2="9"/></g>
+    <g transform="translate(1560 760)"><line x1="-9" y1="0" x2="9" y2="0"/><line x1="0" y1="-9" x2="0" y2="9"/></g>
+  </g>
+
+  <!-- =========================================================
+       LEFT: brand mark + wordmark + headline + command + install
+       ========================================================= -->
+
+  <!-- brand mark (ink square with white H) + offset shadow -->
+  <rect x="100" y="116" width="92" height="92" fill="#0B0B10"/>
+  <rect x="106" y="122" width="92" height="92" fill="none" stroke="#0B0B10" stroke-width="1.2" opacity="0.4"/>
+  <g class="display" font-size="80" fill="#F3F1E9">
+    <text x="146" y="183" text-anchor="middle">H</text>
+  </g>
+
+  <!-- wordmark -->
+  <text x="220" y="190" class="display ink" font-size="86">hstack</text>
+
+  <!-- headline -->
+  <g class="display ink" font-size="78">
+    <text x="100" y="290">Deploy your own</text>
+    <text x="100" y="368">AI agent in one command.</text>
+  </g>
+
+  <!-- subhead + tagline -->
+  <text x="100" y="416" class="body ink" font-size="24" font-weight="500">The production layer for Hermes Agent.</text>
+  <text x="100" y="448" class="body muted" font-size="20" font-weight="500">Self-hosted. Open source. MIT.</text>
+
+  <!-- electric blue /hermes-deploy command — brutalist offset shadow -->
+  <rect x="108" y="490" width="700" height="110" fill="#0B0B10"/>
+  <rect x="100" y="482" width="700" height="110" fill="#0000FF"/>
+  <text x="450" y="566" class="mono" font-size="64" fill="#FFFFFF" text-anchor="middle">/hermes-deploy</text>
+
+  <!-- install card -->
+  <rect x="100" y="620" width="700" height="98" fill="none" stroke="#0B0B10" stroke-width="1.2"/>
+  <text x="116" y="645" class="mono blue" font-size="12">[ INSTALL ]</text>
+  <line x1="100" y1="654" x2="800" y2="654" stroke="#0B0B10" stroke-width="0.6" opacity="0.4"/>
+  <g class="mono ink" font-size="14">
+    <text x="116" y="678">git clone --depth 1 github.com/paarths-collab/hstack ~/.claude/skills/hstack</text>
+    <text x="116" y="702">Then run <tspan class="blue">/hermes-deploy</tspan></text>
+  </g>
+
+  <!-- =========================================================
+       RIGHT: FIG.01 / PREMISE — technical diagram in a frame
+       ========================================================= -->
+
+  <!-- dashed frame for the diagram -->
+  <rect x="880" y="116" width="640" height="500" fill="none" stroke="#0B0B10" stroke-width="1" stroke-dasharray="6 5"/>
+  <rect x="940" y="106" width="160" height="20" fill="#F3F1E9"/>
+  <text x="950" y="122" class="mono blue" font-size="13">FIG.01 / PREMISE</text>
+
+  <!-- column labels -->
+  <text x="970" y="166" class="mono faint" font-size="12" text-anchor="middle">EMPTY SERVER</text>
+  <text x="1200" y="166" class="mono faint" font-size="12" text-anchor="middle">HSTACK DEPLOYMENT</text>
+  <text x="1430" y="166" class="mono faint" font-size="12" text-anchor="middle">LIVE AI AGENT</text>
+
+  <!-- server tower (isometric-ish) -->
+  <g transform="translate(930 200)" stroke="#0B0B10" stroke-width="1.2" fill="none">
+    <rect x="0" y="0" width="80" height="170"/>
+    <line x1="0" y1="25" x2="80" y2="25"/>
+    <line x1="0" y1="50" x2="80" y2="50"/>
+    <line x1="0" y1="75" x2="80" y2="75"/>
+    <line x1="0" y1="100" x2="80" y2="100"/>
+    <line x1="0" y1="125" x2="80" y2="125"/>
+    <line x1="0" y1="150" x2="80" y2="150"/>
+    <circle cx="12" cy="12" r="2.5" fill="#5A5A66"/>
+    <circle cx="20" cy="12" r="2.5" fill="#5A5A66"/>
+  </g>
+
+  <!-- dashed arrow → -->
+  <g stroke="#0B0B10" stroke-width="1.2" fill="none" stroke-dasharray="4 3">
+    <line x1="1020" y1="288" x2="1120" y2="288"/>
+  </g>
+  <polygon points="1118,283 1130,288 1118,293" fill="#0B0B10"/>
+
+  <!-- deployment checklist box -->
+  <rect x="1140" y="220" width="160" height="140" fill="none" stroke="#0B0B10" stroke-width="1"/>
+  <g class="mono ink" font-size="12">
+    <text x="1156" y="242">[<tspan fill="#1A14C8">✓</tspan>] Install</text>
+    <text x="1156" y="266">[<tspan fill="#1A14C8">✓</tspan>] Configure</text>
+    <text x="1156" y="290">[<tspan fill="#1A14C8">✓</tspan>] Integrate</text>
+    <text x="1156" y="314">[<tspan fill="#1A14C8">✓</tspan>] Launch</text>
+  </g>
+
+  <!-- arrow → phone -->
+  <g stroke="#0B0B10" stroke-width="1.2" fill="none" stroke-dasharray="4 3">
+    <line x1="1310" y1="288" x2="1370" y2="288"/>
+  </g>
+  <polygon points="1368,283 1380,288 1368,293" fill="#0B0B10"/>
+
+  <!-- phone with chat -->
+  <g transform="translate(1390 195)">
+    <rect x="0" y="0" width="120" height="200" rx="14" fill="#F3F1E9" stroke="#0B0B10" stroke-width="1.2"/>
+    <!-- header -->
+    <text x="8" y="22" class="mono ink" font-size="9">Hermes Agent</text>
+    <text x="8" y="32" class="mono blue" font-size="7">online</text>
+    <line x1="0" y1="40" x2="120" y2="40" stroke="#0B0B10" stroke-width="0.5" opacity="0.4"/>
+    <!-- user bubble -->
+    <rect x="46" y="50" width="66" height="22" rx="4" fill="#EAE7DC" stroke="#0B0B10" stroke-width="0.6"/>
+    <text x="80" y="64" class="body ink" font-size="8" text-anchor="middle">What can you do?</text>
+    <text x="112" y="80" class="mono faint" font-size="6" text-anchor="end">10:42</text>
+    <!-- agent bubble -->
+    <rect x="8" y="92" width="78" height="36" rx="4" fill="#EAE7DC" stroke="#0B0B10" stroke-width="0.6"/>
+    <text x="14" y="105" class="body ink" font-size="8">I&apos;m Hermes.</text>
+    <text x="14" y="116" class="body ink" font-size="8">How can I help</text>
+    <text x="14" y="127" class="body ink" font-size="8">you today?</text>
+    <text x="86" y="142" class="mono faint" font-size="6">10:42</text>
+    <!-- input strip -->
+    <rect x="8" y="170" width="104" height="20" rx="3" fill="none" stroke="#0B0B10" stroke-width="0.6"/>
+    <text x="16" y="184" class="body faint" font-size="8">Message…</text>
+  </g>
+
+  <!-- left bullets -->
+  <g class="mono muted" font-size="12">
+    <text x="900" y="490">- Clean VM / VPS</text>
+    <text x="900" y="510">- No dependencies</text>
+    <text x="900" y="530">- No configuration</text>
+  </g>
+
+  <!-- right bullets -->
+  <g class="mono muted" font-size="12">
+    <text x="1390" y="490">- Responding</text>
+    <text x="1390" y="510">- Connected</text>
+    <text x="1390" y="530">- Ready to help</text>
+  </g>
+
+  <!-- =========================================================
+       BOTTOM: 4-stat strip
+       ========================================================= -->
+  <line x1="40" y1="660" x2="1560" y2="660" stroke="#0B0B10" stroke-width="1.5"/>
+  <g stroke="#0B0B10" stroke-width="1" fill="none">
+    <line x1="420" y1="660" x2="420" y2="740"/>
+    <line x1="800" y1="660" x2="800" y2="740"/>
+    <line x1="1180" y1="660" x2="1180" y2="740"/>
+  </g>
+  <line x1="40" y1="740" x2="1560" y2="740" stroke="#0B0B10" stroke-width="1"/>
+
+  <g class="mono blue" font-size="11">
+    <text x="64" y="680">01</text>
+    <text x="444" y="680">02</text>
+    <text x="824" y="680">03</text>
+    <text x="1204" y="680">04</text>
+  </g>
+
+  <g class="display ink" font-size="36">
+    <text x="64" y="715">~30 min</text>
+    <text x="444" y="715">19 commands</text>
+    <text x="824" y="715">4+ chat platforms</text>
+    <text x="1204" y="715">$10–17/mo</text>
+  </g>
+
+  <g class="body muted" font-size="13">
+    <text x="64" y="735">empty server → live</text>
+    <text x="444" y="735">end-to-end deployment</text>
+    <text x="824" y="735">Telegram, Discord, WhatsApp, Slack</text>
+    <text x="1204" y="735">typical running cost</text>
+  </g>
+
+  <!-- spec sheet footer -->
+  <g class="mono faint" font-size="11">
+    <text x="100" y="780">DOC: HS-001  |  REV: A  |  DATE: 2026-06-06</text>
+    <text x="1500" y="780" text-anchor="end">SHEET: 01 / 01</text>
+  </g>
+</svg>

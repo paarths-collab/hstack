@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner-terminal.svg" alt="hstack — The Agent Deployment System. Terminal banner with the command palette." width="100%">
+  <img src="assets/banner-blueprint.svg" alt="hstack — Deploy your own AI agent in one command. Engineering blueprint banner: paper background, electric blue /hermes-deploy command, FIG.01 / PREMISE technical diagram showing EMPTY SERVER → HSTACK DEPLOYMENT → LIVE AI AGENT, with the 4-stat spec strip ~30 min / 19 commands / 4+ chat platforms / $10–17 per month." width="100%">
 </p>
 
 <h1 align="center">hstack</h1>
@@ -32,10 +32,6 @@
   <a href="#-deploy-targets">Deploy targets</a> ·
   <a href="blog/deploy-ai-agent-one-command-hstack.md">Blog</a> ·
   <a href="reference/TROUBLESHOOTING.md">Troubleshooting</a>
-</p>
-
-<p align="center">
-  <img src="assets/banner-hero.svg" alt="hstack — Deploy AI Agents Faster. A mock agent status panel showing the agent online, connected platforms, and the deploy pipeline." width="100%">
 </p>
 
 <p align="center"><em>Modeled on <a href="https://github.com/garrytan/gstack">gstack</a> · Built by Paarth · In collaboration with <a href="https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack">Digital Crew Technology</a></em></p>
