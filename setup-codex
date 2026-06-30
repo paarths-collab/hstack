@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# hstack setup — registers the hstack skills with Codex.
+# Safe to re-run (idempotent). No sudo. No network calls.
+#
+# Codex (OpenAI's coding agent) reads skills from .agents/skills/ in the
+# project root, OR from a global location set by $CODEX_SKILLS_DIR.
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_SRC="$HSTACK_DIR/skills"
+CODEX_SKILLS="${CODEX_SKILLS_DIR:-$HOME/.agents/skills}"
+
+echo "hstack setup (Codex)"
+echo "  source : $SKILLS_SRC"
+echo "  target : $CODEX_SKILLS"
+echo
+
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup-codex from inside the hstack repo."
+  exit 1
+}
+mkdir -p "$CODEX_SKILLS"
+
+count=0
+for dir in "$SKILLS_SRC"/*/; do
+  [ -f "$dir/SKILL.md" ] || continue
+  name="$(basename "$dir")"
+  link="$CODEX_SKILLS/$name"
+  if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
+  if ln -s "$dir" "$link" 2>/dev/null; then :; else cp -r "$dir" "$link"; fi
+  count=$((count + 1))
+done
+echo "Registered $count skills for Codex."
+
+AGENTS_MD="${AGENTS_MD_PATH:-$HOME/.agents/AGENTS.md}"
+MARK_START="<!-- hstack:start -->"
+MARK_END="<!-- hstack:end -->"
+SECTION="$MARK_START
+## hstack — self-hosted Hermes Agent deploy
+
+Hermes deployment + 50+ integration skills. Codex can invoke any /hermes-* /platform-* or
+/integration-* skill via SSH against a remote VPS. Every skill is SSH-first (\$VPS_IP +
+\$VPS_USER) and idempotent. See /hermes-deploy for the full end-to-end setup.
+$MARK_END"
+
+mkdir -p "$(dirname "$AGENTS_MD")"
+touch "$AGENTS_MD"
+if grep -q "$MARK_START" "$AGENTS_MD" 2>/dev/null; then
+  tmp="$(mktemp)"
+  awk -v s="$MARK_START" -v e="$MARK_END" '
+    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$AGENTS_MD" >"$tmp"
+  { cat "$tmp"; echo; echo "$SECTION"; } >"$AGENTS_MD"
+  rm -f "$tmp"
+  echo "Updated hstack section in $AGENTS_MD"
+else
+  { echo; echo "$SECTION"; } >>"$AGENTS_MD"
+  echo "Added hstack section to $AGENTS_MD"
+fi
+
+echo
+echo "Done. In Codex, ask the agent to run any hstack skill (e.g. /hermes-deploy)."

@@ -1,124 +1,223 @@
 ---
 name: integration-notion
-description: Connect Notion (docs, CRM-lite, memory, SOPs) to a running Hermes agent using a static internal integration token. Use when the user wants Hermes to read, search, create, or update Notion pages and databases.
+description: Connect Notion (docs, CRM-lite, memory, SOPs) to a self-hosted Hermes Agent over SSH. Wires the official open-source MCP server with a static internal integration token. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-notion — connect Notion to Hermes
+# /integration-notion — connect Notion to a remote Hermes (SSH-first)
 
-You are the engineer connecting Notion to a running Hermes agent. Notion is the agent's
-docs / CRM-lite / long-term memory / SOP store. Work autonomously; stop only for the two
-things a machine cannot do: minting the integration token, and sharing the target pages /
-databases with the integration inside the Notion UI.
+You are the engineer connecting Notion to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
+SSH as root against the VPS. The user only does the two things a machine cannot:
 
-**Honest auth picture (verified 2026-06):** Notion ships an official **hosted** remote MCP
-server at `https://mcp.notion.com/mcp`, but it is **OAuth-only** — Notion's own docs state
-it "requires user-based OAuth authentication and does not support bearer token
-authentication." That breaks the one-click / headless promise for a server-side agent, so we
-do **not** wire the hosted MCP via `/hermes-mcp-add`. Instead use the official open-source
-server, which takes a **static `ntn_` integration token** — perfect for a self-hosted agent.
+1. Mint the integration token in the Notion UI.
+2. Share each target page or database with the integration.
 
-## Before you start — gather (ask once)
+Everything else — token storage, MCP registration, gateway reload, verification — runs
+on the VPS via SSH, idempotently.
 
-1. **Internal integration token** — starts with `ntn_`. Mint it at
-   <https://www.notion.com/my-integrations> → **Build** sidebar → **Internal connections** →
-   **Create a new connection** → copy the token from the **Configuration** tab.
-2. **Shared content** — the integration sees **nothing** until pages/databases are shared
-   with it. In Notion: open each target page/DB → `...` menu → **+ Add Connections** →
-   select your integration. Confirm this is done, or every call returns empty / 404.
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
-
-Set shell vars from answers (never log the token):
-```bash
-AGENT=<container-name>     # e.g. hermes-agent-mxlc-hermes-agent-1
-TOKEN=<ntn_...>           # the integration secret; injected via sed, never echoed
-```
+**Honest auth picture (verified 2026-06):** Notion ships a hosted remote MCP at
+`https://mcp.notion.com/mcp`, but it is **OAuth-only** — bearer tokens are rejected. So we
+do NOT wire the hosted MCP. We use the official open-source server
+`@notionhq/notion-mcp-server` which takes a static `ntn_` token — perfect for headless,
+self-hosted agents.
 
 ---
 
-## Step 1 — store the token in the Hermes runtime .env (chmod 600)
+## Before you start — gather (ask once, in one batch)
 
-Write the secret to `/opt/data/.env` inside the container. Use `hermes config set` so Hermes
-owns the write; never `echo >>` (it can merge onto a prior line) and never put it in
-`config.yaml`.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$NOTION_TOKEN` | Internal integration token (`ntn_...`) | <https://www.notion.com/my-integrations> → Build → Internal connections → Create → Configuration tab |
+| Shared pages | Pages/DBs the integration can see | In each Notion page: `...` → **+ Add Connections** → select the integration |
+
+Confirm SSH access before doing anything:
 
 ```bash
-docker exec -i -u hermes "$AGENT" hermes config set NOTION_TOKEN "$TOKEN"
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-Verify the var landed (prints `1`, never the value):
+---
+
+## Step 1 — verify Hermes is reachable on the VPS
+
 ```bash
-docker exec "$AGENT" sh -c "grep -c '^NOTION_TOKEN=' /opt/data/.env"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    hermes --version
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    docker exec "$AGENT" hermes --version
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-> If your Hermes build has no `config set` subcommand, inject directly with the sed pattern
-> from `/hermes-mcp-add` (note the `|` delimiter — `ntn_` tokens are alnum but stay
-> consistent with the base procedure):
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci notion" || echo 0)
+if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Notion is already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
+```
+
+---
+
+## Step 3 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write NOTION_TOKEN (length ${#NOTION_TOKEN}, prefix ${NOTION_TOKEN:0:4}...) via 'hermes config set'
+  2. chmod 600 ~/.hermes/.env
+  3. Register MCP: hermes mcp add notion --command npx --args -y,@notionhq/notion-mcp-server
+  4. Reload gateway: hermes gateway stop && hermes gateway run
+  5. Verify in logs: grep -i "registered.*notion"
+  6. Smoke test: POST https://api.notion.com/v1/search → expect 200
+
+The token is NEVER printed in plaintext.
+EOF
+```
+
+Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+
+---
+
+## Step 4 — write the secret (chmod 600, no echo, no logging)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set NOTION_TOKEN '$NOTION_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+```
+
+Verify (returns `1`, NEVER the value):
+
+```bash
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^NOTION_TOKEN=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: NOTION_TOKEN not written. Rolling back."; rollback; exit 1; }
+```
+
+> If your Hermes build has no `config set` subcommand, use the safe sed pattern
+> (pipe delimiter; `ntn_` tokens stay alnum but the pattern is safe for any token):
 > ```bash
-> docker exec "$AGENT" sh -c \
->   "grep -q '^NOTION_TOKEN=' /opt/data/.env || printf 'NOTION_TOKEN=\n' >> /opt/data/.env; \
->    sed -i 's|^NOTION_TOKEN=.*|NOTION_TOKEN=${TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^NOTION_TOKEN=' ~/.hermes/.env || printf 'NOTION_TOKEN=\n' >> ~/.hermes/.env
+>   sed -i 's|^NOTION_TOKEN=.*|NOTION_TOKEN=$NOTION_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
 > ```
 
 ---
 
-## Step 2 — connect Notion. Pick the path that matches your Hermes build.
+## Step 5 — register the Notion MCP server
 
-A static token alone does **not** connect Notion to the agent — it only stores the
-credential. You must give the agent a tool surface. Two verified options:
+Pick the path that matches the Hermes build on the VPS. Path A is preferred.
 
-### Path A (preferred) — official open-source MCP server (static token, stdio)
-
-The official server `@notionhq/notion-mcp-server` reads a static `ntn_` token and exposes
-Notion search/read/create/update as MCP tools. It is a **local stdio** server (run with
-`npx`), so it is added to Hermes as a command-based MCP, not via the HTTP `/hermes-mcp-add`
-probe flow (that flow is for remote HTTP endpoints). Register it if your Hermes supports
-stdio MCP servers:
+### Path A (preferred) — official stdio MCP server with static token
 
 ```bash
-docker exec -i -u hermes "$AGENT" \
+ssh "$VPS_USER@$VPS_IP" "
   hermes mcp add notion \
-    --command "npx" \
-    --args "-y,@notionhq/notion-mcp-server" \
-    --env "NOTION_TOKEN=\${NOTION_TOKEN}"
+    --command npx \
+    --args '-y,@notionhq/notion-mcp-server' \
+    --env 'NOTION_TOKEN=\${NOTION_TOKEN}'
+"
 ```
 
-The server also accepts the header form if you prefer explicit versioning:
-`OPENAPI_MCP_HEADERS={"Authorization":"Bearer ntn_...","Notion-Version":"2025-09-03"}`.
-Use `${NOTION_TOKEN}` indirection so the secret stays only in `/opt/data/.env`.
+The flag names vary by Hermes version. If unsure, run `hermes mcp add --help` first
+and match its stdio syntax. The token stays in `~/.hermes/.env` and is referenced via
+`${NOTION_TOKEN}` indirection — never inlined.
 
-> The flag names (`--command` / `--args` / `--env`) vary by Hermes version. Run
-> `docker exec -u hermes "$AGENT" hermes mcp add --help` first and match its stdio syntax.
-> If your build is HTTP-MCP-only and cannot launch a stdio command, use Path B.
+### Path B (fallback) — generic HTTP tool against the Notion REST API
 
-### Path B — generic HTTP tool against the Notion REST API
-
-No bearer-auth remote MCP exists for Notion (the hosted one is OAuth-only, see top). If you
-cannot run the stdio server, point a generic HTTP/tool capability at the REST API directly:
+If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command:
 
 - **Base URL:** `https://api.notion.com/v1`
 - **Auth header:** `Authorization: Bearer ${NOTION_TOKEN}`
 - **Required version header:** `Notion-Version: 2025-09-03`
 - **Content type:** `Content-Type: application/json`
 
-Common endpoints: `POST /v1/search`, `GET /v1/pages/{id}`, `POST /v1/pages`,
-`POST /v1/databases/{id}/query`, `PATCH /v1/pages/{id}`.
-
-> Do **not** try to register `https://mcp.notion.com/mcp` through `/hermes-mcp-add` with a
-> bearer token — it returns an auth error because that endpoint only accepts OAuth.
+Do NOT try to register `https://mcp.notion.com/mcp` with a bearer token — that endpoint
+is OAuth-only and will return an auth error.
 
 ---
 
-## Step 3 — reload the gateway so the new env / MCP is picked up
+## Step 6 — reload the gateway (stop + run, NOT restart)
 
-The gateway reads `.env` once at startup. Use stop + run (not `restart`) so the new env is
-re-read cleanly — same rule as `/hermes-mcp-add`.
+`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
-sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 2
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 7 — verify registration in logs (poll up to 30s)
+
+```bash
+REGISTERED=0
+for i in $(seq 1 6); do
+  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
+       | grep -qiE "registered.*tool.*notion|MCP server.*notion.*(ok|ready)"; then
+    REGISTERED=1
+    echo "OK: notion registered in gateway logs."
+    break
+  fi
+  sleep 5
+done
+[ "$REGISTERED" = "1" ] || { echo "FAIL: notion not in logs after 30s. Rolling back."; rollback; exit 1; }
+```
+
+---
+
+## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
+
+```bash
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST 'https://api.notion.com/v1/search' \
+    -H \"Authorization: Bearer \$NOTION_TOKEN\" \
+    -H 'Notion-Version: 2025-09-03' \
+    -H 'Content-Type: application/json' \
+    -d '{\"page_size\":1}'
+")
+case "$HTTP" in
+  200) echo "OK: Notion API reachable and token valid." ;;
+  401) echo "FAIL: token invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
+  403) echo "FAIL: token valid but no scope. Confirm shared pages."; exit 1 ;;
+  *)   echo "WARN: unexpected HTTP $HTTP from Notion API. Check manually." ;;
+esac
+```
+
+`200` with an empty `results` array means the token works but nothing is shared yet —
+not a failure of wiring, just a user step (Pitfall 2).
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove notion 2>/dev/null || true"
+  ssh "$VPS_USER@$VPS_IP" "hermes config unset NOTION_TOKEN 2>/dev/null || \
+    sed -i '/^NOTION_TOKEN=/d' ~/.hermes/.env"
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Notion is no longer wired."
+}
 ```
 
 ---
@@ -127,49 +226,31 @@ sleep 8
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Wiring the hosted `mcp.notion.com` MCP with a token | It is **OAuth-only**; bearer tokens are rejected. No headless path. | Use the stdio server (Path A) or REST (Path B). |
-| 2 | Token set but every call returns empty / 404 | The integration has not been **shared** with the page/DB. | In Notion, `...` → **+ Add Connections** on each target. |
-| 3 | Missing `Notion-Version` header | Notion API rejects unversioned requests. | Always send `Notion-Version: 2025-09-03` (or current). |
-| 4 | Internal vs public token confusion | Public/OAuth tokens behave differently and may expire. | Use an **internal** integration token (`ntn_`). |
-| 5 | Secret in `config.yaml` or compose `.env` | Wrong file → world-readable or not loaded by runtime. | Only `/opt/data/.env`, `chmod 600`, via `config set`/sed. |
-| 6 | Search returns partial results | Notion `/search` only spans content the integration can see, and paginates. | Confirm sharing scope; follow `next_cursor`. |
-| 7 | Rate limits | Notion throttles at roughly 3 requests/sec average; bursts get `429`. | Backoff on `429`; batch reads via DB queries. |
-
----
-
-## Verify
-
-Confirm the credential and a live call before declaring done.
-
-1. **Tools registered (Path A):**
-   ```bash
-   docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-     | grep -iE "registered.*tool|MCP server.*notion" | tail -5
-   ```
-2. **Real API call returns data (works for both paths):** run inside the container so the
-   token comes from the runtime env and is never printed:
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -X POST "https://api.notion.com/v1/search" \
-       -H "Authorization: Bearer $NOTION_TOKEN" \
-       -H "Notion-Version: 2025-09-03" \
-       -H "Content-Type: application/json" \
-       -d "{\"page_size\":1}"'
-   ```
-   `200` = token valid and scoped. `401` = bad/empty token (re-check step 1). A `200` with an
-   empty `results` array means the token works but nothing is shared yet (pitfall 2).
-3. **End-to-end from chat:** `@<agent> search my Notion for "<a page you shared>"` should
-   return the page. An empty-but-valid response is still a pass for the wiring.
+| 1 | Wiring the hosted `mcp.notion.com` MCP with a token | It is **OAuth-only**; bearer tokens are rejected | Use the stdio server (Path A) or REST (Path B) |
+| 2 | Token set but every call returns empty / 404 | Integration not **shared** with target pages/DBs | In Notion: `...` → **+ Add Connections** on each target |
+| 3 | Missing `Notion-Version` header | Notion API rejects unversioned requests | Always send `Notion-Version: 2025-09-03` |
+| 4 | Internal vs OAuth/public token confusion | Public tokens behave differently and can expire | Use an **internal** integration token (`ntn_...`) |
+| 5 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
+| 6 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
+| 7 | sed with `/` delimiter on tokens | `ntn_` is safe, but later tokens have `/+=` | Always use `\|` delimiter |
+| 8 | Search returns partial results | `/search` only spans shared content; paginated | Confirm sharing; follow `next_cursor` |
+| 9 | Rate limits | Notion throttles ~3 req/sec; bursts get `429` | Backoff on `429`; batch via DB queries |
+| 10 | Hermes not running when SSH connects | First call hangs forever | Step 1 has a hard version check that exits early |
 
 ---
 
 ## Definition of done
 
-- [ ] `NOTION_TOKEN` is in `/opt/data/.env` with `chmod 600`; it is **not** in `config.yaml` or chat.
-- [ ] Target pages/databases are shared with the integration (+ Add Connections done).
-- [ ] Notion is connected via Path A (stdio MCP tools registered) or Path B (REST base documented and reachable).
-- [ ] `POST /v1/search` from inside the container returns `200`.
-- [ ] A chat-driven Notion search returns real (or empty-valid) data.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
+- [ ] Idempotency check passed (or `FORCE=1` overrode)
+- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
+- [ ] `NOTION_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
+- [ ] Target Notion pages/DBs shared with the integration (+ Add Connections done)
+- [ ] MCP registered via Path A (stdio) or REST documented via Path B
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Logs show `registered N tool(s) for 'notion'` within 30s
+- [ ] Smoke test: `POST /v1/search` from inside the container returned `200`
+- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

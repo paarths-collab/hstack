@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# hstack setup-all — install hstack skills into every supported IDE/agent.
+# Runs setup, setup-codex, setup-cursor, setup-hermes, setup-gemini in sequence.
+# Safe to re-run.
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HSTACK_DIR"
+
+echo "=== hstack setup-all ==="
+echo "Installing hstack skills into every supported environment."
+echo
+
+for ide in "setup" "setup-codex" "setup-cursor" "setup-hermes" "setup-gemini"; do
+  if [ -x "./$ide" ]; then
+    echo "--- $ide ---"
+    "./$ide" || echo "WARN: $ide failed (continuing)"
+    echo
+  fi
+done
+
+echo "=== Done ==="
+echo "Skills are now available in: Claude Code, Codex, Cursor, Hermes, Gemini CLI"

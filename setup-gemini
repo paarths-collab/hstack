@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# hstack setup — registers the hstack skills with Gemini CLI.
+# Safe to re-run (idempotent). No sudo. No network calls.
+#
+# Gemini CLI reads context files from ~/.gemini/context/ or a project-local
+# GEMINI.md. We expose each skill as a context file the user can @reference.
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_SRC="$HSTACK_DIR/skills"
+GEMINI_DIR="${GEMINI_CONTEXT_DIR:-$HOME/.gemini/context/hstack}"
+
+echo "hstack setup (Gemini CLI)"
+echo "  source : $SKILLS_SRC"
+echo "  target : $GEMINI_DIR"
+echo
+
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup-gemini from inside the hstack repo."
+  exit 1
+}
+mkdir -p "$GEMINI_DIR"
+
+count=0
+for dir in "$SKILLS_SRC"/*/; do
+  [ -f "$dir/SKILL.md" ] || continue
+  name="$(basename "$dir")"
+  link="$GEMINI_DIR/$name.md"
+  if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
+  if ln -s "$dir/SKILL.md" "$link" 2>/dev/null; then :; else cp "$dir/SKILL.md" "$link"; fi
+  count=$((count + 1))
+done
+echo "Registered $count skills for Gemini CLI."
+
+GEMINI_MD="${GEMINI_MD_PATH:-$HOME/.gemini/GEMINI.md}"
+MARK_START="<!-- hstack:start -->"
+MARK_END="<!-- hstack:end -->"
+SECTION="$MARK_START
+## hstack — self-hosted Hermes Agent deploy
+
+hstack skills are loaded as context files under $GEMINI_DIR. To use one, @reference it
+in your prompt, e.g. \`@hstack/hermes-deploy.md please run this skill against \$VPS_IP\`.
+Every skill is SSH-first and assumes \$VPS_IP + \$VPS_USER are exported.
+$MARK_END"
+
+mkdir -p "$(dirname "$GEMINI_MD")"
+touch "$GEMINI_MD"
+if grep -q "$MARK_START" "$GEMINI_MD" 2>/dev/null; then
+  tmp="$(mktemp)"
+  awk -v s="$MARK_START" -v e="$MARK_END" '
+    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$GEMINI_MD" >"$tmp"
+  { cat "$tmp"; echo; echo "$SECTION"; } >"$GEMINI_MD"
+  rm -f "$tmp"
+  echo "Updated hstack section in $GEMINI_MD"
+else
+  { echo; echo "$SECTION"; } >>"$GEMINI_MD"
+  echo "Added hstack section to $GEMINI_MD"
+fi
+
+echo
+echo "Done. In Gemini CLI, @reference any hstack skill, e.g.:"
+echo "  @hstack/hermes-deploy.md deploy Hermes to my VPS"
