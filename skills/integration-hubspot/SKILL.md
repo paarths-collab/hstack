@@ -1,202 +1,301 @@
 ---
 name: integration-hubspot
-description: Connect HubSpot CRM to a running Hermes agent so it can read and create contacts, companies, deals, and tasks. Use when the user wants their Hermes agent to work with their HubSpot sales CRM.
+description: Connect HubSpot CRM (contacts, companies, deals, tickets, tasks) to a self-hosted Hermes Agent over SSH. Wires HubSpot's official open-source MCP server (@hubspot/mcp-server) with a Private App access token. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-hubspot — connect HubSpot to Hermes
+# /integration-hubspot — connect HubSpot to a remote Hermes (SSH-first)
 
-You are the engineer connecting HubSpot to a running Hermes agent. HubSpot is a sales CRM; once
-wired, the agent can list and create contacts, companies, deals, and tasks, and read associated
-records from chat.
+You are the engineer connecting HubSpot to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
+SSH as root against the VPS. The user only does the two things a machine cannot:
 
-Read the honest constraint first: HubSpot ships a **first-party remote MCP server, but it is
-OAuth-only** (`https://mcp.hubspot.com`, went GA 2026-04-13). It requires the OAuth 2.0 / 2.1
-authorization-code flow with PKCE against a registered MCP auth app — there is no static-bearer
-or API-key mode. A headless Hermes container cannot complete that browser-based handshake
-unattended, so it breaks the one-click, paste-a-token promise. This skill therefore wires
-HubSpot via its **REST API using a Private App access token** — a static, non-expiring,
-scope-limited credential that needs no browser. If the user genuinely wants the OAuth MCP, that
-is a manual client-side setup outside this skill (see Pitfalls).
+1. Create the Private App in the HubSpot UI and mint the access token (requires a
+   super-admin and HubSpot 2FA).
+2. Pick the scopes (read-only first; widen later).
 
-## Before you start — gather (ask once)
+Everything else — token storage, MCP registration, gateway reload, verification — runs
+on the VPS via SSH, idempotently.
 
-1. **HubSpot Private App access token** — the static credential. The user mints it in the
-   HubSpot UI: **Settings (gear icon, top right)** -> **Integrations** -> **Private Apps** ->
-   **Create a private app** -> on the **Scopes** tab select the CRM scopes (least privilege:
-   `crm.objects.contacts.read`/`.write`, `crm.objects.companies.read`/`.write`,
-   `crm.objects.deals.read`/`.write` and add `crm.objects.tasks` scopes if the agent should
-   manage tasks) -> **Create app** -> on the **Auth** tab click **Show token** and **Copy**.
-   The token is shown once. Format is `pat-na1-...` (US data center) or `pat-eu1-...` (EU); treat
-   it as opaque and store it like a password. Docs:
-   `https://developers.hubspot.com/docs/guides/apps/private-apps/overview`
-2. **Agent container name** — output of `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Honest auth picture (verified 2026-06):** HubSpot ships two MCP options:
 
-Set shell vars from the answers:
-```bash
-AGENT=<container-name>     # e.g. hermes-agent-mxlc-hermes-agent-1
-TOKEN=<hubspot-pat>        # pat-na1-... or pat-eu1-...; never log or commit; injected via sed below
-```
+- **Hosted remote MCP** at `https://mcp.hubspot.com` (GA 2026-04-13) — **OAuth 2.1 +
+  PKCE only**. Static bearer tokens are rejected; a headless container cannot complete
+  the browser handshake unattended.
+- **Official open-source server** `@hubspot/mcp-server` (npm, v0.4.x, bin
+  `mcp-hubspot`) — stdio server that reads `PRIVATE_APP_ACCESS_TOKEN` from env. This is
+  the only headless-friendly path and it is what we wire.
+
+Legacy account-level API keys (`hapikey=...`) are **dead**; HubSpot removed them.
+OAuth apps exist but are for multi-tenant distribution — skip for self-hosted single
+account use.
 
 ---
 
-## Step 1 — validate the token against the live REST API
+## Before you start — gather (ask once, in one batch)
 
-The HubSpot REST base is `https://api.hubapi.com`; the token goes in
-`Authorization: Bearer <token>`. The token embeds the data center, so the same base host works
-for both `pat-na1-` and `pat-eu1-` tokens. Confirm the credential works before storing it.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$HUBSPOT_ACCESS_TOKEN` | Private App access token (`pat-na1-...` or `pat-eu1-...`) | HubSpot: **Settings (gear)** -> **Integrations** -> **Private Apps** -> **Create a private app** -> **Scopes** tab (pick scopes — see below) -> **Create app** -> **Auth** tab -> **Show token** -> **Copy** (shown once). Must be done by a super-admin |
+| Scopes | Which CRM objects the agent can touch | Start read-only: `crm.objects.contacts.read`, `crm.objects.companies.read`, `crm.objects.deals.read`. Add `.write` variants and `tickets`, `crm.objects.quotes.*`, `crm.schemas.*` only after auditing tool calls |
+
+Confirm SSH access before doing anything:
 
 ```bash
-curl -sS -o /dev/null -w "contacts = %{http_code}\n" \
-  -H "Authorization: Bearer $TOKEN" \
-  "https://api.hubapi.com/crm/v3/objects/contacts?limit=1&archived=false"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-- `200` -> the token is valid and has at least contacts-read scope.
-- `401` -> token is wrong, revoked, or pasted with stray whitespace.
-- `403` -> token is valid but missing the scope for this object; add the scope in the Private
-  App **Scopes** tab and re-copy the token (editing scopes does not change the token value, but
-  re-confirm in the UI).
+Sanity-check the token prefix (catches paste errors and rejects legacy keys before they
+hit the VPS):
 
-Optionally confirm the token's granted scopes (substitute the real token; this endpoint reports
-the scopes attached to the token):
 ```bash
-curl -sS -H "Authorization: Bearer $TOKEN" \
-  "https://api.hubapi.com/oauth/v1/access-tokens/$TOKEN" | head -c 800
+case "$HUBSPOT_ACCESS_TOKEN" in
+  pat-na1-*|pat-eu1-*) echo "OK: Private App token (data center: ${HUBSPOT_ACCESS_TOKEN:4:3})." ;;
+  hapikey=*|*-*-*-*-*) echo "ABORT: this looks like a legacy account API key. HubSpot removed those; mint a Private App token instead."; exit 1 ;;
+  *) echo "ABORT: token does not look like a HubSpot Private App token (expected pat-na1- or pat-eu1- prefix)."; exit 1 ;;
+esac
 ```
 
 ---
 
-## Step 2 — write the token into the Hermes runtime env (no static-token MCP verified)
-
-**No first-party static-token MCP server is verified as of 2026-06.** The official MCP server
-(`https://mcp.hubspot.com`) is OAuth-only with PKCE, so we store the Private App token for
-REST/tool use instead of running the /hermes-mcp-add procedure.
-
-Write the secret into `/opt/data/.env` inside the container using `hermes config set`, then lock
-the file down. The secret never goes in `config.yaml` and never into chat.
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-docker exec -i -u hermes "$AGENT" \
-  hermes config set HUBSPOT_ACCESS_TOKEN "$TOKEN"
-
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    hermes --version
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    docker exec "$AGENT" hermes --version
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-If your Hermes build does not support `hermes config set` for arbitrary keys, fall back to the
-safe sed-inject pattern from /hermes-mcp-add — append the key once, then set the value with `|`
-as the sed delimiter (the token contains `-` and may contain other punctuation), and
-`chmod 600`. **Never use `echo >>`** (it merges onto the previous line if that line lacks a
-trailing newline):
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-docker exec "$AGENT" sh -c '
-  grep -q "^HUBSPOT_ACCESS_TOKEN=" /opt/data/.env \
-    || printf "\nHUBSPOT_ACCESS_TOKEN=\n" >> /opt/data/.env
-'
-docker exec "$AGENT" sh -c \
-  "sed -i 's|^HUBSPOT_ACCESS_TOKEN=.*|HUBSPOT_ACCESS_TOKEN=${TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
-```
-
-Confirm the key landed (prints the count, never the value):
-```bash
-docker exec "$AGENT" sh -c "grep -c '^HUBSPOT_ACCESS_TOKEN=' /opt/data/.env"   # should print 1
+ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci hubspot" || echo 0)
+if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "HubSpot is already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
 ```
 
 ---
 
-## Step 3 — give the agent a way to call the API, then reload the gateway
+## Step 3 — DRY RUN preview (always show before writing)
 
-The token alone does not connect anything — the agent needs a tool that reads
-`HUBSPOT_ACCESS_TOKEN` and hits the REST API. Two honest options:
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write HUBSPOT_ACCESS_TOKEN (length ${#HUBSPOT_ACCESS_TOKEN}, prefix ${HUBSPOT_ACCESS_TOKEN:0:8}...) via 'hermes config set'
+  2. chmod 600 ~/.hermes/.env
+  3. Register MCP: hermes mcp add hubspot --command npx --args -y,@hubspot/mcp-server
+  4. Reload gateway: hermes gateway stop && hermes gateway run
+  5. Verify in logs: grep -i "registered.*hubspot"
+  6. Smoke test: GET https://api.hubapi.com/crm/v3/objects/contacts?limit=1 -> expect 200
 
-- **Option A — community remote MCP server.** No first-party static-token MCP exists (the
-  official `https://mcp.hubspot.com` is OAuth-only). Community HubSpot MCP servers that accept a
-  Private App token via env exist (e.g. the project listed at
-  `https://www.pulsemcp.com/servers/hubspot` and similar npm/Glama-indexed servers). Most are
-  stdio/Node servers, not hosted HTTP endpoints, so they are not a drop-in for /hermes-mcp-add
-  (which wires remote HTTP MCP). Use one only if you self-host it behind an HTTP transport and
-  have vetted the code; treat it as third-party.
-- **Option B — generic REST tool (recommended default).** Point a generic HTTP/tool action at
-  the documented REST API. Base URL `https://api.hubapi.com`, auth header
-  `Authorization: Bearer ${HUBSPOT_ACCESS_TOKEN}`. Common endpoints:
-  - `GET /crm/v3/objects/contacts?limit=10` — list contacts
-  - `GET /crm/v3/objects/companies?limit=10` — list companies
-  - `GET /crm/v3/objects/deals?limit=10` — list deals
+Data center: ${HUBSPOT_ACCESS_TOKEN:4:3} (na1 = US portal; eu1 = EU portal — REST base host is the same)
+The token is NEVER printed in plaintext.
+EOF
+```
+
+Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+
+---
+
+## Step 4 — write the secret (chmod 600, no echo, no logging)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set HUBSPOT_ACCESS_TOKEN '$HUBSPOT_ACCESS_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+```
+
+Verify (returns `1`, NEVER the value):
+
+```bash
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^HUBSPOT_ACCESS_TOKEN=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: HUBSPOT_ACCESS_TOKEN not written. Rolling back."; rollback; exit 1; }
+```
+
+> If your Hermes build has no `config set` subcommand, fall back to the safe sed pattern.
+> HubSpot tokens contain `-` (and may contain other punctuation across rotations); use
+> the pipe delimiter regardless:
+> ```bash
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^HUBSPOT_ACCESS_TOKEN=' ~/.hermes/.env || printf 'HUBSPOT_ACCESS_TOKEN=\n' >> ~/.hermes/.env
+>   sed -i 's|^HUBSPOT_ACCESS_TOKEN=.*|HUBSPOT_ACCESS_TOKEN=$HUBSPOT_ACCESS_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
+> ```
+
+---
+
+## Step 5 — register the HubSpot MCP server
+
+Pick the path that matches the Hermes build on the VPS. Path A is preferred.
+
+### Path A (preferred) — official stdio MCP server with Private App token
+
+`@hubspot/mcp-server` (v0.4.x, bin `mcp-hubspot`) reads the token from
+`PRIVATE_APP_ACCESS_TOKEN` in its environment. The token stays in `~/.hermes/.env` and
+is referenced via `${HUBSPOT_ACCESS_TOKEN}` indirection — never inlined into
+`config.yaml`. We re-export it under the name the server expects.
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "
+  hermes mcp add hubspot \
+    --command npx \
+    --args '-y,@hubspot/mcp-server' \
+    --env 'PRIVATE_APP_ACCESS_TOKEN=\${HUBSPOT_ACCESS_TOKEN}'
+"
+```
+
+The flag names vary by Hermes version. If unsure, run `hermes mcp add --help` first and
+match its stdio syntax. The tool surface the MCP server exposes is constrained by the
+token's scopes — that is the security boundary; the server itself has no `--tools`
+allow-list flag.
+
+### Path B (fallback) — generic HTTP tool against the HubSpot REST API
+
+If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command:
+
+- **Base URL:** `https://api.hubapi.com` (the same host for `pat-na1-` and `pat-eu1-`
+  tokens — the token itself encodes the data center)
+- **Auth header:** `Authorization: Bearer ${HUBSPOT_ACCESS_TOKEN}`
+- **Content type:** `Content-Type: application/json`
+- **No version header.** HubSpot versions in the path (`/crm/v3/...`, `/crm/v4/...`);
+  pin the path version you tested against
+- **Common endpoints:**
+  - `GET /crm/v3/objects/contacts?limit=10`
+  - `GET /crm/v3/objects/companies?limit=10`
+  - `GET /crm/v3/objects/deals?limit=10`
   - `POST /crm/v3/objects/contacts` with `{"properties":{"email":"...","firstname":"..."}}`
-  - `POST /crm/v3/objects/deals` with `{"properties":{"dealname":"...","pipeline":"...","dealstage":"..."}}`
-  - `POST /crm/v3/objects/contacts/search` with a `filterGroups` body for lookups by property
+  - `POST /crm/v3/objects/contacts/search` for property-filtered lookups
 
-If wiring a verified remote HTTP MCP later, run /hermes-mcp-add with `--auth header`,
-`Authorization: Bearer ${MCP_HUBSPOT_API_KEY}`, and inject the Private App token into
-`MCP_HUBSPOT_API_KEY` — but only after the probe matrix confirms that server accepts a static
-bearer (the official one does not).
+Do NOT try to register `https://mcp.hubspot.com` with a bearer token — that endpoint is
+**OAuth-only (2.1 + PKCE)** and rejects static tokens.
 
-Reload the gateway so the new env is picked up (env is read once at startup; `restart` is not
-reliably env-reload-clean in Hermes — use stop + run):
+---
+
+## Step 6 — reload the gateway (stop + run, NOT restart)
+
+`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
-sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 2
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 7 — verify registration in logs (poll up to 30s)
+
+```bash
+REGISTERED=0
+for i in $(seq 1 6); do
+  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
+       | grep -qiE "registered.*tool.*hubspot|MCP server.*hubspot.*(ok|ready)"; then
+    REGISTERED=1
+    echo "OK: hubspot registered in gateway logs."
+    break
+  fi
+  sleep 5
+done
+[ "$REGISTERED" = "1" ] || { echo "FAIL: hubspot not in logs after 30s. Rolling back."; rollback; exit 1; }
+```
+
+---
+
+## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
+
+A bare `GET /crm/v3/objects/contacts?limit=1` is side-effect-free, works on a brand-new
+portal (returns `{"results":[]}`), and exercises every layer: env var, token validity,
+scope, and network egress.
+
+```bash
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -G 'https://api.hubapi.com/crm/v3/objects/contacts' \
+    --data-urlencode 'limit=1' \
+    --data-urlencode 'archived=false' \
+    -H \"Authorization: Bearer \$HUBSPOT_ACCESS_TOKEN\"
+")
+case "$HTTP" in
+  200) echo "OK: HubSpot API reachable, token valid, contacts.read scope present." ;;
+  401) echo "FAIL: token invalid, empty, revoked, or pasted with whitespace. Re-check Step 4."; rollback; exit 1 ;;
+  403) echo "FAIL: token valid but missing crm.objects.contacts.read scope. Add it in the Private App Scopes tab."; exit 1 ;;
+  429) echo "WARN: rate-limited at smoke test — back off and retry."; ;;
+  *)   echo "WARN: unexpected HTTP $HTTP from HubSpot API. Check manually." ;;
+esac
+```
+
+`200` with an empty `results` array means the token works but the portal has no
+contacts yet — that is a **pass** of the wiring. A read-only token will 200 here but
+403 on a `POST /crm/v3/objects/contacts`; widen scopes only after auditing actual tool
+calls in `hermes logs`.
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove hubspot 2>/dev/null || true"
+  ssh "$VPS_USER@$VPS_IP" "hermes config unset HUBSPOT_ACCESS_TOKEN 2>/dev/null || \
+    sed -i '/^HUBSPOT_ACCESS_TOKEN=/d' ~/.hermes/.env"
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. HubSpot is no longer wired."
+}
 ```
 
 ---
 
 ## Pitfalls
 
-- **Official MCP is OAuth-only.** `https://mcp.hubspot.com` needs the OAuth 2.0 / 2.1
-  authorization-code flow with PKCE and a registered MCP auth app; a headless container cannot
-  complete the browser handshake. Do not configure it as a static-bearer MCP — the handshake
-  will fail. Static API keys are not accepted by that server.
-- **Legacy API keys are dead.** HubSpot deprecated account-level API keys; only OAuth and
-  Private App access tokens work. Do not try to use an old `hapikey` query param.
-- **Scope errors look like `403`, not `401`.** A `401` means a bad/revoked token; a `403` means
-  the token is valid but lacks the scope for that object (contacts vs companies vs deals vs
-  tasks). Fix by adding the scope in the Private App **Scopes** tab.
-- **Token carries the app's full granted scope.** A Private App token acts with exactly the
-  scopes you selected, account-wide. For least privilege, grant only the CRM objects the agent
-  needs and create the app from an admin who should own that access.
-- **Token is opaque; no expiry but revocable.** Private App tokens do not expire and need no
-  refresh flow, but an admin can delete the app or rotate the token at any time — that shows up
-  as `401`. Do not parse or pattern-match the token beyond the `pat-na1-`/`pat-eu1-` prefix.
-- **Rate limits.** Private apps allow ~190 requests / 10s per app (burst), with daily caps that
-  vary by subscription tier; a `429 Too Many Requests` includes a `Retry-After` header. Back off
-  and retry; do not hammer.
-- **Two `.env` files.** The Hermes runtime secret belongs in `/opt/data/.env` (inside the
-  container), not the host compose `.env`. Putting it in the wrong file means the agent never
-  sees it.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Wiring the hosted `mcp.hubspot.com` MCP with a bearer token | It is **OAuth 2.1 + PKCE only**; static Private App tokens are rejected, and a headless container cannot complete the browser handshake | Use stdio `@hubspot/mcp-server` (Path A) or REST (Path B) |
+| 2 | Reaching for a legacy account API key (`hapikey=...`) | HubSpot removed account-level API keys; only OAuth and Private App tokens work now | Mint a Private App access token; reject `hapikey` in Step 0 sanity check |
+| 3 | Read-only token but agent tries to write | A `403` (not `401`) — token is valid but the requested object/verb is outside the granted scopes | Start read-only on purpose; widen one object at a time after auditing `hermes logs` |
+| 4 | Only super-admins can create Private Apps | A non-admin user hits a UI dead-end at "Create private app" and burns time guessing | Confirm before Step 0 that the user is a HubSpot super-admin, or get one to mint the token |
+| 5 | Wrong data center confusion (`pat-na1-` vs `pat-eu1-`) | Users assume they need different base URLs per region | `api.hubapi.com` works for both — the token encodes the data center. Do NOT hardcode `api-eu1.hubapi.com` |
+| 6 | Sandbox token used against production portal (or vice versa) | Token is portal-scoped; data appears empty or 401 because it is the wrong portal | Confirm portal in dry-run; HubSpot sandbox portals have separate `hub IDs` and separate Private Apps |
+| 7 | Archived records hidden by default | `GET /crm/v3/objects/contacts` excludes archived rows; agent reports "no contacts" when there are archived ones | Pass `archived=true` (or `false` explicitly) to make the filter intentional |
+| 8 | Rate limits (free portal: 100 req / 10s per app; ~190 req / 10s for paid) | Bursty agent loops 429 the whole portal; daily caps also vary by subscription tier | Backoff on `429` honoring `Retry-After`; batch via `/batch/read` and search endpoints |
+| 9 | Private App token leaked = full granted scope, account-wide, non-expiring | Token has no expiry and no per-resource auth boundary inside the granted scope; deletion is the only revocation | Least-privilege scopes; rotate by deleting+recreating the app on a schedule; `chmod 600 ~/.hermes/.env` |
+| 10 | Webhook signing secret confused with access token | `whsec_` style HubSpot signing secrets are for verifying inbound payloads, not API calls | Webhook secrets stay in the webhook receiver, not the MCP token slot |
+| 11 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
+| 12 | sed with `/` delimiter on tokens | House style is `\|` — safer across token formats | Always use `\|` delimiter |
+| 13 | Secret in `config.yaml` or compose-level `.env` | Wrong file -> world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
 
-## Verify
-
-```bash
-# 1. Secret present and locked down (value never printed)
-docker exec "$AGENT" sh -c "grep -c '^HUBSPOT_ACCESS_TOKEN=' /opt/data/.env"   # 1
-docker exec "$AGENT" sh -c "ls -l /opt/data/.env"                              # -rw------- (600)
-
-# 2. Live API call from inside the container using the stored token
-docker exec -u hermes "$AGENT" sh -c '
-  . /opt/data/.env
-  curl -sS -o /dev/null -w "hubspot contacts = %{http_code}\n" \
-    -H "Authorization: Bearer $HUBSPOT_ACCESS_TOKEN" \
-    "https://api.hubapi.com/crm/v3/objects/contacts?limit=1&archived=false"
-'   # expect 200
-```
-
-Then prove it end-to-end from chat:
-```
-@<agent> list my 5 most recent HubSpot contacts
-```
-A valid empty list is a pass — every layer worked. A `401` means the token did not land
-(re-check Step 2); a `403` means a missing scope (add it in the Private App Scopes tab); a `429`
-means rate-limited (back off).
+---
 
 ## Definition of done
 
-- [ ] Private App token validated against `https://api.hubapi.com/crm/v3/objects/contacts` (returns `200`).
-- [ ] `HUBSPOT_ACCESS_TOKEN` stored in `/opt/data/.env` with `chmod 600`; not in `config.yaml`, not in chat.
-- [ ] Gateway reloaded with stop + run; container can read `$HUBSPOT_ACCESS_TOKEN`.
-- [ ] Agent returns real HubSpot CRM data (contacts/companies/deals) from a chat request, or a valid empty result.
-- [ ] OAuth-only MCP caveat communicated to the user (no static-token first-party MCP as of 2026-06).
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
+- [ ] Idempotency check passed (or `FORCE=1` overrode)
+- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
+- [ ] Token prefix is `pat-na1-` or `pat-eu1-` (legacy `hapikey` rejected)
+- [ ] `HUBSPOT_ACCESS_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
+- [ ] Scopes documented; started read-only unless the user explicitly asked for writes
+- [ ] MCP registered via Path A (stdio `@hubspot/mcp-server`, env `PRIVATE_APP_ACCESS_TOKEN`) or REST documented via Path B
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Logs show `registered N tool(s) for 'hubspot'` within 30s
+- [ ] Smoke test: `GET /crm/v3/objects/contacts?limit=1` from inside the container returned `200`
+- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and `.env` resolution failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
