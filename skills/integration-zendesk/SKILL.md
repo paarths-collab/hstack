@@ -1,109 +1,257 @@
 ---
 name: integration-zendesk
-description: Connect Zendesk (support tickets, users, organizations, macros) to a running Hermes agent using a static API token. Use when the user wants Hermes to read, search, create, comment on, or update Zendesk tickets.
+description: Connect Zendesk (tickets, users, organizations, macros) to a self-hosted Hermes Agent over SSH using a static API token + email Basic auth. No first-party MCP yet (EAP summer 2026) — uses REST API directly. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-zendesk — connect Zendesk to Hermes
+# /integration-zendesk — connect Zendesk to a remote Hermes (SSH-first)
 
-You are the engineer connecting Zendesk to a running Hermes agent. Zendesk is the agent's
-support-ticket surface: search tickets, fetch a conversation, post internal/public comments,
-update status, look up users and organizations. Work autonomously; stop only for the two
-things a machine cannot do: minting the API token in Admin Center, and naming the subdomain.
+You are the engineer connecting Zendesk to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
+as root against the VPS. The user does two things a machine cannot:
 
-**Honest auth picture (verified 2026-06):** Zendesk does **not** ship a first-party remote MCP
-server with bearer-token auth. Their **MCP Client** (Hermes calling external MCP servers from
-inside Zendesk) is in early access, and a first-party **MCP Server** is announced for EAP in
-summer 2026 — not GA, no documented endpoint, no headless auth shape yet. So we wire the REST
-API directly with a static **API token** (Basic auth, email + `/token` suffix). This is the
-auth model Zendesk's own developer docs document for server-side automation.
+1. Mint the API token in Admin Center (Apps and integrations → APIs → Zendesk API → Settings
+   → Token access ON → Add API token).
+2. Confirm the subdomain (the `acme` in `https://acme.zendesk.com`, NOT a vanity domain).
 
-## Before you start — gather (ask once)
+Everything else — credential storage, live API auth check, gateway reload, smoke test —
+runs on the VPS via SSH, idempotently with a rollback path.
 
-1. **Zendesk subdomain** — the prefix in `https://<subdomain>.zendesk.com`. Example: if your
-   help center is `https://acme.zendesk.com`, the subdomain is `acme`.
-2. **Admin email** — the email of the account that owns the API token. Tokens authenticate
-   as `<email>/token:<api_token>`; the email is part of the credential, not just a label.
-3. **API token** — mint at **Admin Center** → **Apps and integrations** → **APIs** →
-   **Zendesk API** → **Settings** tab → enable **Token access** → **Add API token** → copy
-   the value (shown once). Requires an admin role.
-4. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Honest auth picture (verified 2026-06):** Zendesk does **NOT** ship a first-party remote
+MCP server with bearer-token auth. Their MCP Client (EAP) is for calling external MCPs from
+inside Zendesk; the MCP Server is announced for EAP **summer 2026** — not GA, no documented
+endpoint, no headless auth shape yet. So we wire the REST API directly with a static API
+token. Auth is **Basic** (NOT Bearer): `Authorization: Basic <base64 of "email/token:token">`.
+The literal `/token` suffix on the email is **mandatory** — it tells Zendesk to treat the
+password slot as an API token instead of an account password. The #1 silent-failure mode is
+sending Bearer instead of Basic, or omitting the `/token` suffix.
 
-Set shell vars from answers (never log the token):
-```bash
-AGENT=<container-name>          # e.g. hermes-agent-mxlc-hermes-agent-1
-ZENDESK_SUBDOMAIN=<subdomain>   # e.g. acme
-ZENDESK_EMAIL=<admin-email>     # e.g. ops@acme.com
-ZENDESK_API_TOKEN=<token>       # the secret; injected via sed, never echoed
-```
+When Zendesk's MCP Server exits EAP, swap this skill's wiring step for `/hermes-mcp-add`
+against the documented endpoint.
 
 ---
 
-## Step 1 — store the credentials in the Hermes runtime .env (chmod 600)
+## Before you start — gather (ask once, in one batch)
 
-Write all three values to `/opt/data/.env` inside the container via `hermes config set` so
-Hermes owns the write. Never `echo >>` (it can merge onto a prior line) and never put the
-token in `config.yaml`.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$ZENDESK_SUBDOMAIN` | The `<sub>` in `https://<sub>.zendesk.com` (NOT vanity domain) | Open the help center URL; use the original `*.zendesk.com` host |
+| `$ZENDESK_EMAIL` | Admin email that owns the API token | Whichever account had admin role when minting the token |
+| `$ZENDESK_API_TOKEN` | API token (shown once on creation) | Admin Center → Apps and integrations → APIs → Zendesk API → Settings → Token access ON → Add API token |
+
+Confirm SSH access:
 
 ```bash
-docker exec -i -u hermes "$AGENT" hermes config set ZENDESK_SUBDOMAIN "$ZENDESK_SUBDOMAIN"
-docker exec -i -u hermes "$AGENT" hermes config set ZENDESK_EMAIL "$ZENDESK_EMAIL"
-docker exec -i -u hermes "$AGENT" hermes config set ZENDESK_API_TOKEN "$ZENDESK_API_TOKEN"
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-Verify the vars landed (prints `3`, never the values):
+---
+
+## Step 1 — verify Hermes is reachable on the VPS
+
 ```bash
-docker exec "$AGENT" sh -c "grep -cE '^(ZENDESK_SUBDOMAIN|ZENDESK_EMAIL|ZENDESK_API_TOKEN)=' /opt/data/.env"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-> If your Hermes build has no `config set` subcommand, inject directly with the sed pattern
-> from `/hermes-mcp-add`. Use the `|` delimiter because email and token contain `/`, `+`, `=`:
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^(ZENDESK_SUBDOMAIN|ZENDESK_EMAIL|ZENDESK_API_TOKEN)=' ~/.hermes/.env 2>/dev/null" || echo 0)
+if [ "$COUNT" = "3" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Zendesk already wired (all 3 vars present). Set FORCE=1 to rewire."
+  exit 0
+fi
+```
+
+---
+
+## Step 3 — HARD GATE (subdomain + email + token + live auth check)
+
+```bash
+# Subdomain: alphanumeric + hyphens, 1-63 chars
+printf '%s' "$ZENDESK_SUBDOMAIN" | grep -qE '^[A-Za-z0-9-]{1,63}$' \
+  || { echo "ABORT: ZENDESK_SUBDOMAIN must be alphanumeric+hyphens (the prefix in *.zendesk.com — NOT a vanity domain)."; exit 1; }
+
+# Email shape
+printf '%s' "$ZENDESK_EMAIL" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$' \
+  || { echo "ABORT: ZENDESK_EMAIL must be a valid email address."; exit 1; }
+
+# Token sanity
+[ "${#ZENDESK_API_TOKEN}" -ge 20 ] \
+  || { echo "ABORT: ZENDESK_API_TOKEN looks too short (<20 chars). Did you paste the right value?"; exit 1; }
+
+# Live API verify (proves subdomain + email + token + /token suffix + Basic auth all correct)
+CRED=$(printf '%s/token:%s' "$ZENDESK_EMAIL" "$ZENDESK_API_TOKEN" | base64 -w0 2>/dev/null || \
+       printf '%s/token:%s' "$ZENDESK_EMAIL" "$ZENDESK_API_TOKEN" | base64)
+HTTP=$(curl -sS -o /tmp/zd_me.json -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Basic $CRED" \
+  -H 'Content-Type: application/json' \
+  "https://$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/users/me.json" 2>/dev/null) || HTTP=000
+case "$HTTP" in
+  200)
+    USER_NAME=$(grep -oE '"name":"[^"]+"' /tmp/zd_me.json | head -1 | cut -d'"' -f4)
+    ROLE=$(grep -oE '"role":"[^"]+"' /tmp/zd_me.json | head -1 | cut -d'"' -f4)
+    echo "Zendesk auth OK. User: $USER_NAME (role: $ROLE)"
+    if [ "$ROLE" != "admin" ]; then
+      echo "WARN: token owner role is '$ROLE', not 'admin'. Some write endpoints may 403."
+    fi ;;
+  401) echo "ABORT: 401 from Zendesk. Common causes: wrong token, /token suffix missing, Token access disabled in Admin Center."; exit 1 ;;
+  404) echo "ABORT: 404 from Zendesk. Subdomain '$ZENDESK_SUBDOMAIN' probably wrong."; exit 1 ;;
+  000) echo "ABORT: could not reach Zendesk (network/DNS)."; exit 1 ;;
+  *)   echo "ABORT: unexpected HTTP $HTTP from /users/me.json."; cat /tmp/zd_me.json | head -3; exit 1 ;;
+esac
+rm -f /tmp/zd_me.json
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write ZENDESK_SUBDOMAIN ($ZENDESK_SUBDOMAIN) via 'hermes config set'
+  2. Write ZENDESK_EMAIL ($ZENDESK_EMAIL)
+  3. Write ZENDESK_API_TOKEN (length ${#ZENDESK_API_TOKEN}) — never plaintext-logged
+  4. chmod 600 ~/.hermes/.env
+  5. Verify all 3 landed (grep -c)
+  6. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+  7. Smoke test: GET /api/v2/users/me.json from inside container — expect 200
+  8. Smoke test: GET /api/v2/search.json?query=type:ticket+status:open — expect 200
+
+Auth model: Basic <base64 of "$ZENDESK_EMAIL/token:<TOKEN>">
+NOT Bearer. The literal /token suffix is mandatory.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write secrets (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZENDESK_SUBDOMAIN '$ZENDESK_SUBDOMAIN'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZENDESK_EMAIL '$ZENDESK_EMAIL'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZENDESK_API_TOKEN '$ZENDESK_API_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^(ZENDESK_SUBDOMAIN|ZENDESK_EMAIL|ZENDESK_API_TOKEN)=' ~/.hermes/.env" || echo 0)
+[ "$COUNT" = "3" ] || { echo "FAIL: Zendesk vars did not all land (got $COUNT, need 3). Rolling back."; rollback; exit 1; }
+echo "Zendesk credentials confirmed in ~/.hermes/.env."
+```
+
+> Sed fallback (pipe delimiter — emails contain `@`, tokens may contain `/+=`):
 > ```bash
-> docker exec "$AGENT" sh -c \
->   "grep -q '^ZENDESK_API_TOKEN=' /opt/data/.env || printf 'ZENDESK_API_TOKEN=\n' >> /opt/data/.env; \
->    sed -i 's|^ZENDESK_API_TOKEN=.*|ZENDESK_API_TOKEN=${ZENDESK_API_TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
+> ssh "$VPS_USER@$VPS_IP" "
+>   for KV in 'ZENDESK_SUBDOMAIN=$ZENDESK_SUBDOMAIN' 'ZENDESK_EMAIL=$ZENDESK_EMAIL' 'ZENDESK_API_TOKEN=$ZENDESK_API_TOKEN'; do
+>     K=\$(printf '%s' \"\$KV\" | cut -d= -f1)
+>     grep -q \"^\$K=\" ~/.hermes/.env || printf '%s\n' \"\$K=\" >> ~/.hermes/.env
+>     sed -i \"s|^\$K=.*|\$KV|\" ~/.hermes/.env
+>   done
+>   chmod 600 ~/.hermes/.env
+> "
 > ```
 
+Never `echo >>`. Never put the token in `config.yaml`.
+
 ---
 
-## Step 2 — wire Zendesk REST as a generic HTTP tool
+## Step 6 — wire the REST surface (no MCP server to register)
 
-No bearer-auth remote MCP exists for Zendesk yet (see top). Point a generic HTTP/tool
-capability at the REST API directly. These are the values Hermes needs:
+Since no first-party MCP exists, there's no `hermes mcp add` call. The agent's generic HTTP
+tool layer reads the 3 env vars and builds the Basic header per request.
 
+REST parameters documented for the generic tool layer:
 - **Base URL:** `https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2`
-- **Auth header:** `Authorization: Basic <base64 of "${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}">`
+- **Auth header:** `Authorization: Basic <base64("${ZENDESK_EMAIL}/token:${ZENDESK_API_TOKEN}")>`
 - **Content type:** `Content-Type: application/json`
-
-The literal `/token` suffix on the email is required — it tells Zendesk to treat the password
-slot as an API token instead of an account password. Without it, requests 401 even with a
-valid token.
 
 Common endpoints:
 - `GET /tickets/{id}.json` — fetch a ticket
 - `GET /tickets/{id}/comments.json` — full conversation
 - `PUT /tickets/{id}.json` — update status, assignee, tags, add a comment
 - `POST /tickets.json` — create a ticket
-- `GET /search.json?query=...` — search tickets, users, orgs (use `type:ticket status:open`)
-- `GET /users/me.json` — cheap auth-check endpoint (used in Verify)
-- `GET /users/search.json?query=...` — find a user by email or name
-
-> When the official Zendesk MCP Server exits EAP (announced for summer 2026), swap this
-> step for `/hermes-mcp-add` against the documented endpoint and pipe `placeholder` then
-> `sed`-inject `MCP_ZENDESK_API_KEY`. Until then, REST is the verified headless path.
+- `GET /search.json?query=type:ticket+status:open` — search
+- `GET /users/me.json` — auth check (cheap)
+- `GET /users/search.json?query=...` — find a user
 
 ---
 
-## Step 3 — reload the gateway so the new env is picked up
-
-The gateway reads `.env` once at startup. Use stop + run (not `restart`) so the new env is
-re-read cleanly — same rule as `/hermes-mcp-add`.
+## Step 7 — reload the gateway (stop + run, NOT restart)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
 sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 8 — live smoke test (from inside the container)
+
+```bash
+ME_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  CRED=\$(printf '%s/token:%s' \"\$ZENDESK_EMAIL\" \"\$ZENDESK_API_TOKEN\" | base64 -w0)
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H \"Authorization: Basic \$CRED\" \
+    \"https://\$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/users/me.json\"
+")
+case "$ME_HTTP" in
+  200) echo "OK: /users/me.json reachable from VPS." ;;
+  401) echo "FAIL: 401 from VPS-side auth. Re-check Step 5 + Step 7."; rollback; exit 1 ;;
+  *)   echo "WARN: unexpected HTTP $ME_HTTP." ;;
+esac
+
+SEARCH_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  CRED=\$(printf '%s/token:%s' \"\$ZENDESK_EMAIL\" \"\$ZENDESK_API_TOKEN\" | base64 -w0)
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H \"Authorization: Basic \$CRED\" \
+    \"https://\$ZENDESK_SUBDOMAIN.zendesk.com/api/v2/search.json?query=type:ticket+status:open\"
+")
+case "$SEARCH_HTTP" in
+  200) echo "OK: /search.json reachable." ;;
+  *)   echo "WARN: search returned $SEARCH_HTTP." ;;
+esac
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^ZENDESK_SUBDOMAIN=/d;
+            /^ZENDESK_EMAIL=/d;
+            /^ZENDESK_API_TOKEN=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Zendesk unwired. Revoke the API token at Admin Center → APIs → Zendesk API → Settings if compromised."
+}
 ```
 
 ---
@@ -112,61 +260,35 @@ sleep 8
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Token used without the `/token` email suffix | Zendesk treats the password slot as an account password and 401s. | Credential string must be `<email>/token:<api_token>` then base64. |
-| 2 | Trying to wire a Zendesk first-party remote MCP today | The MCP Server is announced for EAP summer 2026, not GA. No documented bearer endpoint. | Use REST until Zendesk publishes the endpoint and auth shape. |
-| 3 | Token access disabled in Admin Center | The token exists but every call 401s. | In Admin Center → APIs → Zendesk API → Settings, toggle **Token access** on. |
-| 4 | Wrong subdomain | `https://help.acme.com` (host-mapped) still calls the API as `acme.zendesk.com`. | Use the original `*.zendesk.com` subdomain, not the vanity domain. |
-| 5 | Secret in `config.yaml` or compose `.env` | Wrong file → not loaded by Hermes runtime, or world-readable. | Only `/opt/data/.env`, `chmod 600`, via `config set`/sed. |
-| 6 | Token owner role too low | Non-admin tokens can read but not modify tickets; some endpoints 403. | Mint the token under an admin account. |
-| 7 | Rate limits | Zendesk throttles per-minute per-account; bursts return `429` with `Retry-After`. | Backoff on `429`; batch reads via `/search.json` and `include=` sideloads. |
-| 8 | `Bearer` instead of `Basic` | Bearer is for OAuth access tokens, not API tokens. | API tokens use `Basic <base64>`; only OAuth uses `Bearer`. |
-
----
-
-## Verify
-
-Confirm the credential and a live call before declaring done.
-
-1. **Vars present:**
-   ```bash
-   docker exec "$AGENT" sh -c "grep -cE '^(ZENDESK_SUBDOMAIN|ZENDESK_EMAIL|ZENDESK_API_TOKEN)=' /opt/data/.env"
-   ```
-   Expect `3`.
-
-2. **Auth check via REST** — run inside the container so the secret stays in the runtime env
-   and is never printed:
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     CRED=$(printf "%s/token:%s" "$ZENDESK_EMAIL" "$ZENDESK_API_TOKEN" | base64 -w0)
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -H "Authorization: Basic $CRED" \
-       -H "Content-Type: application/json" \
-       "https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/users/me.json"'
-   ```
-   `200` = subdomain + email + token all valid. `401` = bad credential (re-check step 1,
-   confirm `/token` suffix, confirm Token access is on). `404` = wrong subdomain.
-
-3. **Real ticket search:**
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     CRED=$(printf "%s/token:%s" "$ZENDESK_EMAIL" "$ZENDESK_API_TOKEN" | base64 -w0)
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -H "Authorization: Basic $CRED" \
-       "https://${ZENDESK_SUBDOMAIN}.zendesk.com/api/v2/search.json?query=type:ticket+status:open"'
-   ```
-   `200` = read scope works.
-
-4. **End-to-end from chat:** `@<agent> show me open Zendesk tickets` should return real
-   results. An empty result on a quiet instance is still a pass for the wiring.
+| 1 | Sending `Authorization: Bearer ...` | Zendesk treats Bearer as OAuth access token, not API token | Always `Basic <base64>` for API tokens; Bearer only for OAuth |
+| 2 | Forgetting the `/token` suffix on the email | Zendesk treats the password slot as account password → 401 | Credential string MUST be `<email>/token:<api_token>` (literal `/token`) |
+| 3 | Trying to wire a Zendesk first-party MCP today | MCP Server announced for EAP summer 2026 — not GA, no endpoint | Use REST until Zendesk publishes the endpoint + auth shape |
+| 4 | Token access disabled in Admin Center | Token exists but every call 401s | Admin Center → APIs → Zendesk API → Settings → Token access ON |
+| 5 | Vanity subdomain (`help.acme.com`) instead of `*.zendesk.com` | API host is the original `*.zendesk.com`, not the host-mapped vanity | Step 3 validator rejects anything not matching `[A-Za-z0-9-]{1,63}` |
+| 6 | Token owner role too low | Non-admin tokens read but 403 on writes | Mint under an admin account; Step 3 warns if role != admin |
+| 7 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 8 | Rate limits | Per-account per-minute throttle; 429 with `Retry-After` | Back off on 429; batch reads via `/search.json` + sideloads |
+| 9 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 10 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 11 | sed with `/` delimiter | Email contains `@.`, tokens may contain `/+=` | Always `\|` delimiter |
+| 12 | Confusing email/token Basic with OAuth-only third-party MCPs | They are different auth models | This skill is REST + email/token Basic only |
+| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
 
 ---
 
 ## Definition of done
 
-- [ ] `ZENDESK_SUBDOMAIN`, `ZENDESK_EMAIL`, `ZENDESK_API_TOKEN` are in `/opt/data/.env` with `chmod 600`; none are in `config.yaml` or chat.
-- [ ] Token access is enabled in Admin Center and the token owner has admin role.
-- [ ] `GET /users/me.json` from inside the container returns `200`.
-- [ ] `GET /search.json?query=type:ticket+status:open` returns `200`.
-- [ ] A chat-driven Zendesk ticket query returns real (or empty-valid) data.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if all 3 vars present, unless `FORCE=1`)
+- [ ] HARD GATE passed: subdomain matches `[A-Za-z0-9-]{1,63}`; email is email-shaped; token ≥20 chars; live `/users/me.json` returned 200; admin role (or warning printed)
+- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
+- [ ] All 3 vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: `/users/me.json` from inside container returned 200
+- [ ] Smoke test: `/search.json` returned 200
+- [ ] Generic HTTP tool layer documented (base URL + Basic auth + `/token` suffix)
+- [ ] Rollback function defined; token revocation instructions included
 
-See `reference/TROUBLESHOOTING.md` for gateway reload, base64 credential, and Basic-vs-Bearer auth failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, Basic-vs-
+Bearer, and `/token` suffix failure modes.
