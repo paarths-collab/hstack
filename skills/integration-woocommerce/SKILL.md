@@ -1,142 +1,290 @@
 ---
 name: integration-woocommerce
-description: Connect a WooCommerce store (WordPress ecommerce) to a running Hermes agent using a REST API consumer key and secret. Use when the user wants Hermes to read or update products, orders, customers, or coupons on a WooCommerce store.
+description: Connect a WooCommerce store (WordPress ecommerce — products, orders, customers, coupons) to a self-hosted Hermes Agent over SSH using REST consumer key/secret pair. Path A — official stdio MCP proxy (@automattic/mcp-wordpress-remote). Path B — REST Basic over HTTPS. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-woocommerce — connect WooCommerce to Hermes
+# /integration-woocommerce — connect WooCommerce to a remote Hermes (SSH-first)
 
-You are the engineer connecting WooCommerce to a running Hermes agent. WooCommerce is the
-agent's product catalogue, order book, and customer record for WordPress-hosted stores.
-Work autonomously; stop only for the two things a machine cannot do: minting the REST API
-key pair inside the WordPress admin, and confirming the store URL is HTTPS-reachable.
+You are the engineer connecting WooCommerce to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
+as root against the VPS. The user does two things a machine cannot:
 
-**Honest auth picture (verified 2026-06):** Automattic ships an official MCP integration
-for WooCommerce, but it is a **local stdio proxy** (`@automattic/mcp-wordpress-remote`) that
-translates MCP calls into HTTPS requests against `https://<store>/wp-json/woocommerce/mcp`.
-Auth is **not** OAuth and **not** a bearer token — it is a static `consumer_key:consumer_secret`
-pair passed in the `X-MCP-API-Key` header. The endpoint is flagged a developer preview and
-"may change in future releases." Because the proxy is stdio, we register it through the
-Hermes stdio MCP path, not the HTTP `/hermes-mcp-add` probe flow. Path B (direct REST) is the
-fallback for builds that cannot launch stdio MCP servers.
+1. Mint the REST API consumer key + secret in WP admin (WooCommerce → Settings → Advanced
+   → REST API → Add key → pick `Read` or `Read/Write` → Generate; secret shown ONCE).
+2. Confirm the store URL is HTTPS-reachable (real cert, not self-signed).
 
-## Before you start — gather (ask once)
+Everything else — credential storage, live API verification, MCP registration, gateway
+reload, smoke test — runs on the VPS via SSH, idempotently with a rollback path.
 
-1. **Store base URL** — `https://<store-domain>` (HTTPS required; HTTP is rejected). The
-   WooCommerce REST API lives at `<store>/wp-json/wc/v3` and the MCP endpoint at
-   `<store>/wp-json/woocommerce/mcp`.
-2. **REST API consumer key + secret** — mint at **WordPress admin → WooCommerce →
-   Settings → Advanced → REST API → Add key**. Pick a WordPress user with the right caps
-   (admin for full read/write), set **Permissions** to `Read/Write` (or `Read` for read-only
-   agents), click **Generate API key**. Copy both values immediately — the secret is shown
-   **once**. Keys look like `ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` and
-   `cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`.
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Honest auth picture (verified 2026-06):** Automattic ships an **official MCP integration**
+for WooCommerce — a **local stdio proxy** (`@automattic/mcp-wordpress-remote`) that translates
+MCP calls into HTTPS requests against `https://<store>/wp-json/woocommerce/mcp`. Auth is NOT
+OAuth and NOT a bearer — it's the consumer key+secret pair in the `X-MCP-API-Key: ck:cs`
+header. Flagged developer preview ("may change in future releases").
 
-Set shell vars from answers (never log the secret):
-```bash
-AGENT=<container-name>          # e.g. hermes-agent-mxlc-hermes-agent-1
-STORE_URL=https://<store>       # no trailing slash
-CK=ck_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-CS=cs_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-```
+Two paths:
+- **Path A (preferred — stdio MCP):** the official Automattic proxy, registered as a stdio
+  command MCP. Requires `npx` on the VPS.
+- **Path B (fallback — REST):** generic HTTP tool hits `https://<store>/wp-json/wc/v3` with
+  HTTP Basic (ck as username, cs as password — over HTTPS only; HTTP rejects Basic).
+
+**Critical:** HTTPS is mandatory. Over HTTP, WooCommerce REST falls back to OAuth 1.0a
+one-legged signing (timestamp-sensitive) — much more complex and not what this skill wires.
 
 ---
 
-## Step 1 — store the credentials in the Hermes runtime .env (chmod 600)
+## Before you start — gather (ask once, in one batch)
 
-Write all three values to `/opt/data/.env` inside the container via `hermes config set` so
-Hermes owns the write. Never `echo >>` (it can merge onto a prior line) and never put
-secrets in `config.yaml`.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$WOOCOMMERCE_URL` | Store base URL `https://<store>` (NO trailing slash, HTTPS only) | The store's URL |
+| `$WOOCOMMERCE_CONSUMER_KEY` | `ck_...` consumer key | WP admin → WooCommerce → Settings → Advanced → REST API → Add key → Generate |
+| `$WOOCOMMERCE_CONSUMER_SECRET` | `cs_...` consumer secret (shown ONCE) | Same flow — copy immediately on creation |
+| `$WIRE_PATH` *(optional)* | `A` (stdio MCP, default) or `B` (REST) | A requires `npx` on the VPS |
+
+Confirm SSH access:
 
 ```bash
-docker exec -i -u hermes "$AGENT" hermes config set WOOCOMMERCE_URL "$STORE_URL"
-docker exec -i -u hermes "$AGENT" hermes config set WOOCOMMERCE_CONSUMER_KEY "$CK"
-docker exec -i -u hermes "$AGENT" hermes config set WOOCOMMERCE_CONSUMER_SECRET "$CS"
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-Verify the vars landed (prints `3`, never the values):
+---
+
+## Step 1 — verify Hermes is reachable on the VPS
+
 ```bash
-docker exec "$AGENT" sh -c "grep -cE '^WOOCOMMERCE_(URL|CONSUMER_KEY|CONSUMER_SECRET)=' /opt/data/.env"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-> If your Hermes build has no `config set` subcommand, use the sed-inject pattern from
-> `/hermes-mcp-add`. Use the `|` delimiter — `ck_`/`cs_` tokens contain `/` and `+` in some
-> WordPress generators:
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^WOOCOMMERCE_(URL|CONSUMER_KEY|CONSUMER_SECRET)=' ~/.hermes/.env 2>/dev/null" || echo 0)
+ALREADY_MCP=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci woocommerce" || echo 0)
+if [ "$COUNT" = "3" ] && [ "${FORCE:-0}" != "1" ]; then
+  if [ "${WIRE_PATH:-A}" = "A" ] && [ "$ALREADY_MCP" -gt 0 ]; then
+    echo "WooCommerce already wired (Path A). Set FORCE=1 to rewire."; exit 0
+  fi
+  if [ "${WIRE_PATH:-A}" = "B" ]; then
+    echo "WooCommerce credentials present (Path B). Set FORCE=1 to rewire."; exit 0
+  fi
+fi
+```
+
+---
+
+## Step 3 — HARD GATE (HTTPS + format + live REST verify + npx for Path A)
+
+```bash
+# URL must be HTTPS, no trailing slash
+printf '%s' "$WOOCOMMERCE_URL" | grep -qE '^https://[^[:space:]]+[^/]$' \
+  || { echo "ABORT: WOOCOMMERCE_URL must be 'https://<host>' (HTTPS only, no trailing slash). HTTP rejected — WooCommerce Basic auth only works over HTTPS."; exit 1; }
+
+# Key/secret prefixes
+printf '%s' "$WOOCOMMERCE_CONSUMER_KEY" | grep -qE '^ck_[A-Za-z0-9]+$' \
+  || { echo "ABORT: WOOCOMMERCE_CONSUMER_KEY must start with 'ck_'."; exit 1; }
+printf '%s' "$WOOCOMMERCE_CONSUMER_SECRET" | grep -qE '^cs_[A-Za-z0-9]+$' \
+  || { echo "ABORT: WOOCOMMERCE_CONSUMER_SECRET must start with 'cs_'."; exit 1; }
+
+# Live REST verify (proves URL + ck/cs + HTTPS + WooCommerce enabled)
+HTTP=$(curl -sS -o /tmp/wc.json -w '%{http_code}' --max-time 10 \
+  -u "$WOOCOMMERCE_CONSUMER_KEY:$WOOCOMMERCE_CONSUMER_SECRET" \
+  "$WOOCOMMERCE_URL/wp-json/wc/v3/products?per_page=1" 2>/dev/null) || HTTP=000
+case "$HTTP" in
+  200) echo "WooCommerce REST OK." ;;
+  401) echo "ABORT: 401 — credentials rejected or store falling back to OAuth (HTTPS required)."; exit 1 ;;
+  403) echo "ABORT: 403 — security plugin blocking /wp-json/ ?"; exit 1 ;;
+  404) echo "ABORT: 404 — WooCommerce REST not enabled at $WOOCOMMERCE_URL/wp-json/wc/v3."; exit 1 ;;
+  *)   echo "ABORT: unexpected HTTP $HTTP."; cat /tmp/wc.json | head -3; exit 1 ;;
+esac
+rm -f /tmp/wc.json
+
+# Path A: require npx on VPS
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  ssh "$VPS_USER@$VPS_IP" "command -v npx >/dev/null 2>&1" \
+    || { echo "ABORT: Path A requires npx on the VPS. Install Node.js or pick Path B (WIRE_PATH=B)."; exit 1; }
+fi
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+PATH_CHOSEN=${WIRE_PATH:-A}
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  Path: $PATH_CHOSEN
+
+  Always:
+    1. Write WOOCOMMERCE_URL ($WOOCOMMERCE_URL)
+    2. Write WOOCOMMERCE_CONSUMER_KEY (prefix ck_)
+    3. Write WOOCOMMERCE_CONSUMER_SECRET (length ${#WOOCOMMERCE_CONSUMER_SECRET}, prefix cs_)
+    4. chmod 600 ~/.hermes/.env
+
+  Path A (stdio MCP):
+    5. Register MCP: hermes mcp add woocommerce --command npx --args -y,@automattic/mcp-wordpress-remote@latest
+       --env WP_API_URL + CUSTOM_HEADERS containing X-MCP-API-Key
+    6. Reload gateway: stop + run
+    7. Verify in logs: grep "registered.*woocommerce"
+
+  Path B (REST):
+    5. No MCP registration; generic HTTP tool reads env, uses HTTP Basic
+    6. Reload gateway: stop + run
+    7. Smoke test: GET /wp-json/wc/v3/products?per_page=1 — expect 200
+
+Secrets are NEVER printed in plaintext.
+HTTP/non-HTTPS rejected. Self-signed certs rejected (Basic auth requires real TLS).
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write env (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set WOOCOMMERCE_URL '$WOOCOMMERCE_URL'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set WOOCOMMERCE_CONSUMER_KEY '$WOOCOMMERCE_CONSUMER_KEY'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set WOOCOMMERCE_CONSUMER_SECRET '$WOOCOMMERCE_CONSUMER_SECRET'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^WOOCOMMERCE_(URL|CONSUMER_KEY|CONSUMER_SECRET)=' ~/.hermes/.env" || echo 0)
+[ "$COUNT" = "3" ] || { echo "FAIL: env vars did not all land (got $COUNT, need 3). Rolling back."; rollback; exit 1; }
+```
+
+> Sed fallback (pipe delimiter — secrets may contain `/+=`):
 > ```bash
-> docker exec "$AGENT" sh -c "
->   for k in WOOCOMMERCE_URL WOOCOMMERCE_CONSUMER_KEY WOOCOMMERCE_CONSUMER_SECRET; do
->     grep -q \"^\$k=\" /opt/data/.env || printf '%s=\n' \"\$k\" >> /opt/data/.env
+> ssh "$VPS_USER@$VPS_IP" "
+>   for KV in 'WOOCOMMERCE_URL=$WOOCOMMERCE_URL' 'WOOCOMMERCE_CONSUMER_KEY=$WOOCOMMERCE_CONSUMER_KEY' 'WOOCOMMERCE_CONSUMER_SECRET=$WOOCOMMERCE_CONSUMER_SECRET'; do
+>     K=\$(printf '%s' \"\$KV\" | cut -d= -f1)
+>     grep -q \"^\$K=\" ~/.hermes/.env || printf '%s\n' \"\$K=\" >> ~/.hermes/.env
+>     sed -i \"s|^\$K=.*|\$KV|\" ~/.hermes/.env
 >   done
+>   chmod 600 ~/.hermes/.env
 > "
-> docker exec "$AGENT" sh -c "sed -i 's|^WOOCOMMERCE_URL=.*|WOOCOMMERCE_URL=${STORE_URL}|' /opt/data/.env"
-> docker exec "$AGENT" sh -c "sed -i 's|^WOOCOMMERCE_CONSUMER_KEY=.*|WOOCOMMERCE_CONSUMER_KEY=${CK}|' /opt/data/.env"
-> docker exec "$AGENT" sh -c "sed -i 's|^WOOCOMMERCE_CONSUMER_SECRET=.*|WOOCOMMERCE_CONSUMER_SECRET=${CS}|' /opt/data/.env"
-> docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
 > ```
 
+Never `echo >>`. Never put the secret in `config.yaml`.
+
 ---
 
-## Step 2 — connect WooCommerce. Pick the path that matches your Hermes build.
+## Step 6 — wire the chosen path
 
-A static credential pair alone does **not** give the agent tools. Two verified options:
-
-### Path A (preferred) — official stdio MCP proxy (`@automattic/mcp-wordpress-remote`)
-
-The official proxy reads the consumer key/secret and exposes WooCommerce products / orders /
-customers as MCP tools. It is a **local stdio** server (run with `npx`), so it is added to
-Hermes as a command-based MCP, not via the HTTP probe flow in `/hermes-mcp-add`. The proxy
-requires `WP_API_URL` and a `CUSTOM_HEADERS` JSON blob containing `X-MCP-API-Key`. Register
-it if your Hermes supports stdio MCP servers:
+### Path A (stdio MCP — default, preferred)
 
 ```bash
-docker exec -i -u hermes "$AGENT" \
-  hermes mcp add woocommerce \
-    --command "npx" \
-    --args "-y,@automattic/mcp-wordpress-remote@latest" \
-    --env "WP_API_URL=${STORE_URL}/wp-json/woocommerce/mcp" \
-    --env 'CUSTOM_HEADERS={"X-MCP-API-Key":"${WOOCOMMERCE_CONSUMER_KEY}:${WOOCOMMERCE_CONSUMER_SECRET}"}'
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  ssh "$VPS_USER@$VPS_IP" "
+    hermes mcp add woocommerce \
+      --command 'npx' \
+      --args '-y,@automattic/mcp-wordpress-remote@latest' \
+      --env 'WP_API_URL=$WOOCOMMERCE_URL/wp-json/woocommerce/mcp' \
+      --env 'CUSTOM_HEADERS={\"X-MCP-API-Key\":\"\${WOOCOMMERCE_CONSUMER_KEY}:\${WOOCOMMERCE_CONSUMER_SECRET}\"}'
+  "
+fi
 ```
 
-Use `${WOOCOMMERCE_CONSUMER_KEY}` / `${WOOCOMMERCE_CONSUMER_SECRET}` indirection so the
-secrets stay only in `/opt/data/.env`.
+### Path B (REST)
 
-> The flag names (`--command` / `--args` / `--env`) vary by Hermes version. Run
-> `docker exec -u hermes "$AGENT" hermes mcp add --help` first and match its stdio syntax.
-> If your build is HTTP-MCP-only and cannot launch a stdio command, use Path B.
+Generic HTTP tool layer reads env and uses HTTP Basic over HTTPS:
 
-### Path B — generic HTTP tool against the WooCommerce REST API
+- **Base URL:** `${WOOCOMMERCE_URL}/wp-json/wc/v3`
+- **Auth:** HTTP Basic — `username=${WOOCOMMERCE_CONSUMER_KEY}`, `password=${WOOCOMMERCE_CONSUMER_SECRET}`
+- **Content-Type:** `application/json`
 
-If you cannot run the stdio proxy, point a generic HTTP/tool capability at the REST API
-directly. WooCommerce REST supports HTTP Basic over HTTPS using the consumer key as
-username and the consumer secret as password.
+Common endpoints:
+- `GET /products`, `GET /products/{id}`, `POST /products`, `PATCH /products/{id}`
+- `GET /orders`, `GET /orders/{id}`, `POST /orders/{id}/notes`
+- `GET /customers`, `GET /customers/{id}`
+- `GET /reports/sales`
+- Pagination: `per_page=100` (default 10); follow `X-WP-TotalPages` header
 
-- **Base URL:** `${STORE_URL}/wp-json/wc/v3`
-- **Auth:** HTTP Basic, `username=${WOOCOMMERCE_CONSUMER_KEY}` /
-  `password=${WOOCOMMERCE_CONSUMER_SECRET}` (HTTPS only; over HTTP the API rejects Basic and
-  requires OAuth 1.0a one-legged signing instead — do not use HTTP).
-- **Content type:** `Content-Type: application/json`
-
-Common endpoints: `GET /products`, `GET /products/{id}`, `POST /products`,
-`GET /orders`, `GET /orders/{id}`, `POST /orders/{id}/notes`, `GET /customers`,
-`GET /reports/sales`.
-
-> Do **not** try to register `${STORE_URL}/wp-json/woocommerce/mcp` through
-> `/hermes-mcp-add` as if it were a bearer-token MCP — it expects the
-> `X-MCP-API-Key: ck:cs` header, not `Authorization: Bearer ...`.
+Do NOT try to register `${WOOCOMMERCE_URL}/wp-json/woocommerce/mcp` as a bearer-token MCP —
+it expects `X-MCP-API-Key: ck:cs`, not `Authorization: Bearer ...`.
 
 ---
 
-## Step 3 — reload the gateway so the new env / MCP is picked up
-
-The gateway reads `.env` once at startup. Use stop + run (not `restart`) so the new env is
-re-read cleanly — same rule as `/hermes-mcp-add`.
+## Step 7 — reload the gateway (stop + run, NOT restart)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
 sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 8 — verify
+
+```bash
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  REGISTERED=0
+  for i in $(seq 1 6); do
+    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
+         | grep -qiE "registered.*tool.*woocommerce|MCP server.*woocommerce|wordpress-remote"; then
+      REGISTERED=1; echo "OK: woocommerce MCP registered."; break
+    fi
+    sleep 5
+  done
+  [ "$REGISTERED" = "1" ] || { echo "FAIL: woocommerce not in logs. Rolling back."; rollback; exit 1; }
+fi
+
+# Smoke test for both paths
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -u \"\$WOOCOMMERCE_CONSUMER_KEY:\$WOOCOMMERCE_CONSUMER_SECRET\" \
+    \"\$WOOCOMMERCE_URL/wp-json/wc/v3/products?per_page=1\"
+")
+case "$HTTP" in
+  200) echo "OK: WooCommerce REST reachable from VPS." ;;
+  401) echo "FAIL: 401 from VPS. Rolling back."; rollback; exit 1 ;;
+  *) echo "WARN: HTTP $HTTP." ;;
+esac
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  if [ "${WIRE_PATH:-A}" = "A" ]; then
+    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove woocommerce 2>/dev/null || true"
+  fi
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^WOOCOMMERCE_URL=/d;
+            /^WOOCOMMERCE_CONSUMER_KEY=/d;
+            /^WOOCOMMERCE_CONSUMER_SECRET=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Revoke the API key at WP admin → WooCommerce → Settings → Advanced → REST API if compromised."
+}
 ```
 
 ---
@@ -145,47 +293,38 @@ sleep 8
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Using HTTP instead of HTTPS | WooCommerce rejects Basic auth over plain HTTP and falls back to OAuth 1.0a signing. | Always use `https://`. Get a real cert; do not bypass. |
-| 2 | Treating the MCP endpoint as bearer-auth | The proxy needs `X-MCP-API-Key: ck:cs`, not `Authorization: Bearer`. Probe flow misreads this as broken. | Use Path A stdio proxy, or Path B REST. |
-| 3 | Consumer secret lost | The secret is shown **once** in the admin. Reopening the key only shows the key. | Mint, copy both, paste straight into `config set`. If lost, revoke and regenerate. |
-| 4 | Permissions too narrow | A `Read` key returns `401` on writes; the agent looks broken. | Pick `Read/Write` unless the agent is intentionally read-only. |
-| 5 | Server clock skew (OAuth path) | OAuth 1.0a rejects timestamps outside a 15-minute window. | Use Basic over HTTPS (no timestamp), or sync NTP on the store. |
-| 6 | Secret in `config.yaml` or compose `.env` | Wrong file → world-readable or not loaded by runtime. | Only `/opt/data/.env`, `chmod 600`, via `config set` / sed. |
-| 7 | Pagination missed | WooCommerce REST paginates at 10 by default; agents see partial data. | Pass `per_page=100` and follow the `X-WP-TotalPages` header. |
-| 8 | Security plugin blocking REST | Wordfence / iThemes can block `/wp-json/` for non-logged-in callers. | Whitelist the agent's egress IP or the REST namespace. |
-
----
-
-## Verify
-
-Confirm the credentials and a live call before declaring done.
-
-1. **Tools registered (Path A):**
-   ```bash
-   docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-     | grep -iE "registered.*tool|MCP server.*woocommerce|wordpress-remote" | tail -5
-   ```
-2. **Real API call returns data (works for both paths):** run inside the container so the
-   credentials come from the runtime env and are never printed:
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -u "$WOOCOMMERCE_CONSUMER_KEY:$WOOCOMMERCE_CONSUMER_SECRET" \
-       "$WOOCOMMERCE_URL/wp-json/wc/v3/products?per_page=1"'
-   ```
-   `200` = credentials valid and scoped. `401` = bad key/secret or HTTP-not-HTTPS (re-check
-   step 1). `404` = WooCommerce REST not enabled on that site.
-3. **End-to-end from chat:** `@<agent> list the last 3 orders in WooCommerce` should return
-   real order IDs and totals.
+| 1 | HTTP instead of HTTPS | WooCommerce rejects Basic auth over HTTP and falls back to OAuth 1.0a signing (timestamp-sensitive) | Step 3 hard-rejects non-https |
+| 2 | Treating MCP endpoint as bearer-auth | The Automattic proxy uses `X-MCP-API-Key: ck:cs`, NOT `Authorization: Bearer` | This skill uses the proxy correctly via Path A; Path B uses Basic |
+| 3 | Consumer secret lost | Shown ONCE in admin; reopening only shows the key | Mint, copy both, paste straight into env. If lost: revoke + regenerate |
+| 4 | Key permissions too narrow | `Read` key → 401 on writes; agent looks broken | Pick `Read/Write` unless read-only by intent |
+| 5 | Server clock skew (OAuth fallback) | OAuth 1.0a rejects timestamps outside 15-min window | Use Basic over HTTPS (no timestamp); sync NTP on the store |
+| 6 | Self-signed TLS cert | Basic auth + TLS verify required | Use a real cert (Let's Encrypt is free) |
+| 7 | Pagination missed | Default per_page=10; agents see partial data | Pass `per_page=100`; follow `X-WP-TotalPages` |
+| 8 | Security plugin (Wordfence, iThemes) blocking /wp-json/ | 403 even with valid credentials | Whitelist agent egress IP OR /wp-json/ namespace |
+| 9 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 10 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 11 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 12 | sed with `/` delimiter | URL contains `/`, secrets may contain `+/=` | Always `\|` delimiter |
+| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
+| 14 | Confusing the MCP "developer preview" with stable | Auto preview API may change | Pin `@automattic/mcp-wordpress-remote@<version>` not `@latest` in production |
 
 ---
 
 ## Definition of done
 
-- [ ] `WOOCOMMERCE_URL`, `WOOCOMMERCE_CONSUMER_KEY`, `WOOCOMMERCE_CONSUMER_SECRET` are in `/opt/data/.env` with `chmod 600`; none are in `config.yaml` or chat.
-- [ ] WooCommerce is connected via Path A (stdio MCP tools registered) or Path B (REST base documented and reachable).
-- [ ] `GET /wp-json/wc/v3/products?per_page=1` from inside the container returns `200`.
-- [ ] A chat-driven WooCommerce query (orders, products, or customers) returns real data.
-- [ ] Key permissions match the agent's intended scope (`Read` vs `Read/Write`).
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if already wired for chosen path, unless `FORCE=1`)
+- [ ] HARD GATE passed: URL is HTTPS (no trailing slash); ck_/cs_ prefixes; live `/wp-json/wc/v3/products?per_page=1` returned 200; Path A → npx present
+- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
+- [ ] All 3 env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] Path A: stdio MCP registered with X-MCP-API-Key header in CUSTOM_HEADERS env
+- [ ] Path B: generic HTTP tool documented (Basic over HTTPS)
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: `/wp-json/wc/v3/products?per_page=1` from inside container returned 200
+- [ ] Path A: logs show `registered N tool(s)` within 30s
+- [ ] Rollback function defined; key revocation instructions included
+- [ ] User informed of HTTPS requirement, key permissions, and developer-preview status
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, HTTPS,
+and WooCommerce REST permission failure modes.
