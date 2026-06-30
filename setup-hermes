@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# hstack setup — registers the hstack skills with Hermes Agent itself.
+# Safe to re-run (idempotent). No sudo. No network calls.
+#
+# Hermes reads skills from ~/.hermes/skills/ (or /opt/data/skills/ inside the
+# official Docker image). Hermes is the agent that can SELF-DEPLOY its own
+# integrations: install hstack on the Hermes box, then tell Hermes "connect
+# Notion" via Telegram and it will read /integration-notion and wire itself.
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_SRC="$HSTACK_DIR/skills"
+HERMES_SKILLS="${HERMES_SKILLS_DIR:-$HOME/.hermes/skills}"
+
+echo "hstack setup (Hermes self-deploy)"
+echo "  source : $SKILLS_SRC"
+echo "  target : $HERMES_SKILLS"
+echo
+
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup-hermes from inside the hstack repo."
+  exit 1
+}
+mkdir -p "$HERMES_SKILLS"
+
+count=0
+for dir in "$SKILLS_SRC"/*/; do
+  [ -f "$dir/SKILL.md" ] || continue
+  name="$(basename "$dir")"
+  link="$HERMES_SKILLS/$name"
+  if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
+  if ln -s "$dir" "$link" 2>/dev/null; then :; else cp -r "$dir" "$link"; fi
+  count=$((count + 1))
+done
+echo "Registered $count skills for Hermes."
+
+# If Hermes is running, hot-reload skills so they show up in /skills immediately.
+if command -v hermes >/dev/null 2>&1; then
+  if hermes skills reload >/dev/null 2>&1; then
+    echo "Hot-reloaded skills in running Hermes."
+  else
+    echo "Tip: restart Hermes (gateway stop && gateway run) to pick up new skills."
+  fi
+fi
+
+echo
+echo "Done. In Hermes (any platform — Telegram, Discord, Slack, WhatsApp, CLI), say:"
+echo "  /skills list           # see all hstack skills"
+echo "  /skills run integration-notion   # wire Notion via hstack"

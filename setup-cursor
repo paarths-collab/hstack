@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# hstack setup — registers the hstack skills with Cursor.
+# Safe to re-run (idempotent). No sudo. No network calls.
+#
+# Cursor reads .mdc (Markdown Composer) rules from .cursor/rules/ in the
+# project root. We expose each skill as an `Agent Requested` rule (Cursor's
+# closest analog to a slash command). Toggle "Manual" mode in Cursor Settings
+# to invoke them explicitly.
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_SRC="$HSTACK_DIR/skills"
+CURSOR_RULES="${CURSOR_RULES_DIR:-$HOME/.cursor/rules}"
+
+echo "hstack setup (Cursor)"
+echo "  source : $SKILLS_SRC"
+echo "  target : $CURSOR_RULES"
+echo
+
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup-cursor from inside the hstack repo."
+  exit 1
+}
+mkdir -p "$CURSOR_RULES"
+
+count=0
+for dir in "$SKILLS_SRC"/*/; do
+  [ -f "$dir/SKILL.md" ] || continue
+  name="$(basename "$dir")"
+  out="$CURSOR_RULES/$name.mdc"
+
+  # Cursor MDC rules use frontmatter: description / globs / alwaysApply.
+  # Strip the source SKILL.md frontmatter and inject Cursor's.
+  desc=$(awk '/^description:/{sub(/^description: */,""); print; exit}' "$dir/SKILL.md")
+  {
+    echo "---"
+    echo "description: ${desc:-hstack skill: $name}"
+    echo "globs:"
+    echo "alwaysApply: false"
+    echo "---"
+    echo
+    # body starts after the second '---' line of the source frontmatter
+    awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$dir/SKILL.md"
+  } > "$out"
+
+  count=$((count + 1))
+done
+echo "Registered $count skills for Cursor."
+
+echo
+echo "Done. In Cursor: Settings > Rules > Agent Rules. The hstack skills appear"
+echo "as Agent-Requested rules. To invoke /hermes-deploy, ask the agent to follow"
+echo "the hermes-deploy rule from hstack."
