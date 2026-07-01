@@ -1,202 +1,287 @@
 ---
 name: integration-vercel
-description: Connect Vercel (frontend deploys + project/deployment management) to a running Hermes agent via the Vercel REST API and a static access token. Use when the user wants Hermes to trigger or inspect Vercel deployments, list projects, or read build/runtime logs.
+description: Connect Vercel (frontend deploys, project/deployment management, logs) to a self-hosted Hermes Agent over SSH via the REST API and a static bearer token. Refuses the official OAuth-only/allowlisted MCP (dead-end for Hermes). Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-vercel — connect Vercel to Hermes
+# /integration-vercel — connect Vercel to a remote Hermes (SSH-first)
 
-You are the engineer connecting Vercel to a running Hermes agent so it can trigger and inspect
-frontend deployments, list projects, and read deployment logs. Work autonomously; stop only for
-the one thing a machine cannot do: minting the access token in the Vercel dashboard.
+You are the engineer connecting Vercel to a self-hosted Hermes agent on the user's VPS. You
+(the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as
+root against the VPS. The user does one thing a machine cannot: mint the access token at
+https://vercel.com/account/tokens.
 
-Read the honest state of play before you start:
+Everything else — token storage, live REST verification, team-scope detection, gateway
+reload, smoke test — runs on the VPS via SSH, idempotently with a rollback path.
 
-- **Vercel ships an official remote MCP server at `https://mcp.vercel.com`** (verified at
-  https://vercel.com/docs/agent-resources/vercel-mcp, last updated 2026-06-11). It is **OAuth-only,
-  read-only, and restricted to a Vercel-maintained allowlist of approved clients** (Claude Code,
-  Claude.ai, ChatGPT, Cursor, VS Code, etc.). A self-hosted Hermes agent is **not** on that
-  allowlist and there is **no static-token / bearer path** into it. So you cannot wire
-  `https://mcp.vercel.com` through `/hermes-mcp-add` — it would never get past the OAuth consent
-  + allowlist gate. Do not attempt it.
-- **The supported path for Hermes is the Vercel REST API** (`https://api.vercel.com`) with a
-  static Bearer access token. This keeps the one-click promise. That is what this skill does.
+**Honest auth picture (verified 2026-06):** Vercel ships an official remote MCP at
+`https://mcp.vercel.com` (https://vercel.com/docs/agent-resources/vercel-mcp, updated
+2026-06-11). It is **OAuth-only, read-only, and restricted to a Vercel-maintained allowlist
+of approved clients** (Claude Code, Claude.ai, ChatGPT, Cursor, VS Code, etc.). A
+self-hosted Hermes agent is **NOT** on that allowlist and there's no static-token path. So
+the official MCP is a **dead end** for Hermes — this skill refuses to wire it.
 
-## Before you start — gather (ask once)
+The supported headless path is the **Vercel REST API** (`https://api.vercel.com`) with a
+static Bearer token. That's what this skill wires.
 
-1. **Vercel access token** — the user mints it at **https://vercel.com/account/tokens**
-   (Settings → Tokens on the Personal Account; make sure the top-left dropdown shows the Personal
-   Account, not a Team). Click **Create Token**, name it `hermes-agent`, choose the scope (a
-   specific Team if their projects live under a Team, otherwise Full Account), set an expiry if
-   desired, and copy the value. The token is shown **once** and can never be retrieved again.
-   Token form: an opaque ~24-char string (no fixed public prefix). Used as `Authorization: Bearer <token>`.
-2. **Team ID or slug (if applicable)** — if the user's projects live under a Vercel Team, you need
-   the team scope for every call (`?teamId=<id>` or `?slug=<slug>`). Personal-account projects need none.
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Team-scope footgun:** A valid personal-account token returns 200 from `/v2/user` AND an
+empty project list when the projects live under a Team. Looks like success; isn't.
+Step 3 detects this and prompts for `$VERCEL_TEAM_ID`.
 
-Set shell vars from the answers (never echo `$TOKEN`):
+---
+
+## Before you start — gather (ask once, in one batch)
+
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$VERCEL_TOKEN` | Personal access token (shown ONCE) | https://vercel.com/account/tokens → Create Token → choose Personal/Team scope → name `hermes-agent` |
+| `$VERCEL_TEAM_ID` *(optional)* | Team ID or slug if projects live under a Team | Settings → General → Team ID |
+
+Confirm SSH access:
+
 ```bash
-AGENT=<container-name>     # e.g. hermes-agent-mxlc-hermes-agent-1
-TOKEN=<vercel-token>       # from https://vercel.com/account/tokens
-TEAM=<team-id-or-slug>     # optional; leave empty for a personal account
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-## Step 1 — validate the token against the REST API (before storing anything)
+---
 
-Confirm the token works and is scoped correctly. The `/v2/user` endpoint is the cheapest check.
-
-```bash
-curl -sS -o /dev/null -w "user = %{http_code}\n" \
-  -H "Authorization: Bearer $TOKEN" \
-  https://api.vercel.com/v2/user
-```
-
-- `200` → token is valid.
-- `401 / 403` → token is wrong, expired, or lacks scope. Re-mint at the dashboard; do not store it.
-
-Then confirm it can see the projects you expect (this is the read your agent will rely on):
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-# Personal account:
-curl -sS -H "Authorization: Bearer $TOKEN" \
-  "https://api.vercel.com/v9/projects?limit=5"
-
-# Team-scoped (append teamId or slug to EVERY call):
-curl -sS -H "Authorization: Bearer $TOKEN" \
-  "https://api.vercel.com/v9/projects?limit=5&teamId=$TEAM"
-```
-
-An empty `{"projects":[]}` on a personal account is normal if all projects live under a Team —
-that is the signal you need the `teamId`/`slug` scope on every request. Sort that out now, not later.
-
-## Step 2 — write the token to the Hermes runtime `.env` (chmod 600)
-
-No first-party MCP server is reachable for Hermes (see the note at the top), so the credential
-lives in the Hermes runtime env file `/opt/data/.env` inside the container, written via
-`hermes config set` so Hermes owns the file. The env var is `VERCEL_TOKEN`.
-
-```bash
-# Write the secret into the Hermes runtime env (NOT config.yaml, NOT the compose .env)
-docker exec -i -u hermes "$AGENT" hermes config set VERCEL_TOKEN "$TOKEN"
-
-# If the user's projects are under a Team, store the scope too:
-docker exec -i -u hermes "$AGENT" hermes config set VERCEL_TEAM_ID "$TEAM"
-
-# Lock the file down — it now holds a bearer credential
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
-```
-
-If `hermes config set` is unavailable in this build, inject directly with `sed`, mirroring the
-`/hermes-mcp-add` pattern — **use `|` as the sed delimiter** (tokens can contain `/ + =`) and
-**never `echo >>`** (it merges onto a line missing a trailing newline and corrupts the file):
-
-```bash
-docker exec "$AGENT" sh -c '
-  touch /opt/data/.env
-  if grep -q "^VERCEL_TOKEN=" /opt/data/.env; then
-    sed -i "s|^VERCEL_TOKEN=.*|VERCEL_TOKEN='"$TOKEN"'|" /opt/data/.env
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
   else
-    printf "VERCEL_TOKEN=%s\n" "'"$TOKEN"'" >> /opt/data/.env
+    echo "FAIL: hermes not found on host or in container"; exit 1
   fi
-  chmod 600 /opt/data/.env
-'
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-Verify the var landed without printing its value:
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
 ```bash
-docker exec "$AGENT" sh -c "grep -c '^VERCEL_TOKEN=' /opt/data/.env"   # should print 1
+HAS_TOKEN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^VERCEL_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
+if [ "$HAS_TOKEN" = "1" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Vercel already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
 ```
 
-## Step 3 — reload the gateway so the new env is read
+---
 
-The gateway reads `.env` once at startup. Use **stop + run**, not `restart` (Hermes does not
-always re-read env on `restart`):
+## Step 3 — HARD GATE (token sanity + live /v2/user + team-scope detection)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
+# Token sanity
+[ "${#VERCEL_TOKEN}" -ge 20 ] \
+  || { echo "ABORT: VERCEL_TOKEN looks too short (<20 chars)."; exit 1; }
+
+# Live /v2/user
+HTTP=$(curl -sS -o /tmp/v.json -w '%{http_code}' --max-time 10 \
+  -H "Authorization: Bearer $VERCEL_TOKEN" \
+  'https://api.vercel.com/v2/user' 2>/dev/null) || HTTP=000
+case "$HTTP" in
+  200)
+    USERNAME=$(grep -oE '"username":"[^"]+"' /tmp/v.json | head -1 | cut -d'"' -f4)
+    echo "Vercel API OK. Token belongs to: $USERNAME"
+    ;;
+  401|403) echo "ABORT: token rejected ($HTTP). Re-mint at https://vercel.com/account/tokens."; exit 1 ;;
+  *) echo "ABORT: unexpected HTTP $HTTP."; cat /tmp/v.json | head -3; exit 1 ;;
+esac
+rm -f /tmp/v.json
+
+# Team-scope detection: list projects WITHOUT team scope first
+PROJ_RESP=$(curl -sS --max-time 10 \
+  -H "Authorization: Bearer $VERCEL_TOKEN" \
+  'https://api.vercel.com/v9/projects?limit=1' 2>/dev/null) || true
+PROJ_COUNT=$(printf '%s' "$PROJ_RESP" | grep -oE '"projects":\[[^]]*\]' | grep -oE '"id":"prj_' | wc -l | tr -d ' ')
+if [ "$PROJ_COUNT" = "0" ] && [ -z "${VERCEL_TEAM_ID:-}" ]; then
+  echo "WARN: token returned empty project list with no team scope."
+  echo "      If projects live under a Team, set VERCEL_TEAM_ID to the team ID/slug."
+  echo "      (Otherwise this may just be an empty personal account — acceptable.)"
+fi
+
+# If team scope supplied, verify it
+if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+  TEAM_RESP=$(curl -sS --max-time 10 \
+    -H "Authorization: Bearer $VERCEL_TOKEN" \
+    "https://api.vercel.com/v9/projects?limit=1&teamId=$VERCEL_TEAM_ID" 2>/dev/null) || true
+  TEAM_PROJ_COUNT=$(printf '%s' "$TEAM_RESP" | grep -oE '"id":"prj_' | wc -l | tr -d ' ')
+  echo "Team-scoped projects visible: $TEAM_PROJ_COUNT (sample limit 1)"
+fi
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write VERCEL_TOKEN (length ${#VERCEL_TOKEN}) via 'hermes config set'
+  2. Write VERCEL_TEAM_ID (${VERCEL_TEAM_ID:-none}) if supplied
+  3. chmod 600 ~/.hermes/.env
+  4. Verify token landed (grep -c)
+  5. No MCP server registered (mcp.vercel.com is OAuth-only/allowlisted, refused)
+  6. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+  7. Smoke test from VPS: GET /v9/projects?limit=3 — expect 200
+
+Token is NEVER printed in plaintext beyond a length.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write the secret (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set VERCEL_TOKEN '$VERCEL_TOKEN'"
+if [ -n "${VERCEL_TEAM_ID:-}" ]; then
+  ssh "$VPS_USER@$VPS_IP" "hermes config set VERCEL_TEAM_ID '$VERCEL_TEAM_ID'"
+fi
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^VERCEL_TOKEN=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: token not written. Rolling back."; rollback; exit 1; }
+```
+
+> Sed fallback (pipe delimiter):
+> ```bash
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^VERCEL_TOKEN=' ~/.hermes/.env || printf 'VERCEL_TOKEN=\n' >> ~/.hermes/.env
+>   sed -i 's|^VERCEL_TOKEN=.*|VERCEL_TOKEN=$VERCEL_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
+> ```
+
+Never `echo >>`. Never put the token in `config.yaml`.
+
+---
+
+## Step 6 — wire the REST surface (no MCP to register)
+
+There is NO first-party Vercel MCP usable from Hermes (see auth picture). Skill does NOT
+attempt `hermes mcp add`. The agent's generic HTTP/tool layer reads env and calls:
+
+**Base URL:** `https://api.vercel.com`
+**Auth:** `Authorization: Bearer ${VERCEL_TOKEN}`
+**Team scope (if applicable):** append `?teamId=${VERCEL_TEAM_ID}` to EVERY request
+
+Common endpoints (the "frontend deploys" use case):
+
+| Action | Method + path |
+|---|---|
+| List projects | `GET /v9/projects` |
+| List deployments | `GET /v6/deployments?app=<project>` |
+| Get one deployment | `GET /v13/deployments/{idOrUrl}` |
+| Create a deployment (git-linked redeploy) | `POST /v13/deployments` with `deploymentId` of latest |
+| Read build/runtime logs | `GET /v3/deployments/{id}/events` |
+
+Non-git-linked projects need the full file manifest in `POST /v13/deployments` body — much
+heavier flow; prefer git-linked.
+
+---
+
+## Step 7 — reload the gateway (stop + run, NOT restart)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
 sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
 ```
 
-## Step 4 — give the agent the REST calls it needs
+---
 
-There is **no first-party Vercel MCP server usable with a static token** as of 2026-06, so expose
-Vercel to Hermes as REST calls the agent runs with `VERCEL_TOKEN`. The endpoints for the
-"frontend deploys" use case (all on base `https://api.vercel.com`, all `Authorization: Bearer $VERCEL_TOKEN`):
-
-| Action | Method + path | Notes |
-|--------|---------------|-------|
-| List projects | `GET /v9/projects` | append `?teamId=` / `?slug=` when team-scoped |
-| List deployments | `GET /v6/deployments` | filter with `?projectId=` or `?app=<name>` |
-| Get one deployment | `GET /v13/deployments/{idOrUrl}` | status, readyState, url |
-| Create a deployment | `POST /v13/deployments` | a git-linked project can deploy by ref; non-git needs the file set in the body |
-| Read build/runtime logs | `GET /v3/deployments/{id}/events` | follow build output |
-
-Trigger a redeploy of the latest production deployment of a git-linked project (the common
-"ship the frontend" path):
+## Step 8 — live smoke test (from inside the container)
 
 ```bash
-# 1. Find the project's latest deployment
-DEP=$(curl -sS -H "Authorization: Bearer $TOKEN" \
-  "https://api.vercel.com/v6/deployments?app=<project-name>&limit=1&target=production${TEAM:+&teamId=$TEAM}" \
-  | sed -n 's/.*"uid":"\([^"]*\)".*/\1/p' | head -1)
-
-# 2. Create a new deployment that redeploys it
-curl -sS -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  "https://api.vercel.com/v13/deployments?${TEAM:+teamId=$TEAM}" \
-  -d "{\"name\":\"<project-name>\",\"deploymentId\":\"$DEP\",\"target\":\"production\"}"
+ME_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H \"Authorization: Bearer \$VERCEL_TOKEN\" \
+    'https://api.vercel.com/v2/user'
+")
+PROJ_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  TQ=\$([ -n \"\$VERCEL_TEAM_ID\" ] && echo \"&teamId=\$VERCEL_TEAM_ID\" || echo '')
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H \"Authorization: Bearer \$VERCEL_TOKEN\" \
+    \"https://api.vercel.com/v9/projects?limit=3\$TQ\"
+")
+echo "Smoke: /v2/user=$ME_HTTP /v9/projects=$PROJ_HTTP"
+[ "$ME_HTTP" = "200" ] && [ "$PROJ_HTTP" = "200" ] \
+  || { echo "FAIL: smoke test. Rolling back."; rollback; exit 1; }
+echo "OK: Vercel REST reachable from VPS."
 ```
 
-If the project is **not** git-linked, `POST /v13/deployments` requires the full file manifest in the
-body — that is a heavier flow; prefer git-linked projects so a redeploy is one ID reference.
-Confirm the exact create-deployment body shape at
-https://vercel.com/docs/rest-api/deployments/create-a-new-deployment before relying on it.
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^VERCEL_TOKEN=/d;
+            /^VERCEL_TEAM_ID=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Revoke the token at https://vercel.com/account/tokens if compromised. Vercel auto-revokes tokens detected as leaked."
+}
+```
+
+---
 
 ## Pitfalls
 
-- **The official MCP is OAuth-only and allowlisted — it is a dead end for Hermes.** Do not waste a
-  cycle pointing `/hermes-mcp-add` at `https://mcp.vercel.com`; a self-hosted agent is not an
-  approved client and there is no bearer path. The MCP is also read-only, so even allowlisted
-  clients cannot create deployments through it. The REST API is the only way to *trigger* deploys.
-- **Team scope is silent.** A valid personal-account token returns `200` and an **empty** project
-  list when the projects live under a Team. You will think auth failed when it is just unscoped.
-  Always confirm with Step 1's project list and carry `teamId`/`slug` on every call.
-- **The token is shown once.** If it is lost, it cannot be retrieved — re-mint. Never paste it into
-  chat or `config.yaml`. If it is ever exposed, revoke it immediately at
-  https://vercel.com/account/tokens (Vercel also auto-revokes tokens it detects as leaked).
-- **Token expiry.** If the user set an `expiresAt`, calls start returning `403` after that date with
-  no other warning. A non-expiring token trades convenience for risk; recommend an expiry plus a
-  rotation reminder.
-- **Rate limits.** The REST API is rate-limited per token; a tight polling loop on
-  `/v6/deployments` will hit `429`. Poll deployment status on an interval (a few seconds), not in a
-  hot loop.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Trying to wire `mcp.vercel.com` for Hermes | MCP is OAuth-only + allowlisted (Hermes NOT on the list) — dead end | This skill refuses; uses REST only |
+| 2 | Team-scope silent empty list | Personal-account token returns 200 + empty `projects` when projects live under a Team | Step 3 detects + warns; set `VERCEL_TEAM_ID` |
+| 3 | Token shown once, lost | Cannot retrieve; must re-mint | Store immediately in `~/.hermes/.env` |
+| 4 | Vercel auto-revokes leaked tokens | If pasted in chat/PR, Vercel may revoke without warning | Never paste; only `~/.hermes/.env` |
+| 5 | Token expiry (`expiresAt`) | 403 after expiry with no warning | Set expiry + rotation reminder via `/hermes-cron` |
+| 6 | Rate limits | Tight polling on `/v6/deployments` → 429 | Poll every few seconds, not hot |
+| 7 | Mixing v9 / v6 / v13 endpoint versions | Different resources live on different API versions | Use the version per the endpoint table; don't guess |
+| 8 | Non-git-linked deployment without file manifest | `POST /v13/deployments` requires the full file set | Prefer git-linked projects; document the heavier flow |
+| 9 | Token in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 10 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 11 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 12 | sed with `/` delimiter | Token may contain `/+=` | Always `\|` delimiter |
+| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
 
-## Verify
-
-```bash
-# Token reachable from inside the container with the stored env:
-docker exec -u hermes "$AGENT" sh -c \
-  'curl -sS -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $VERCEL_TOKEN" https://api.vercel.com/v2/user'
-# Expect 200
-
-# Real data: list projects through the stored token
-docker exec -u hermes "$AGENT" sh -c \
-  'curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects?limit=3${VERCEL_TEAM_ID:+&teamId=$VERCEL_TEAM_ID}"'
-```
-
-Then, from the chat interface, ask the agent for a real read:
-```
-@<agent> list my Vercel projects and the status of the latest deployment
-```
-A populated project list (or a valid empty `{"projects":[]}` with correct scoping) is a pass. A
-`401`/`403` means the token or team scope is wrong — re-check Step 1.
+---
 
 ## Definition of done
 
-- [ ] Token validated against `https://api.vercel.com/v2/user` (`200`) before being stored.
-- [ ] `VERCEL_TOKEN` (and `VERCEL_TEAM_ID` if team-scoped) is in `/opt/data/.env`, `chmod 600`, and **not** in `config.yaml` or chat.
-- [ ] Gateway reloaded via `gateway stop` + `gateway run`; the container can reach the API with the stored env.
-- [ ] A real REST read returns project/deployment data (or a correctly-scoped empty set).
-- [ ] User told plainly: the official `https://mcp.vercel.com` MCP is OAuth-only/read-only/allowlisted and is not wired here; Hermes uses the REST API for deploys.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if token present, unless `FORCE=1`)
+- [ ] HARD GATE passed: token ≥20 chars; `/v2/user` returned 200 with a username; team-scope detected if projects appeared empty
+- [ ] Dry-run shown to user; user told plainly that `mcp.vercel.com` is NOT wired
+- [ ] `VERCEL_TOKEN` written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] `VERCEL_TEAM_ID` written if supplied
+- [ ] No MCP server registered (correctly — none exists for Hermes)
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: `/v2/user` AND `/v9/projects` from VPS both returned 200
+- [ ] REST surface documented (base URL + auth + version-per-endpoint table)
+- [ ] Rollback function defined; token revocation URL included
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and `.env` injection failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, scope,
+and Vercel team/personal-account failure modes.
