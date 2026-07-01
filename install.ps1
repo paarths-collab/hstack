@@ -50,7 +50,7 @@ $Tiers = @{
     database     = @('integration-supabase','integration-postgres','integration-neon','integration-redis')
     vector       = @('integration-pinecone','integration-qdrant')
     auth         = @('integration-auth0','integration-clerk')
-    observability= @('integration-posthog','integration-sentry')
+    observability= @('integration-posthog','integration-sentry','integration-datadog','integration-segment')
     rag          = @('integration-firecrawl')
     code         = @('integration-e2b')
     'ai-tools'   = @('integration-openai-tools','integration-elevenlabs','integration-replicate')
@@ -202,7 +202,7 @@ Available integration tiers:
   database         - supabase, postgres, neon, redis
   vector           - pinecone, qdrant
   auth             - auth0, clerk
-  observability    - posthog, sentry
+  observability    - posthog, sentry, datadog, segment
   rag              - firecrawl
   code             - e2b
   ai-tools         - openai-tools, elevenlabs, replicate

@@ -81,7 +81,7 @@ Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 - **database** — supabase, postgres, neon, redis
 - **vector** — pinecone, qdrant
 - **auth** — auth0, clerk
-- **observability** — posthog, sentry
+- **observability** — posthog, sentry, datadog (infra/APM), segment (CDP event pipe)
 - **rag** — firecrawl (RAG feeder)
 - **code** — e2b (code sandbox)
 - **ai-tools** — openai-tools (image/audio/embeddings/batch), elevenlabs (TTS), replicate
