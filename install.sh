@@ -52,7 +52,7 @@ TIERS[memory]="integration-mem0 integration-supermemory"
 TIERS[database]="integration-supabase integration-postgres integration-neon integration-redis"
 TIERS[vector]="integration-pinecone integration-qdrant"
 TIERS[auth]="integration-auth0 integration-clerk"
-TIERS[observability]="integration-posthog integration-sentry"
+TIERS[observability]="integration-posthog integration-sentry integration-datadog integration-segment"
 TIERS[rag]="integration-firecrawl"
 TIERS[code]="integration-e2b"
 TIERS[ai-tools]="integration-openai-tools integration-elevenlabs integration-replicate"
@@ -262,7 +262,7 @@ Available integration tiers:
   3) database         - supabase, postgres, neon, redis
   4) vector           - pinecone, qdrant
   5) auth             - auth0, clerk
-  6) observability    - posthog, sentry
+  6) observability    - posthog, sentry, datadog, segment
   7) rag              - firecrawl (web scraping for RAG)
   8) code             - e2b (safe code execution)
   9) ai-tools         - openai-tools (DALL-E, Whisper, embeddings), elevenlabs (voice), replicate
