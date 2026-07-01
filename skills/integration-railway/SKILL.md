@@ -1,209 +1,315 @@
 ---
 name: integration-railway
-description: Connect Railway (app hosting / infra) to a running Hermes agent — store a static Railway API token for the public GraphQL API (headless), or wire Railway's official remote MCP server (OAuth-only) via /hermes-mcp-add. Use when the user wants their Hermes agent to list projects, read service variables, trigger deploys, or inspect Railway infrastructure.
+description: Connect Railway (app hosting / infra) to a self-hosted Hermes Agent over SSH. Path A — headless GraphQL API via static workspace/account token (recommended). Path B — official remote MCP (OAuth-only, interactive). Refuses to pretend a static token works with the hosted MCP. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-railway — connect Railway to Hermes
+# /integration-railway — connect Railway to a remote Hermes (SSH-first)
 
-You are the engineer connecting Railway to a running Hermes agent. Railway ships a
-**first-party remote MCP server** at `https://mcp.railway.com`, but it is **OAuth-only** — it
-authenticates through a browser flow and **explicitly rejects static API/project tokens**
-("Project tokens are not accepted. The remote MCP server requires a user identity for billing
-and audit trails."). That breaks the usual one-click "paste a token" promise, so pick the
-honest path below before touching anything.
+You are the engineer connecting Railway to a self-hosted Hermes agent on the user's VPS. You
+(the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as
+root against the VPS. The user does one thing a machine cannot: mint the token in browser
+(Path A: https://railway.com/account/tokens) or complete OAuth consent (Path B).
 
-Two real options:
+Everything else — token storage, live GraphQL verify, MCP registration, gateway reload,
+smoke test — runs on the VPS via SSH, idempotently with a rollback path.
 
-- **Path A — headless GraphQL API via a static token (recommended for an unattended agent).**
-  No MCP server is involved. You store a Railway **account or workspace token** in
-  `/opt/data/.env` and a generic HTTP/GraphQL tool calls the public API at
-  `https://backboard.railway.com/graphql/v2`. Fully scriptable, no browser. A bare token alone
-  does not "connect" anything — you still need a tool that speaks the GraphQL API.
-- **Path B — official remote MCP server (OAuth, interactive).** Railway-managed endpoint at
-  `https://mcp.railway.com`, full permission enforcement and per-call consent. Requires a
-  per-user browser OAuth flow; there is no static-token form. Wire it via `/hermes-mcp-add`.
+**Honest auth picture (verified 2026-06):** Railway ships a **first-party remote MCP** at
+`https://mcp.railway.com`, but it is **OAuth-only** — it explicitly rejects static tokens
+("Project tokens are not accepted. The remote MCP server requires a user identity for
+billing and audit trails.")
 
-Do everything autonomously. Stop only for the things a machine cannot do: the user must mint
-the token in their browser (Path A) or complete the OAuth consent in a browser (Path B).
+Two honest paths:
 
-Verified facts (as of 2026-06):
-- Public GraphQL API endpoint: `https://backboard.railway.com/graphql/v2` (first-party).
-- Auth: account & workspace tokens use `Authorization: Bearer <token>`; **project tokens use a
-  different header**, `Project-Access-Token: <token>` (NOT `Authorization: Bearer`).
-- Token mint page: account/workspace tokens at `https://railway.com/account/tokens`; project
-  tokens from the project's Settings → Tokens page.
-- Remote MCP endpoint: `https://mcp.railway.com` — **OAuth-only**, static/project tokens rejected.
+- **Path A — headless GraphQL API (recommended for unattended):** static account/workspace
+  token via `Authorization: Bearer` at `https://backboard.railway.com/graphql/v2`. Fully
+  headless. A bare token in env doesn't "connect" anything by itself — the agent's
+  generic GraphQL tool layer uses it to call the API.
+- **Path B — official remote MCP (OAuth, interactive):** browser consent required. Ideal
+  when a human user is nearby; not for pure headless.
 
-## Before you start — gather (ask once)
+**Token-type header gotcha:** Account/workspace tokens use `Authorization: Bearer`. **Project
+tokens use `Project-Access-Token: <token>` (NOT Bearer)** — the #1 Railway integration
+mistake. This skill enforces account/workspace tokens for Path A to avoid the confusion.
 
-1. **Which path** — A (headless GraphQL, fully unattended, static token) or B (remote MCP,
-   OAuth, an interactive browser consent is acceptable).
-2. **Railway API token (Path A)** — the user creates an **account** or **workspace** token at
-   **https://railway.com/account/tokens** ("Create Token", name it, copy it; shown once). Use a
-   **workspace** token scoped to the relevant workspace for least privilege; use an **account**
-   token only for personal/all-resource access. Treat the value as opaque.
-   - Avoid **project** tokens unless the agent only ever touches one environment: they need the
-     `Project-Access-Token` header instead of `Authorization: Bearer`, which a generic Bearer
-     tool will not send.
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+---
 
-Never paste any token into chat. Secrets go only in `/opt/data/.env` (chmod 600).
+## Before you start — gather (ask once, in one batch)
 
-Set shell vars from answers:
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$WIRE_PATH` | `A` (headless GraphQL, default) or `B` (OAuth MCP, interactive) | A is fully headless; B needs browser consent |
+| `$RAILWAY_API_TOKEN` *(Path A)* | Account or workspace token (shown ONCE) | https://railway.com/account/tokens → Create Token → workspace scope preferred |
+
+Confirm SSH access:
+
 ```bash
-AGENT=<container-name>      # docker ps --format '{{.Names}}' | grep hermes
-TOKEN=<railway-token>       # never log or commit
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
 ---
 
-## Path A — headless GraphQL API via a static token (recommended)
-
-### Step 1 — sanity-check the token against the API (fast, no Hermes changes yet)
-
-Confirm the token is live and authenticates before storing it. The `me` query is the cheapest
-authenticated call.
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-curl -sS -X POST https://backboard.railway.com/graphql/v2 \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"query { me { name email } }"}'
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-- `{"data":{"me":{"name":...,"email":...}}}` → token works.
-- `{"errors":[{"message":"Not Authorized"}]}` or `401` → bad, revoked, or wrong token type
-  (e.g. a project token sent on the `Authorization` header — see Pitfalls).
-
-List the projects the token can see (confirms scope):
-```bash
-curl -sS -X POST https://backboard.railway.com/graphql/v2 \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"query { projects { edges { node { id name } } } }"}'
-```
-
-### Step 2 — store the token for Hermes runtime (never config.yaml, never echo >>)
-
-```bash
-docker exec -i -u hermes "$AGENT" hermes config set RAILWAY_API_TOKEN '<railway-token>'
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
-```
-
-`hermes config set` writes to `/opt/data/.env` (the Hermes runtime env), not `config.yaml`.
-`chmod 600` is mandatory — this file holds a bearer credential.
-
-Verify it landed (prints the var name only, not the value):
-```bash
-docker exec "$AGENT" sh -c "grep -c '^RAILWAY_API_TOKEN=' /opt/data/.env"
-# Should print 1
-```
-
-### Step 3 — make the API callable by the agent
-
-**Be honest: a token in `.env` does not by itself connect Railway to the agent.** It only makes
-the credential available. To let the agent actually call Railway, point a generic HTTP/GraphQL
-tool (or a thin MCP/skill) at this surface:
-
-- Endpoint: `https://backboard.railway.com/graphql/v2`
-- Header: `Authorization: Bearer $RAILWAY_API_TOKEN`
-- Useful queries/mutations: `me`, `projects`, `project(id:)`, `variables(...)` (read service
-  variables), `deploymentTriggerCreate` / `serviceInstanceRedeploy` (trigger deploys). The full
-  schema is introspectable from the endpoint above and documented at
-  https://docs.railway.com/integrations/api/graphql-overview.
-
-If no generic GraphQL tool is available in the build, treat Path B (OAuth MCP) as the way to get
-turnkey tools — Railway exposes no static-token MCP.
+Expected: `0.15.x` or `0.17.x`.
 
 ---
 
-## Path B — official remote MCP server (OAuth, interactive)
-
-The MCP host is **fixed by Railway** — do not run the `/hermes-mcp-add` probe matrix expecting a
-bearer/path-token variant to authenticate; the remote server only completes auth through the
-browser OAuth flow.
-
-- Endpoint: `https://mcp.railway.com`
-
-Run the **/hermes-mcp-add** skill — do not re-implement its body. Feed it:
+## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-NAME=railway                       # → env var MCP_RAILWAY_API_KEY (unused for pure OAuth)
-URL=https://mcp.railway.com        # first-party Railway remote MCP endpoint
-# auth: OAuth (browser). NOT a static bearer/header token.
+HAS_TOKEN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^RAILWAY_API_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
+ALREADY_MCP=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci railway" || echo 0)
+if [ "${WIRE_PATH:-A}" = "A" ] && [ "$HAS_TOKEN" = "1" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Railway token already wired (Path A). Set FORCE=1 to rewire."; exit 0
+fi
+if [ "${WIRE_PATH:-A}" = "B" ] && [ "$ALREADY_MCP" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Railway MCP already wired (Path B). Set FORCE=1 to rewire."; exit 0
+fi
 ```
 
-OAuth specifics for this server:
-- The user (or the host UI) must complete a **browser consent** and select which workspaces and
-  projects the client may access. Tokens are **short-lived and revocable** from account settings.
-- Because Hermes runs headless in a container, completing OAuth requires a host capable of the
-  browser handoff. If the Hermes build/host cannot perform the OAuth dance, **fall back to
-  Path A** — that is the only fully-unattended option.
-- The `MCP_RAILWAY_API_KEY` env var that `/hermes-mcp-add` would seed is not the auth mechanism
-  here (OAuth issues its own short-lived tokens); leave it as the placeholder, do not inject a
-  Railway token into it.
+---
 
-Alternative for coding-agent hosts: Railway also offers a **local MCP** that runs through the
-Railway CLI and reuses the CLI's login. That is not applicable to a containerized headless
-Hermes agent without an interactive CLI login on the host; prefer Path A there.
+## Step 3 — HARD GATE (path-specific)
+
+```bash
+PATH_CHOSEN=${WIRE_PATH:-A}
+
+if [ "$PATH_CHOSEN" = "A" ]; then
+  # Token must be present + sane length
+  [ -n "$RAILWAY_API_TOKEN" ] \
+    || { echo "ABORT: Path A requires RAILWAY_API_TOKEN."; exit 1; }
+  [ "${#RAILWAY_API_TOKEN}" -ge 20 ] \
+    || { echo "ABORT: RAILWAY_API_TOKEN looks too short."; exit 1; }
+
+  # Live GraphQL: `me` query
+  ME_RESP=$(curl -sS --max-time 10 \
+    -X POST 'https://backboard.railway.com/graphql/v2' \
+    -H "Authorization: Bearer $RAILWAY_API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -d '{"query":"query { me { name email } }"}' 2>/dev/null) || true
+  if printf '%s' "$ME_RESP" | grep -q '"me"'; then
+    EMAIL=$(printf '%s' "$ME_RESP" | grep -oE '"email":"[^"]+"' | head -1 | cut -d'"' -f4)
+    echo "Railway OK. Token belongs to: $EMAIL"
+  elif printf '%s' "$ME_RESP" | grep -qi 'not authorized'; then
+    echo "ABORT: Railway API returned 'Not Authorized'. Common causes:"
+    echo "  - Wrong or revoked token"
+    echo "  - Project token sent on Authorization: Bearer (should be 'Project-Access-Token: <token>')"
+    echo "  - Query touching resources outside token's workspace scope"
+    exit 1
+  else
+    echo "ABORT: unexpected response from Railway."
+    printf '%s' "$ME_RESP" | head -c 200
+    exit 1
+  fi
+fi
+
+if [ "$PATH_CHOSEN" = "B" ]; then
+  echo "Path B: OAuth flow requires a browser handoff."
+  echo "The Hermes host must be able to complete OAuth (headless containers cannot)."
+  echo "If unsure, use Path A (WIRE_PATH=A) with a workspace token."
+fi
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  Path: $PATH_CHOSEN
+
+  Path A (headless GraphQL — recommended):
+    1. Write RAILWAY_API_TOKEN (length ${#RAILWAY_API_TOKEN:-0}) via 'hermes config set'
+    2. chmod 600 ~/.hermes/.env
+    3. Verify token landed (grep -c)
+    4. No MCP registered; generic GraphQL tool reads env
+    5. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+    6. Smoke test: 'me' query from VPS — expect 200 + user email
+
+  Path B (OAuth MCP — interactive):
+    1. Register MCP: hermes mcp add railway --url https://mcp.railway.com --auth oauth
+    2. USER completes browser OAuth consent
+    3. Reload gateway: stop + run
+    4. Verify in logs: grep "registered.*railway"
+
+Token is NEVER printed in plaintext beyond a length.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write the token (Path A only)
+
+```bash
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  ssh "$VPS_USER@$VPS_IP" "hermes config set RAILWAY_API_TOKEN '$RAILWAY_API_TOKEN'"
+  ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+  WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^RAILWAY_API_TOKEN=' ~/.hermes/.env" || echo 0)
+  [ "$WROTE" = "1" ] || { echo "FAIL: token not written. Rolling back."; rollback; exit 1; }
+fi
+```
+
+Never `echo >>`. Never put the token in `config.yaml`.
+
+---
+
+## Step 6 — wire the chosen path
+
+### Path A (headless GraphQL — default, recommended)
+
+Generic GraphQL tool layer reads `RAILWAY_API_TOKEN` and calls:
+
+- **Endpoint:** `POST https://backboard.railway.com/graphql/v2`
+- **Auth:** `Authorization: Bearer ${RAILWAY_API_TOKEN}`
+- **Content-Type:** `application/json`
+
+Useful queries/mutations:
+- `me { name email }` — auth check
+- `projects { edges { node { id name } } }` — list projects
+- `project(id:) { ... }` — one project details
+- `variables(...)` — read service variables
+- `deploymentTriggerCreate` / `serviceInstanceRedeploy` — trigger deploys
+
+Full schema introspectable from the endpoint. Docs:
+https://docs.railway.com/integrations/api/graphql-overview
+
+### Path B (OAuth MCP — interactive)
+
+```bash
+if [ "${WIRE_PATH:-A}" = "B" ]; then
+  ssh "$VPS_USER@$VPS_IP" "
+    hermes mcp add railway \
+      --url 'https://mcp.railway.com' \
+      --auth oauth
+  "
+  echo ""
+  echo "ACTION REQUIRED: Hermes will print an OAuth consent URL."
+  echo "Open it in a browser logged into your Railway account."
+  echo "Select the workspaces/projects to grant access; consent."
+  echo "Watch 'hermes logs gateway -f' for confirmation."
+fi
+```
+
+---
+
+## Step 7 — reload the gateway (stop + run, NOT restart)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 3
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 8 — verify
+
+```bash
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  ME_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+      -X POST 'https://backboard.railway.com/graphql/v2' \
+      -H \"Authorization: Bearer \$RAILWAY_API_TOKEN\" \
+      -H 'Content-Type: application/json' \
+      -d '{\"query\":\"query { me { email } }\"}'
+  ")
+  [ "$ME_HTTP" = "200" ] \
+    && echo "OK: Railway GraphQL reachable from VPS." \
+    || { echo "FAIL: HTTP $ME_HTTP. Rolling back."; rollback; exit 1; }
+fi
+
+if [ "${WIRE_PATH:-A}" = "B" ]; then
+  REGISTERED=0
+  for i in $(seq 1 12); do
+    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
+         | grep -qiE "registered.*tool.*railway|MCP server.*railway.*(ok|ready)"; then
+      REGISTERED=1; echo "OK: railway MCP registered (consent completed)."; break
+    fi
+    sleep 5
+  done
+  [ "$REGISTERED" = "1" ] || { echo "FAIL: railway MCP not in logs after 60s. Did OAuth consent complete? Rolling back."; rollback; exit 1; }
+fi
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  if [ "${WIRE_PATH:-A}" = "A" ]; then
+    ssh "$VPS_USER@$VPS_IP" "sed -i '/^RAILWAY_API_TOKEN=/d' ~/.hermes/.env && chmod 600 ~/.hermes/.env"
+  fi
+  if [ "${WIRE_PATH:-A}" = "B" ]; then
+    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove railway 2>/dev/null || true"
+  fi
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Revoke the token at https://railway.com/account/tokens if compromised."
+}
+```
 
 ---
 
 ## Pitfalls
 
-- **The official MCP is OAuth-only.** `https://mcp.railway.com` rejects static and project
-  tokens by design (it needs a user identity for billing/audit). Do not try to wire a Railway
-  API token as a bearer header to it — it will not authenticate. Use Path A for static tokens.
-- **Project tokens use a different header.** A **project** token must be sent as
-  `Project-Access-Token: <token>`, NOT `Authorization: Bearer <token>`. A generic Bearer tool
-  will get "Not Authorized" with a project token. Prefer account/workspace tokens for the
-  Bearer-based GraphQL path.
-- **`Not Authorized` is the catch-all error.** Railway returns "Not Authorized" for a bad token,
-  a revoked token, the wrong header for the token type, or a query touching resources outside the
-  token's scope. Re-check token type, header, and workspace scope before assuming the token is dead.
-- **Token shown once.** If the user did not copy it at creation, they must regenerate — it cannot
-  be recovered.
-- **Workspace vs account scope.** An account token can touch everything across all workspaces;
-  prefer a workspace token scoped to just the relevant workspace for least privilege.
-- **A bare token does not connect anything.** Storing `RAILWAY_API_TOKEN` only makes the
-  credential available; the agent still needs a tool/MCP that calls the GraphQL API (Path A) or
-  the OAuth MCP (Path B).
-- **Rate limits / destructive ops.** The API is rate-limited; have the agent back off on `429`
-  rather than hammer. Deploys, redeploys, and deletes are destructive — gate them behind explicit
-  user intent in the agent's soul/skills rather than letting it act freely.
-
----
-
-## Verify
-
-**Path A (GraphQL token):**
-1. Token authenticates — the `me` query in Step 1 returns the user's name/email.
-2. Scope is correct — the `projects` query returns the expected projects (or a valid empty edge
-   list if the workspace has none).
-3. Stored safely — `grep -c '^RAILWAY_API_TOKEN=' /opt/data/.env` prints `1` and the file is
-   `chmod 600`.
-4. End to end — once a GraphQL tool is wired, a chat call like
-   `@<agent> list my Railway projects` returns real data (or a valid empty list).
-
-**Path B (OAuth MCP):** after the OAuth consent and gateway reload,
-```bash
-docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-  | grep -iE "registered.*tool.*railway|MCP server 'railway'" | tail -5
-```
-should show `MCP server 'railway' (HTTP): registered N tool(s): ...`, and a chat call
-(`@<agent> using railway, list my projects`) returns data or a valid empty result.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Trying to wire `mcp.railway.com` with a static bearer | Railway MCP is OAuth-only; explicitly rejects static/project tokens | This skill refuses; uses GraphQL for headless (A) or OAuth (B) |
+| 2 | Project token sent as `Authorization: Bearer` | Project tokens need `Project-Access-Token: <token>` header | This skill uses account/workspace tokens for Path A (Bearer) |
+| 3 | `Not Authorized` catch-all error | Bad/revoked token OR wrong header for token type OR out-of-scope query | Step 3 checks + Pitfalls documents debug order |
+| 4 | Token shown once | Must regenerate if lost | Store immediately in env |
+| 5 | Account-scope when workspace suffices | Overbroad blast radius on leak | Prefer workspace tokens |
+| 6 | Assuming a token "connects" the agent | Bare token in env doesn't do anything without a GraphQL tool layer | Step 6 docs the tool contract |
+| 7 | Bursty deploys/redeploys | Destructive AND rate-limited | Gate destructive ops behind explicit user intent; back off on 429 |
+| 8 | Token in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 9 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 10 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 11 | sed with `/` delimiter | Universal rule | Always `\|` delimiter |
+| 12 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
+| 13 | Local MCP via Railway CLI on the container | Needs interactive CLI login on the host; not applicable to headless Hermes | This skill wires headless GraphQL (A) or OAuth remote MCP (B) — no CLI |
 
 ---
 
 ## Definition of done
 
-- [ ] **Path chosen and stated** to the user (A headless GraphQL token, or B OAuth MCP), with the
-      OAuth-only caveat for B made explicit.
-- [ ] **Token verified live** — the `me` query (Path A) or the OAuth consent (Path B) succeeds.
-- [ ] **Secret stored correctly** — Path A: `RAILWAY_API_TOKEN` present only in `/opt/data/.env`
-      (chmod 600), never in `config.yaml`, never in chat. Path B: no Railway token injected into
-      `MCP_RAILWAY_API_KEY` (OAuth handles auth).
-- [ ] **A real call returns data** — Path A via the wired GraphQL tool, or Path B via a chat tool
-      call against the registered `railway` MCP.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if already wired for chosen path, unless `FORCE=1`)
+- [ ] HARD GATE passed: Path A → live `me` query returned an email; Path B → user warned of OAuth requirement
+- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
+- [ ] Path A: token written to `~/.hermes/.env`, `chmod 600`, verified by grep; generic GraphQL tool documented
+- [ ] Path B: MCP registered with `--auth oauth`; user completed browser consent
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: Path A `me` query from VPS returned 200; Path B `registered N tool(s)` in logs
+- [ ] Rollback function defined; token revocation URL included
+- [ ] User informed that project tokens use a DIFFERENT header (not wired here)
 
-See `reference/TROUBLESHOOTING.md` for gateway, env-reload, and MCP probe/OAuth failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, OAuth
+consent, and Railway token-type failure modes.
