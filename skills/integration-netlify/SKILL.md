@@ -1,107 +1,171 @@
 ---
 name: integration-netlify
-description: Connect Netlify (static/frontend deploys, site + deploy management) to a running Hermes agent using the official @netlify/mcp server with a Personal Access Token. Use when the user wants their agent to create sites, trigger deploys, or read deploy status on Netlify.
+description: Connect Netlify (static/frontend deploys, site + deploy management) to a self-hosted Hermes agent over SSH. Wires the official @netlify/mcp stdio server with a Personal Access Token, falling back to direct REST. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-netlify — connect Netlify to Hermes
+# /integration-netlify — connect Netlify to a remote Hermes (SSH-first)
 
-You are the engineer connecting Netlify to a running Hermes agent so it can manage sites and
-trigger frontend/static deploys. Do everything autonomously; stop only for the one thing a
-machine cannot do: minting the Netlify Personal Access Token (PAT) in the dashboard.
+You are the engineer connecting Netlify to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
+SSH as root against the VPS. The user only does the one thing a machine cannot: mint the
+Netlify Personal Access Token (PAT) in the dashboard.
 
-Netlify ships an official MCP server (`@netlify/mcp`, repo `netlify/netlify-mcp`). There are two
-ways to reach it, and the choice matters for a headless server:
+Everything else — token storage, MCP registration, gateway reload, verification — runs
+on the VPS via SSH, idempotently.
 
-- **Remote MCP** at `https://netlify-mcp.netlify.app/mcp` authenticates via **OAuth (browser
-  sign-in) by default.** A headless Hermes container has no browser, so the OAuth handshake
-  cannot complete there. Do not wire the remote URL expecting a token header to "just work" —
-  Netlify documents the PAT only as a fallback env var on the local server, not as a remote
-  header.
-- **Local stdio MCP** (`npx -y @netlify/mcp`) takes a `NETLIFY_PERSONAL_ACCESS_TOKEN` env var.
-  This is the token-based, headless-friendly path and the one this skill uses.
+**Honest auth picture (verified 2026-06):** Netlify ships an official MCP server
+(`@netlify/mcp`, repo `netlify/netlify-mcp`). There are two ways to reach it and the
+choice matters for a headless server:
 
-## Before you start — gather (ask once)
+- The **remote MCP** at `https://netlify-mcp.netlify.app/mcp` authenticates via **OAuth
+  (browser sign-in) by default.** A headless Hermes container has no browser, so the
+  OAuth handshake cannot complete there. Do not wire the remote URL expecting a Bearer
+  header to "just work" — Netlify documents the PAT only as a fallback env var on the
+  local server, not as a remote header.
+- The **local stdio MCP** (`npx -y @netlify/mcp`) takes a `NETLIFY_PERSONAL_ACCESS_TOKEN`
+  env var. This is the token-based, headless-friendly path. We use it (Path A), with
+  the direct REST API as the fallback (Path B).
 
-1. **Netlify Personal Access Token (PAT)** — mint it in the dashboard:
-   user icon -> **User settings** -> **OAuth** -> **Personal access tokens** ->
-   **New access token**. Give it a name, set an expiration, generate, copy immediately (the
-   value is shown once). Direct URL: https://app.netlify.com/user/applications#personal-access-tokens
-   Docs: https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/
-   The token is account-scoped (it inherits your full account access — there are no per-token
-   scopes), so treat it like a password.
-2. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
-3. **Node 22+ inside the container** — the official MCP server requires it. Confirm with
-   `docker exec -u hermes "$AGENT" node --version` before relying on the stdio server.
+Netlify PATs are **account-scoped** (no per-token scopes — they inherit your full account
+access). Treat them like a password.
 
-Set shell vars from the answers:
+---
+
+## Before you start — gather (ask once, in one batch)
+
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$NETLIFY_TOKEN` | Personal Access Token | <https://app.netlify.com/user/applications#personal-access-tokens> → **New access token** → name + expiration → **Generate** → copy immediately (shown once) |
+
+Docs: <https://docs.netlify.com/api-and-cli-guides/api-guides/get-started-with-api/>
+
+Confirm SSH access before doing anything:
+
 ```bash
-AGENT=<container-name>          # e.g. hermes-agent-mxlc-hermes-agent-1
-TOKEN=<netlify-pat>            # never log this; injected via sed in step 2
-NAME=netlify                  # MCP name in Hermes -> env var MCP_NETLIFY_API_KEY
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
 ---
 
-## Step 1 — sanity-check the token against the Netlify REST API
-
-Before wiring anything into Hermes, prove the PAT is valid. The REST API base is
-`https://api.netlify.com/api/v1/` and auth is a bearer header.
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-curl -sS -o /dev/null -w "%{http_code}\n" \
-  -H "Authorization: Bearer ${TOKEN}" \
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    hermes --version
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    docker exec "$AGENT" hermes --version
+    # @netlify/mcp requires Node 22+ — confirm before relying on the stdio server
+    docker exec "$AGENT" node --version || echo "WARN: node not found in container"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+```
+
+Expected: `0.15.x` or `0.17.x`, and Node `v22.x` or newer (the stdio server exits
+immediately on older Node).
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci netlify" || echo 0)
+if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Netlify is already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
+```
+
+---
+
+## Step 3 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Sanity-check PAT against https://api.netlify.com/api/v1/sites (expect 200)
+  2. Write NETLIFY_PERSONAL_ACCESS_TOKEN (length ${#NETLIFY_TOKEN}, prefix ${NETLIFY_TOKEN:0:4}...) via 'hermes config set'
+  3. chmod 600 ~/.hermes/.env
+  4. Register MCP: hermes mcp add netlify --command npx --args -y,@netlify/mcp
+  5. Reload gateway: hermes gateway stop && hermes gateway run
+  6. Verify in logs: grep -i "registered.*netlify"
+  7. Smoke test: GET https://api.netlify.com/api/v1/sites → expect 200
+
+The token is NEVER printed in plaintext.
+EOF
+```
+
+Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+
+Quick pre-flight against the REST API (proves the PAT is valid before any Hermes work):
+
+```bash
+PRECHECK=$(curl -sS -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer ${NETLIFY_TOKEN}" \
   -H "User-Agent: hermes-agent (ops)" \
-  https://api.netlify.com/api/v1/sites
+  https://api.netlify.com/api/v1/sites)
+case "$PRECHECK" in
+  200) echo "OK: PAT validates against Netlify REST." ;;
+  401) echo "ABORT: PAT invalid/expired (a password reset invalidates all PATs)."; exit 1 ;;
+  *)   echo "WARN: pre-flight returned $PRECHECK; proceeding anyway." ;;
+esac
 ```
-
-- `200` -> token is valid; the body is the JSON array of sites you can manage.
-- `401` -> token is wrong, expired, or was invalidated (a password reset invalidates all PATs).
 
 ---
 
-## Step 2 — write the PAT to the Hermes runtime .env (chmod 600)
-
-The secret lives in `/opt/data/.env` inside the container, never in `config.yaml` and never in
-chat. Append the var with the Hermes config helper, then overwrite the value with `sed` so the
-token never rides through an interactive prompt that could mangle `/ + =` characters.
+## Step 4 — write the secret (chmod 600, no echo, no logging)
 
 ```bash
-# Create/seed the key with a placeholder via the config helper
-docker exec -u hermes "$AGENT" hermes config set NETLIFY_PERSONAL_ACCESS_TOKEN placeholder
-
-# Inject the real value with | as the sed delimiter (tokens contain / + =)
-docker exec "$AGENT" sh -c \
-  "sed -i 's|^NETLIFY_PERSONAL_ACCESS_TOKEN=.*|NETLIFY_PERSONAL_ACCESS_TOKEN=${TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
-
-# Confirm exactly one line, without printing the value
-docker exec "$AGENT" sh -c "grep -c '^NETLIFY_PERSONAL_ACCESS_TOKEN=' /opt/data/.env"
-# -> 1
+ssh "$VPS_USER@$VPS_IP" "hermes config set NETLIFY_PERSONAL_ACCESS_TOKEN '$NETLIFY_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
 ```
 
-If `hermes config set` is not available in this build, fall back to the mcp-add sed pattern:
-seed the line once with `printf 'NETLIFY_PERSONAL_ACCESS_TOKEN=placeholder\n' >> /opt/data/.env`
-**only if the key does not already exist** (`grep -q` first), then run the same `sed` overwrite.
-Never use a bare `echo >>` that can glue onto a line missing a trailing newline.
+Verify (returns `1`, NEVER the value):
+
+```bash
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^NETLIFY_PERSONAL_ACCESS_TOKEN=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: NETLIFY_PERSONAL_ACCESS_TOKEN not written. Rolling back."; rollback; exit 1; }
+```
+
+> If this Hermes build has no `config set` subcommand, use the safe sed pattern
+> (pipe delimiter; Netlify PATs are alnum but the pattern is safe for tokens with `/+=`):
+> ```bash
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^NETLIFY_PERSONAL_ACCESS_TOKEN=' ~/.hermes/.env \
+>     || printf 'NETLIFY_PERSONAL_ACCESS_TOKEN=\n' >> ~/.hermes/.env
+>   sed -i 's|^NETLIFY_PERSONAL_ACCESS_TOKEN=.*|NETLIFY_PERSONAL_ACCESS_TOKEN=$NETLIFY_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
+> ```
+> Never use a bare `echo >>` that can glue onto a previous line missing a trailing newline.
 
 ---
 
-## Step 3 — register the official Netlify MCP server (stdio, token from env)
+## Step 5 — register the Netlify MCP server
 
-This is the happy path: run the official `@netlify/mcp` server as a stdio MCP, passing the PAT
-through the env var it reads. The base wiring procedure is `/hermes-mcp-add`; this is the stdio
-variant of it, so the register call differs from the HTTP probe matrix.
+Pick the path that matches the Hermes build on the VPS. Path A is preferred.
+
+### Path A (preferred) — official @netlify/mcp stdio server with PAT env var
 
 ```bash
-# Register a stdio (command) MCP that launches the official Netlify server.
-# The NETLIFY_PERSONAL_ACCESS_TOKEN from /opt/data/.env is passed into the child process.
-docker exec -u hermes "$AGENT" \
-  hermes mcp add "$NAME" \
-    --command "npx" \
-    --args "-y,@netlify/mcp" \
-    --env "NETLIFY_PERSONAL_ACCESS_TOKEN=\${NETLIFY_PERSONAL_ACCESS_TOKEN}"
+ssh "$VPS_USER@$VPS_IP" "
+  hermes mcp add netlify \
+    --command npx \
+    --args '-y,@netlify/mcp' \
+    --env 'NETLIFY_PERSONAL_ACCESS_TOKEN=\${NETLIFY_PERSONAL_ACCESS_TOKEN}'
+"
 ```
 
 The resulting `config.yaml` block should reference the env var, not the literal token:
+
 ```yaml
 netlify:
   command: npx
@@ -111,89 +175,126 @@ netlify:
   enabled: true
 ```
 
-If this Hermes build only supports HTTP MCP servers (no stdio `--command`), do not fall back to
-the OAuth-gated remote URL on a headless box. Instead skip to Step 5 (REST API option) and tell
-the user the agent will call Netlify over REST rather than via MCP tools.
+The flag names vary by Hermes version. If unsure, run `hermes mcp add --help` first and
+match its stdio syntax. The token stays in `~/.hermes/.env` and is referenced via
+`${NETLIFY_PERSONAL_ACCESS_TOKEN}` indirection — never inlined.
+
+### Path B (fallback) — direct REST against the Netlify API
+
+If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command, do NOT fall back
+to the OAuth-gated remote URL on a headless box. Drive REST directly:
+
+- **Base URL:** `https://api.netlify.com/api/v1/`
+- **Auth header:** `Authorization: Bearer ${NETLIFY_PERSONAL_ACCESS_TOKEN}`
+- **List sites:** `GET /sites`
+- **Trigger deploy:** `POST /sites/{site_id}/builds`
+- **User-Agent:** include a recognizable UA, e.g. `hermes-agent (ops)`
+
+State plainly to the user that the agent is calling REST, not MCP, in this case.
 
 ---
 
-## Step 4 — reload the gateway and verify tools registered
+## Step 6 — reload the gateway (stop + run, NOT restart)
 
-The gateway reads env and MCP config at startup. Use stop + run, not `restart` (env changes are
-not always re-read by the running process).
+`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
-sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 10   # first npx run may download @netlify/mcp; allow extra time
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 2
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 10   # first npx run downloads @netlify/mcp; allow extra time
+```
 
-docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-  | grep -iE "registered.*tool|MCP server.*netlify" | tail -5
+---
+
+## Step 7 — verify registration in logs (poll up to 30s)
+
+```bash
+REGISTERED=0
+for i in $(seq 1 6); do
+  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
+       | grep -qiE "registered.*tool.*netlify|MCP server.*netlify.*(ok|ready)"; then
+    REGISTERED=1
+    echo "OK: netlify registered in gateway logs."
+    break
+  fi
+  sleep 5
+done
+[ "$REGISTERED" = "1" ] || { echo "FAIL: netlify not in logs after 30s. Rolling back."; rollback; exit 1; }
 ```
 
 Success looks like a line such as:
-```
-INFO tools.mcp_tool: MCP server 'netlify' (stdio): registered N tool(s): mcp_netlify_...
-```
-
-Then trigger a real call from the chat interface:
-```
-@<agent> using netlify, list my sites
-```
-An empty-but-valid list is a pass. "401" or "unauthorized" means the token did not land — re-check Step 2.
+`INFO tools.mcp_tool: MCP server 'netlify' (stdio): registered N tool(s): mcp_netlify_...`
 
 ---
 
-## Step 5 — fallback: no MCP available, drive the REST API directly
+## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
 
-If stdio MCP is unsupported in this build (and the remote MCP is OAuth-only, so unusable
-headless), the honest connection is the REST API. The PAT from Step 2 is already in
-`/opt/data/.env`. A skill or generic HTTP tool can then call:
+```bash
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -X GET 'https://api.netlify.com/api/v1/sites' \
+    -H \"Authorization: Bearer \$NETLIFY_PERSONAL_ACCESS_TOKEN\" \
+    -H 'User-Agent: hermes-agent (ops)'
+")
+case "$HTTP" in
+  200) echo "OK: Netlify API reachable and token valid." ;;
+  401) echo "FAIL: token invalid/expired (password reset invalidates all PATs). Re-check Step 4."; rollback; exit 1 ;;
+  403) echo "FAIL: token valid but forbidden. Confirm account permissions."; exit 1 ;;
+  *)   echo "WARN: unexpected HTTP $HTTP from Netlify API. Check manually." ;;
+esac
+```
 
-- Base URL: `https://api.netlify.com/api/v1/`
-- Auth header: `Authorization: Bearer ${NETLIFY_PERSONAL_ACCESS_TOKEN}`
-- List sites: `GET /sites` ; trigger a build: `POST /sites/{site_id}/builds`
+`200` with an empty JSON array means the token works but no sites exist on the account —
+not a failure of wiring.
 
-Do not claim the agent is "connected via MCP" in this case — it is calling REST with the stored
-token. State that plainly to the user.
+---
 
-> Status note (verify when revisiting): a first-party MCP server exists
-> (`@netlify/mcp`, remote at `https://netlify-mcp.netlify.app/mcp`), but the remote endpoint is
-> OAuth-first and not headless-friendly as of 2026-06. The token path here uses the official
-> stdio server, falling back to the REST API.
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove netlify 2>/dev/null || true"
+  ssh "$VPS_USER@$VPS_IP" "hermes config unset NETLIFY_PERSONAL_ACCESS_TOKEN 2>/dev/null || \
+    sed -i '/^NETLIFY_PERSONAL_ACCESS_TOKEN=/d' ~/.hermes/.env"
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Netlify is no longer wired."
+}
+```
 
 ---
 
 ## Pitfalls
 
-- **Remote MCP is OAuth, not token-by-header.** `https://netlify-mcp.netlify.app/mcp` expects a
-  browser OAuth sign-in. Pointing a headless agent at it and hoping a Bearer header authenticates
-  will fail. Use the stdio server with the PAT env var, or REST.
-- **PATs have no scopes.** A Netlify PAT inherits your entire account access. There is no
-  read-only or per-site narrowing. Mint a dedicated token with an expiration and rotate it.
-- **Password reset nukes all tokens.** Resetting the Netlify password permanently invalidates
-  every PAT and OAuth token issued before the reset. After any reset, re-mint and re-run Step 2.
-- **Node version.** `@netlify/mcp` needs Node 22+. On an older runtime the stdio server exits
-  immediately and you will see no registered tools — check `node --version` first.
-- **First run is slow.** `npx -y @netlify/mcp` downloads the package on first launch; give the
-  gateway extra time (Step 4) before concluding registration failed.
-- **For public/multi-user integrations Netlify mandates OAuth2**, not PATs. PATs are for your own
-  account's automation only.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Wiring the remote `netlify-mcp.netlify.app/mcp` with a Bearer header | The remote MCP is **OAuth-only**; Bearer tokens are rejected on a headless box | Use the stdio server (Path A) or REST (Path B) |
+| 2 | Assuming PATs have scopes | Netlify PATs are account-scoped — no per-token narrowing, no read-only | Mint a dedicated token with an expiration; rotate it; treat as password |
+| 3 | Password reset invalidates all tokens | Resetting the Netlify password nukes every PAT and OAuth token | After any reset, re-mint and re-run Step 4 |
+| 4 | Node < 22 in the container | `@netlify/mcp` requires Node 22+; older Node makes the stdio server exit immediately with zero registered tools | Step 1 checks `node --version`; upgrade base image if needed |
+| 5 | First-run timeout | `npx -y @netlify/mcp` downloads the package on first launch | Step 6 sleeps 10s; bump to 30s on a slow VPS |
+| 6 | Using a PAT for public/multi-user integrations | Netlify mandates OAuth2 for multi-tenant use; PATs are personal-only | Use OAuth2 for shared apps; PAT only for your own automation |
+| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
+| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline; SSH ignores the merged key | Always `hermes config set` |
+| 9 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by Hermes runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
+| 10 | sed with `/` delimiter on tokens | Tokens may contain `/+=` | Always use `\|` delimiter |
+| 11 | Container vs host confusion | Skill assumed wrong layer; SSH keys added in container are invisible to host sshd | Always check `whoami; hostname` first |
 
-## Verify
-
-- [ ] `curl ... /api/v1/sites` with the PAT returns `200` (Step 1).
-- [ ] `grep -c '^NETLIFY_PERSONAL_ACCESS_TOKEN=' /opt/data/.env` returns `1` and the file is `chmod 600`.
-- [ ] `hermes logs` shows `registered N tool(s)` for `netlify` (MCP path), or the REST fallback is documented to the user.
-- [ ] A real chat call ("list my sites") returns data or a valid empty list.
+---
 
 ## Definition of done
 
-- [ ] Netlify PAT minted, validated against the REST API, and stored only in `/opt/data/.env` (`chmod 600`).
-- [ ] Token does not appear in `config.yaml` or chat — only `${NETLIFY_PERSONAL_ACCESS_TOKEN}` is referenced.
-- [ ] Official `@netlify/mcp` stdio server registered and tools visible in `hermes logs` (or REST fallback explicitly chosen and explained).
-- [ ] A real Netlify call from the agent returns data.
-- [ ] User told that the remote MCP is OAuth-only and this setup uses the token-based stdio/REST path.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x); Node 22+ confirmed in container
+- [ ] Idempotency check passed (or `FORCE=1` overrode)
+- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
+- [ ] PAT pre-flight (`GET /api/v1/sites`) returned `200`
+- [ ] `NETLIFY_PERSONAL_ACCESS_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
+- [ ] MCP registered via Path A (stdio @netlify/mcp) or REST documented via Path B
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Logs show `registered N tool(s) for 'netlify'` within 30s
+- [ ] Smoke test: `GET /api/v1/sites` from inside the container returned `200`
+- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
+- [ ] User told that the remote MCP is OAuth-only and this setup uses the token-based stdio/REST path
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

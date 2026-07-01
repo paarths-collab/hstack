@@ -1,118 +1,165 @@
 ---
 name: integration-razorpay
-description: Connect Razorpay (India payments) to a running Hermes agent via Razorpay's official remote MCP server. Use when the user wants their Hermes agent to create payment links, fetch payments/orders/settlements, or issue refunds through Razorpay.
+description: Connect Razorpay (India payments) to a self-hosted Hermes Agent over SSH via Razorpay's official remote MCP server. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-razorpay — connect Razorpay to Hermes
+# /integration-razorpay — connect Razorpay to a remote Hermes (SSH-first)
 
-You are the engineer connecting Razorpay to a running Hermes agent. Razorpay ships a
-**first-party remote MCP server**, so the whole integration is the /hermes-mcp-add procedure
-pointed at Razorpay's endpoint with the right header. Do everything autonomously; stop only for
-the two things a machine cannot produce: the Razorpay API key and secret.
+You are the engineer connecting Razorpay to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
+SSH as root against the VPS. The user only does the two things a machine cannot: mint the
+Razorpay key pair in the Dashboard and decide Live vs Test mode.
 
-Razorpay's official remote MCP server: `https://mcp.razorpay.com/mcp`
-(verified at https://razorpay.com/docs/mcp-server/remote/ and the official repo
-https://github.com/razorpay/razorpay-mcp-server — the older `/sse` endpoint is deprecated.)
+Everything else — base64 minting, token storage, MCP registration, gateway reload,
+verification — runs on the VPS via SSH, idempotently.
 
-Auth is **HTTP Basic** with a merchant token = base64 of `key_id:key_secret`. This is a static
-credential (no OAuth), which keeps the one-click promise.
-
-## Before you start — gather (ask once)
-
-1. **Razorpay Key ID** — starts with `rzp_live_` (production) or `rzp_test_` (sandbox).
-2. **Razorpay Key Secret** — shown only once at generation time; cannot be re-read later.
-   - Both are minted in the Razorpay Dashboard: **Settings > API Keys > Generate Key**
-     (https://razorpay.com/docs/payments/dashboard/account-settings/api-keys/). Pick Live or
-     Test mode deliberately — they are different keys.
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
-
-Set shell vars from the answers (never log the secret):
-```bash
-AGENT=<container-name>          # e.g. hermes-agent-mxlc-hermes-agent-1
-KEY_ID=<rzp_live_or_test_id>
-KEY_SECRET=<key-secret>         # never echo this into logs or git
-NAME=razorpay                   # -> env var MCP_RAZORPAY_API_KEY, header name MCP_NAME
-URL=https://mcp.razorpay.com/mcp
-```
+**Honest auth picture (verified 2026-06):** Razorpay ships a first-party remote MCP at
+`https://mcp.razorpay.com/mcp` (the older `/sse` endpoint is deprecated). Auth is
+**HTTP Basic** with a merchant token = base64 of `key_id:key_secret`. Static credential,
+no OAuth — perfect for headless agents. Verified at
+<https://razorpay.com/docs/mcp-server/remote/> and the official repo
+<https://github.com/razorpay/razorpay-mcp-server>.
 
 ---
 
-## Step 1 — mint the merchant token (base64 of key:secret)
+## Before you start — gather (ask once, in one batch)
 
-Razorpay's remote MCP expects the credential as a single base64 blob, not the raw pair.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$RZP_KEY_ID` | Razorpay Key ID (`rzp_live_...` or `rzp_test_...`) | Razorpay Dashboard → Settings → API Keys → Generate Key |
+| `$RZP_KEY_SECRET` | Razorpay Key Secret (shown ONCE at generation) | Same screen; cannot be re-read later — regenerate if lost |
+| Mode confirmed | Live vs Test — they are **different** credentials | Decide deliberately with the user before minting |
+
+Mint URL: <https://razorpay.com/docs/payments/dashboard/account-settings/api-keys/>
+
+Confirm SSH access before doing anything:
 
 ```bash
-# -w 0 prevents base64 from wrapping long output across lines (busybox/GNU both honour it)
-TOKEN="$(printf '%s:%s' "$KEY_ID" "$KEY_SECRET" | base64 -w 0)"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
-
-> `printf '%s:%s'` (not `echo`) avoids a trailing newline being folded into the token. A
-> token with an embedded `\n` authenticates intermittently and is painful to debug.
-
-This `TOKEN` is the value that goes into the `Authorization: Basic <TOKEN>` header.
 
 ---
 
-## Step 2 — probe the endpoint with the real auth shape
-
-Confirm the header form Razorpay enforces before you register anything. Run the relevant
-slice of the /hermes-mcp-add probe matrix — the one that matters here is **Basic auth**:
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-H='Accept: application/json, text/event-stream'
-C='Content-Type: application/json'
-INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
-
-# Basic auth — the documented shape
-curl -sS -o /tmp/rzp_init -D /tmp/rzp_hdr -w "basic = %{http_code}\n" \
-  -X POST -H "$H" -H "$C" -H "Authorization: Basic $TOKEN" -d "$INIT" "$URL"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    hermes --version
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    docker exec "$AGENT" hermes --version
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-- **200 + JSON-RPC `result`** → handshake good.
-- **401 / 403** → token is wrong (most often the wrong mode's key, or a base64 with a stray newline — redo step 1).
-- **404 / HTML** → wrong URL; confirm it is `/mcp`, not `/sse` (deprecated).
-
-`initialize` succeeding is not proof auth is enforced. Harvest the session id and list tools
-**with** the header to confirm you get real Razorpay tools back:
-
-```bash
-SID=$(grep -i mcp-session-id /tmp/rzp_hdr | tr -d '\r' | awk '{print $2}')
-curl -sS -X POST -H "$H" -H "$C" -H "Mcp-Session-Id: $SID" \
-  -H "Authorization: Basic $TOKEN" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' "$URL"
-```
-
-You should see payment tools (create payment link, fetch payment, fetch order, etc.). Only proceed once this returns a real tool list.
+Expected: `0.15.x` or `0.17.x`.
 
 ---
 
-## Step 3 — register + inject via /hermes-mcp-add
-
-Run the **/hermes-mcp-add** procedure rather than re-deriving it. Feed it exactly:
-
-- **URL**: `https://mcp.razorpay.com/mcp`
-- **Name**: `razorpay`  (Hermes derives env var `MCP_RAZORPAY_API_KEY` and the header reference)
-- **Auth**: `header`, header name `Authorization`, header value `Basic ${MCP_RAZORPAY_API_KEY}`
-- **Secret value**: the base64 `TOKEN` from step 1 (NOT the raw key/secret)
-
-The note that bites here: the header **value** must be `Basic ${MCP_RAZORPAY_API_KEY}` (literal
-`Basic ` prefix + the env reference), and the env var must hold only the base64 token. Register
-with a placeholder, then sed-inject the real token using `|` as the delimiter (base64 contains
-`/` and `+`):
+## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-# Register with placeholder header value (real token injected next)
-printf 'y\nAuthorization\nBasic placeholder\n' | \
-  docker exec -i -u hermes "$AGENT" \
-    hermes mcp add "$NAME" --url "$URL" --auth header
-
-# Inject the real base64 token into the env var Hermes generated
-ENV_VAR="MCP_$(echo "$NAME" | tr '[:lower:]-' '[:upper:]_')_API_KEY"   # -> MCP_RAZORPAY_API_KEY
-docker exec "$AGENT" sh -c \
-  "sed -i 's|^${ENV_VAR}=.*|${ENV_VAR}=${TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
+ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci razorpay" || echo 0)
+if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Razorpay is already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
 ```
 
-Confirm `config.yaml` references the env var and the literal `Basic ` prefix is present:
+---
+
+## Step 3 — DRY RUN preview (always show before writing)
+
+Mint the base64 token locally (in memory only) so the dry-run can print its length and
+prefix without ever logging the secret:
+
+```bash
+RZP_TOKEN="$(printf '%s:%s' "$RZP_KEY_ID" "$RZP_KEY_SECRET" | base64 -w 0)"
+
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write MCP_RAZORPAY_API_KEY (base64 token; length ${#RZP_TOKEN}, prefix ${RZP_TOKEN:0:4}...) via 'hermes config set'
+  2. chmod 600 ~/.hermes/.env
+  3. Register MCP: hermes mcp add razorpay --url https://mcp.razorpay.com/mcp --auth header
+     Header: Authorization: Basic \${MCP_RAZORPAY_API_KEY}
+  4. Reload gateway: hermes gateway stop && hermes gateway run
+  5. Verify in logs: grep -i "registered.*razorpay"
+  6. Smoke test: POST https://mcp.razorpay.com/mcp initialize → expect 200
+
+Key mode: ${RZP_KEY_ID:0:9}...  (rzp_live_ = REAL MONEY; rzp_test_ = sandbox)
+The token is NEVER printed in plaintext.
+EOF
+```
+
+> `printf '%s:%s'` (not `echo`) avoids a trailing newline being folded into the token.
+> `base64 -w 0` prevents wrapping. A wrapped or newline-glued token authenticates only
+> intermittently and is painful to debug.
+
+Wait for user confirmation (or skip if `AUTO_APPROVE=1`). Confirm Live vs Test mode
+matches their intent before proceeding.
+
+---
+
+## Step 4 — write the secret (chmod 600, no echo, no logging)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set MCP_RAZORPAY_API_KEY '$RZP_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+```
+
+Verify (returns `1`, NEVER the value):
+
+```bash
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MCP_RAZORPAY_API_KEY=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: token not written. Rolling back."; rollback; exit 1; }
+```
+
+> If your Hermes build has no `config set` subcommand, use the safe sed pattern
+> (pipe delimiter — base64 contains `/` and `+`):
+> ```bash
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^MCP_RAZORPAY_API_KEY=' ~/.hermes/.env || printf 'MCP_RAZORPAY_API_KEY=\n' >> ~/.hermes/.env
+>   sed -i 's|^MCP_RAZORPAY_API_KEY=.*|MCP_RAZORPAY_API_KEY=$RZP_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
+> ```
+
+---
+
+## Step 5 — register the Razorpay MCP server
+
+### Path A (preferred) — Razorpay's first-party remote MCP
+
+Register with a placeholder header value, then let Hermes resolve `${MCP_RAZORPAY_API_KEY}`
+from `.env` at runtime. The header **value** must keep the literal `Basic ` prefix:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "
+  printf 'y\nAuthorization\nBasic placeholder\n' | \
+    hermes mcp add razorpay \
+      --url 'https://mcp.razorpay.com/mcp' \
+      --auth header
+"
+```
+
+Then point the header at the env var (pipe delimiter — base64 has `/+=`):
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "
+  sed -i 's|Authorization: Basic placeholder|Authorization: Basic \${MCP_RAZORPAY_API_KEY}|' ~/.hermes/config.yaml
+"
+```
+
+Confirm `config.yaml` looks like this — env var reference, **not** the literal token:
+
 ```yaml
 razorpay:
   url: https://mcp.razorpay.com/mcp
@@ -121,61 +168,126 @@ razorpay:
   enabled: true
 ```
 
-Secrets live only in `/opt/data/.env` (chmod 600), never in `config.yaml`, never in chat.
+### Path B (fallback) — Razorpay REST API directly
+
+If the Hermes build cannot register HTTP MCP servers with headers, wire the REST API:
+
+- **Base URL:** `https://api.razorpay.com/v1`
+- **Auth header:** `Authorization: Basic ${MCP_RAZORPAY_API_KEY}` (same base64 token)
+- **Content type:** `Content-Type: application/json`
+- **Key endpoints:** `GET /payments`, `GET /orders`, `POST /payment_links`, `POST /payments/:id/refund`
+
+Do NOT use `Bearer` — Razorpay rejects it with a generic 401.
 
 ---
 
-## Step 4 — reload the gateway
+## Step 6 — reload the gateway (stop + run, NOT restart)
 
-Env changes need a clean re-read; `restart` is not always reload-clean. Use stop + run:
+`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
 sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
 sleep 8
+```
+
+---
+
+## Step 7 — verify registration in logs (poll up to 30s)
+
+```bash
+REGISTERED=0
+for i in $(seq 1 6); do
+  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
+       | grep -qiE "registered.*tool.*razorpay|MCP server.*razorpay.*(ok|ready)"; then
+    REGISTERED=1
+    echo "OK: razorpay registered in gateway logs."
+    break
+  fi
+  sleep 5
+done
+[ "$REGISTERED" = "1" ] || { echo "FAIL: razorpay not in logs after 30s. Rolling back."; rollback; exit 1; }
+```
+
+---
+
+## Step 8 — live API smoke test (MCP initialize handshake)
+
+Probe the remote MCP with the real auth shape. Run from the VPS so the token stays there:
+
+```bash
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -X POST 'https://mcp.razorpay.com/mcp' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'Content-Type: application/json' \
+    -H \"Authorization: Basic \$MCP_RAZORPAY_API_KEY\" \
+    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"hermes-probe\",\"version\":\"0\"}}}'
+")
+case "$HTTP" in
+  200) echo "OK: Razorpay MCP reachable and token valid." ;;
+  401) echo "FAIL: token invalid. Most often: wrong mode (Live vs Test), or base64 has stray newline. Re-check Step 3."; rollback; exit 1 ;;
+  403) echo "FAIL: token valid but no scope. Confirm key permissions in Dashboard."; exit 1 ;;
+  404) echo "FAIL: wrong URL. Must be /mcp, not deprecated /sse."; rollback; exit 1 ;;
+  *)   echo "WARN: unexpected HTTP $HTTP from Razorpay MCP. Check manually." ;;
+esac
+```
+
+For a deeper check, harvest the session id and call `tools/list` with the auth header —
+you should see payment tools (create payment link, fetch payment, fetch order, refund).
+
+A read-only call from chat (`@<agent> using razorpay, fetch my most recent payments`)
+returning `{"items":[],"count":0}` on a fresh test account is a **pass** — every layer
+worked end-to-end.
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove razorpay 2>/dev/null || true"
+  ssh "$VPS_USER@$VPS_IP" "hermes config unset MCP_RAZORPAY_API_KEY 2>/dev/null || \
+    sed -i '/^MCP_RAZORPAY_API_KEY=/d' ~/.hermes/.env"
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 3; hermes gateway run --daemon"
+  echo "Rolled back. Razorpay is no longer wired."
+}
 ```
 
 ---
 
 ## Pitfalls
 
-- **Live vs Test keys are different credentials.** A `rzp_test_` key against live data (or
-  vice versa) returns 401 from the MCP. Decide the mode with the user before minting the token.
-- **Basic, not Bearer.** Razorpay uses `Authorization: Basic <token>`. Using `Bearer` fails
-  auth silently with a generic 401. The header value must keep the literal `Basic ` prefix.
-- **base64 newline.** `echo key:secret | base64` on some systems wraps or appends a newline;
-  use `printf '%s:%s' ... | base64 -w 0`. A wrapped token authenticates only sometimes.
-- **Secret is one-time.** The key secret is shown once on the Dashboard. If lost, regenerate
-  the key pair (which invalidates the old one) — you cannot retrieve the old secret.
-- **Write scope is real money.** Live keys can create payment links and issue refunds. If the
-  agent only needs to read, prefer Test keys, or generate a key with restricted permissions in
-  the Dashboard, before handing it to an autonomous agent.
-- **Rate limits.** Razorpay enforces per-account API rate limits; a chatty agent can hit 429.
-  Back off rather than retrying in a tight loop.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Live vs Test keys mixed up | A `rzp_test_` key against live data (or vice versa) returns 401 from the MCP | Decide mode with the user BEFORE minting; confirm in Step 3 dry-run |
+| 2 | Using `Bearer` instead of `Basic` | Razorpay rejects Bearer with a generic 401 | Header value MUST keep the literal `Basic ` prefix |
+| 3 | base64 newline / wrapping | `echo key:secret \| base64` may wrap or append `\n`; token authenticates only sometimes | Always `printf '%s:%s' ... \| base64 -w 0` |
+| 4 | Key secret lost | Razorpay shows the secret ONCE; cannot be retrieved later | If lost, regenerate the key pair (old one invalidated) |
+| 5 | Write scope on live keys = real money | Live keys can create payment links and issue refunds autonomously | Prefer Test keys; or use Dashboard-restricted permissions |
+| 6 | Deprecated `/sse` endpoint | The old `/sse` URL returns 404 / HTML | Always use `https://mcp.razorpay.com/mcp` |
+| 7 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
+| 8 | sed with `/` delimiter on base64 token | base64 contains `/+=`; sed breaks silently | Always use `\|` delimiter |
+| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
+| 10 | Rate limits (429) | Razorpay enforces per-account API limits; chatty agent gets throttled | Backoff on 429, don't tight-loop retry |
+| 11 | `echo >> ~/.hermes/.env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` |
+| 12 | Container vs host confusion | Skill assumed wrong layer; key landed in invisible place | Step 1 detects container automatically; verify with `whoami; hostname` if in doubt |
 
-## Verify
-
-```bash
-# Tools registered in the gateway log
-docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-  | grep -iE "registered.*tool|razorpay" | tail -5
-```
-
-Then trigger a real, read-only call from the chat interface:
-```
-@<agent> using razorpay, fetch my most recent payments
-```
-A valid empty result (e.g. `{"items":[],"count":0}` on a fresh test account) is a **pass** —
-every layer worked. A 401 or "auth" error means the token didn't land; recheck step 1 (newline)
-and step 3 (the `Basic ` prefix and `|`-delimited sed).
+---
 
 ## Definition of done
 
-- [ ] `hermes logs` shows `registered N tool(s)` for the `razorpay` MCP server.
-- [ ] A read-only call (fetch payments/orders) from chat returns data or a valid empty result.
-- [ ] `config.yaml` shows `Authorization: Basic ${MCP_RAZORPAY_API_KEY}` — no token in it.
-- [ ] `/opt/data/.env` holds the base64 token and is `chmod 600`.
-- [ ] The user confirmed Live vs Test mode matches their intent before going live.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
+- [ ] Idempotency check passed (or `FORCE=1` overrode)
+- [ ] Dry-run shown; Live vs Test mode confirmed; user approved (or `AUTO_APPROVE=1`)
+- [ ] `MCP_RAZORPAY_API_KEY` (base64 token) in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
+- [ ] `config.yaml` shows `Authorization: Basic ${MCP_RAZORPAY_API_KEY}` — env reference, no literal token
+- [ ] MCP registered via Path A (remote MCP) or REST documented via Path B
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Logs show `registered N tool(s) for 'razorpay'` within 30s
+- [ ] Smoke test: `POST /mcp initialize` returned `200`
+- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and MCP auth failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

@@ -1,161 +1,304 @@
 ---
 name: integration-hetzner
-description: Connect a running Hermes agent to Hetzner Cloud so it can read and manage VPS infrastructure (servers, volumes, firewalls, load balancers). Use when the user wants their Hermes agent to query or operate Hetzner Cloud resources.
+description: Connect Hetzner Cloud (servers, volumes, firewalls, load balancers) to a self-hosted Hermes Agent over SSH. Uses a static project-scoped Bearer token against the official REST API, with an optional self-hosted community MCP fallback. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-hetzner — connect Hetzner Cloud to Hermes
+# /integration-hetzner — connect Hetzner Cloud to a remote Hermes (SSH-first)
 
-You are the engineer connecting Hetzner Cloud to a running Hermes agent. Hetzner Cloud exposes a
-clean REST API guarded by a static Bearer token, so the credential half is a one-shot job. The
-gap is the wiring: as of 2026-06 there is **no first-party Hetzner MCP server**, so you cannot
-point `/hermes-mcp-add` at a hosted endpoint. Pick one of the two honest paths in Step 2 and tell
-the user which one you took and why.
+You are the engineer connecting Hetzner Cloud to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
+SSH as root against the VPS. The user only does the one thing a machine cannot:
 
-Do everything autonomously. Stop only for the one thing a machine cannot do: minting the API token
-(it is shown exactly once and is tied to the user's project).
+1. Mint the API token in the Hetzner Cloud Console (it is shown exactly once).
 
-## Before you start — gather (ask once)
+Everything else — token storage, REST wiring (or optional MCP registration), gateway reload,
+verification — runs on the VPS via SSH, idempotently.
 
-1. **Hetzner Cloud API token** — a static Bearer token, scoped to a single Hetzner *project*.
-   Mint it in the Hetzner Cloud Console: **Security → API tokens → Generate API token**. Choose
-   the scope deliberately:
-   - **Read** for query-only agents (GET only — safest default).
-   - **Read & Write** only if the agent must create/delete/power-cycle servers (GET/POST/PUT/DELETE).
-   The token is shown **once** and cannot be viewed again — have the user copy it immediately.
-   Console + steps: https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/
-2. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Honest auth picture (verified 2026-06):** Hetzner Cloud exposes a clean REST API at
+`https://api.hetzner.cloud/v1/` guarded by a static project-scoped Bearer token. There is
+**no first-party Hetzner MCP server**. Path A (default) stores the token and points the
+agent's generic HTTP tool at the REST API. Path B documents how to self-host the community
+`dkruyt/mcp-hetzner` server if the user wants first-class MCP tools — do not pretend a hosted
+endpoint exists.
 
-Token format: an opaque alphanumeric string (the docs' example is `jEheVytlAoFl7F8MqUQ7jAo2hOXASztX`).
-There is no `hcl_`-style prefix and no expiry shown in the console; treat it as long-lived and rotate
-manually. One token = one project; a multi-project user needs one token per project.
+---
 
-Set shell vars from the answers:
+## Before you start — gather (ask once, in one batch)
+
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$HETZNER_API_TOKEN` | Static project-scoped Bearer token (opaque alphanumeric, no prefix; e.g. `jEheVytlAoFl7F8MqUQ7jAo2hOXASztX`) | Hetzner Cloud Console → **Security → API tokens → Generate API token** → pick **Read** (safe default) or **Read & Write** (mutations). Shown ONCE. See <https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/> |
+| Scope choice | Read vs Read & Write | Decided at mint time — cannot be upgraded later, only re-minted |
+
+One token = one Hetzner *project*. A multi-project user needs one token per project.
+
+Confirm SSH access before doing anything:
+
 ```bash
-AGENT=<container-name>     # e.g. hermes-agent-mxlc-hermes-agent-1
-TOKEN=<hetzner-api-token>  # never log; injected via sed below
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
 ---
 
-## Step 1 — sanity-check the token against the live API
-
-Confirm the token works and observe its scope before wiring anything. Base URL is
-`https://api.hetzner.cloud/v1/`; auth is `Authorization: Bearer <token>`.
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-curl -sS -H "Authorization: Bearer $TOKEN" \
-  'https://api.hetzner.cloud/v1/servers?per_page=1' \
-  -w '\nHTTP %{http_code}\n'
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    hermes --version
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    docker exec "$AGENT" hermes --version
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-- **HTTP 200 + a `servers` array** (even empty `[]`) → token is valid.
-- **HTTP 401** (`unauthorized`) → wrong/typo'd token, or it belongs to a different project.
-- **HTTP 403 on a later POST/DELETE but 200 on GET** → the token is **Read-only**. Fine for a
-  query agent; re-mint as Read & Write if the user needs to mutate infra.
-
-Reference: https://docs.hetzner.com/cloud/api/getting-started/using-api/
+Expected: `0.15.x` or `0.17.x`.
 
 ---
 
-## Step 2 — wire it into Hermes (choose the honest path)
-
-**There is no first-party Hetzner MCP server verified as of 2026-06.** Do not pretend a stored key
-alone gives the agent Hetzner tools — a key in `.env` is just a secret until something reads it.
-Pick one:
-
-### Path A (default) — store the key + expose the REST API to a generic HTTP tool
-
-Write the token to the Hermes runtime `.env` so any generic HTTP/REST tool the agent has can call
-Hetzner with it. Use `hermes config set` (it writes to `/opt/data/.env` inside the container);
-never `echo >>`.
+## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes config set HETZNER_API_TOKEN "$TOKEN"
-docker exec "$AGENT" sh -c 'chmod 600 /opt/data/.env'
+ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci hetzner" || echo 0)
+HAS_TOKEN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^HETZNER_API_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
+if { [ "$ALREADY" -gt 0 ] || [ "$HAS_TOKEN" -gt 0 ]; } && [ "${FORCE:-0}" != "1" ]; then
+  echo "Hetzner is already wired. Set FORCE=1 to rewire."
+  exit 0
+fi
 ```
 
-Then point the agent's generic HTTP tool at the Hetzner REST API:
-- Base URL: `https://api.hetzner.cloud/v1/`
-- Auth header: `Authorization: Bearer ${HETZNER_API_TOKEN}`
-- Useful read endpoints: `GET /servers`, `GET /volumes`, `GET /firewalls`,
-  `GET /load_balancers`, `GET /datacenters`, `GET /pricing`.
-- Mutations (Read & Write token only): `POST /servers`, `POST /servers/{id}/actions/poweroff`,
-  `DELETE /servers/{id}`.
-Full reference: https://docs.hetzner.cloud/reference/cloud
+---
 
-### Path B — self-host a community MCP server, then run /hermes-mcp-add
+## Step 3 — DRY RUN preview (always show before writing)
 
-If the user wants first-class MCP tools, the maintained community option is **dkruyt/mcp-hetzner**
-(MIT, Python): https://github.com/dkruyt/mcp-hetzner . It is **not a hosted endpoint** — it ships
-as a local stdio server with an optional SSE/HTTP mode (default `localhost:8080`), and it reads the
-token from the `HCLOUD_TOKEN` env var. To use it as a *remote* MCP for Hermes you must host it
-yourself behind a URL Hermes can reach, then follow the existing `/hermes-mcp-add` procedure
-end-to-end (probe → register → sed-inject token → `gateway stop` + `gateway run` → verify logs),
-passing:
-- the MCP base URL you exposed (e.g. `https://hetzner-mcp.<your-domain>/mcp`),
-- auth shape `header` / `Authorization: Bearer`,
-- env var `MCP_HETZNER_API_KEY` (Hermes derives this from the name `hetzner`).
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Sanity-check token: GET https://api.hetzner.cloud/v1/servers?per_page=1 → expect 200
+  2. Write HETZNER_API_TOKEN (length ${#HETZNER_API_TOKEN}, prefix ${HETZNER_API_TOKEN:0:4}...) via 'hermes config set'
+  3. chmod 600 ~/.hermes/.env
+  4. Path A (default): document REST base + auth for the agent's HTTP tool
+     Path B (optional): hermes mcp add hetzner against a self-hosted dkruyt/mcp-hetzner URL
+  5. Reload gateway: hermes gateway stop && hermes gateway run
+  6. Verify in logs: grep -i "registered.*hetzner" (Path B only)
+  7. Smoke test: GET /v1/servers?per_page=1 → expect 200
 
-Do not invent or assume a public URL for this server — there is no official hosted one. If you have
-not actually stood up the server, do not claim it is connected; fall back to Path A.
+The token is NEVER printed in plaintext.
+EOF
+```
 
-Other community implementations exist (Xodus-CO/hcloud-mcp, MahdadGhasemian/mcp-hetzner-go); vet
-maintenance and provenance before trusting any of them with a Read & Write token.
+Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+
+---
+
+## Step 4 — write the secret (chmod 600, no echo, no logging)
+
+First sanity-check the token against the live API from the VPS so a bad token aborts before
+anything is written:
+
+```bash
+PRECHECK=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer $HETZNER_API_TOKEN' \
+    'https://api.hetzner.cloud/v1/servers?per_page=1'
+")
+case "$PRECHECK" in
+  200) echo "OK: token validates against Hetzner Cloud API." ;;
+  401) echo "ABORT: HTTP 401 — token invalid or for wrong project. Re-mint and retry."; exit 1 ;;
+  *)   echo "ABORT: unexpected HTTP $PRECHECK from Hetzner. Check connectivity."; exit 1 ;;
+esac
+```
+
+Then write it:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set HETZNER_API_TOKEN '$HETZNER_API_TOKEN'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+```
+
+Verify (returns `1`, NEVER the value):
+
+```bash
+WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^HETZNER_API_TOKEN=' ~/.hermes/.env" || echo 0)
+[ "$WROTE" = "1" ] || { echo "FAIL: HETZNER_API_TOKEN not written. Rolling back."; rollback; exit 1; }
+```
+
+> If your Hermes build has no `config set` subcommand, use the safe sed pattern
+> (pipe delimiter; Hetzner tokens are alnum but the pattern is safe for any token):
+> ```bash
+> ssh "$VPS_USER@$VPS_IP" "
+>   grep -q '^HETZNER_API_TOKEN=' ~/.hermes/.env || printf 'HETZNER_API_TOKEN=\n' >> ~/.hermes/.env
+>   sed -i 's|^HETZNER_API_TOKEN=.*|HETZNER_API_TOKEN=$HETZNER_API_TOKEN|' ~/.hermes/.env
+>   chmod 600 ~/.hermes/.env
+> "
+> ```
+
+---
+
+## Step 5 — wire it into Hermes (choose the honest path)
+
+**There is no first-party Hetzner MCP server.** Pick one and tell the user which.
+
+### Path A (default) — REST API via the agent's generic HTTP tool
+
+The token is now in `~/.hermes/.env` as `HETZNER_API_TOKEN`. Point the agent's HTTP tool at:
+
+- **Base URL:** `https://api.hetzner.cloud/v1/`
+- **Auth header:** `Authorization: Bearer ${HETZNER_API_TOKEN}`
+- **Useful read endpoints:** `GET /servers`, `GET /volumes`, `GET /firewalls`,
+  `GET /load_balancers`, `GET /datacenters`, `GET /pricing`
+- **Mutations (Read & Write token only):** `POST /servers`,
+  `POST /servers/{id}/actions/poweroff`, `DELETE /servers/{id}`
+- **Full reference:** <https://docs.hetzner.cloud/reference/cloud>
+
+No `hermes mcp add` is needed for Path A. Skip directly to Step 6.
+
+### Path B (optional) — self-host `dkruyt/mcp-hetzner` then register it
+
+If the user wants first-class MCP tools, the maintained community option is
+**dkruyt/mcp-hetzner** (MIT, Python): <https://github.com/dkruyt/mcp-hetzner>. It ships as a
+local stdio server with an optional SSE/HTTP mode (default `localhost:8080`) and reads the
+token from the `HCLOUD_TOKEN` env var (not `HETZNER_API_TOKEN` — see Pitfalls). To use it
+remotely you must host it yourself behind a URL Hermes can reach, then:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "
+  hermes mcp add hetzner \
+    --url 'https://hetzner-mcp.<your-domain>/mcp' \
+    --auth-header 'Authorization' \
+    --auth-scheme 'Bearer' \
+    --placeholder-token 'placeholder'
+"
+# Inject the real token with pipe delimiter (tokens are alnum but the pattern is universal):
+ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$HETZNER_API_TOKEN\"'|g' ~/.hermes/config.yaml"
+```
+
+Do not invent or assume a public URL for this server — there is no official hosted one. If
+you have not actually stood up the server, do not claim it is connected; fall back to Path A.
+
+Other community implementations exist (Xodus-CO/hcloud-mcp, MahdadGhasemian/mcp-hetzner-go);
+vet maintenance and provenance before trusting any of them with a Read & Write token.
+
+---
+
+## Step 6 — reload the gateway (stop + run, NOT restart)
+
+`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 2
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 7 — verify registration in logs (Path B only; poll up to 30s)
+
+Path A has nothing to register in the gateway — the env var is just loaded on next gateway
+start. Skip this step for Path A. For Path B:
+
+```bash
+REGISTERED=0
+for i in $(seq 1 6); do
+  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
+       | grep -qiE "registered.*tool.*hetzner|MCP server.*hetzner.*(ok|ready)"; then
+    REGISTERED=1
+    echo "OK: hetzner registered in gateway logs."
+    break
+  fi
+  sleep 5
+done
+[ "$REGISTERED" = "1" ] || { echo "FAIL: hetzner not in logs after 30s. Rolling back."; rollback; exit 1; }
+```
+
+For Path A, instead confirm the env var is loaded into the gateway process:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -100" \
+  | grep -qiE "gateway.*(ready|started|listening)" \
+  || { echo "FAIL: gateway did not come back up. Rolling back."; rollback; exit 1; }
+```
+
+---
+
+## Step 8 — live API smoke test
+
+```bash
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -H \"Authorization: Bearer \$HETZNER_API_TOKEN\" \
+    'https://api.hetzner.cloud/v1/servers?per_page=1'
+")
+case "$HTTP" in
+  200) echo "OK: Hetzner Cloud API reachable and token valid." ;;
+  401) echo "FAIL: token invalid or wrong project. Re-check Step 4."; rollback; exit 1 ;;
+  403) echo "FAIL: token is Read-only and you tried a write op (or scope missing)."; exit 1 ;;
+  429) echo "WARN: rate-limited (3600 req/hr per project). Backoff and retry." ;;
+  *)   echo "WARN: unexpected HTTP $HTTP from Hetzner Cloud API. Check manually." ;;
+esac
+```
+
+`200` with `{"servers":[]}` (empty array) is a pass — the project simply has no servers yet.
+Every layer worked.
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove hetzner 2>/dev/null || true"
+  ssh "$VPS_USER@$VPS_IP" "hermes config unset HETZNER_API_TOKEN 2>/dev/null || \
+    sed -i '/^HETZNER_API_TOKEN=/d' ~/.hermes/.env"
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Hetzner is no longer wired."
+}
+```
 
 ---
 
 ## Pitfalls
 
-- **No OAuth, but no first-party MCP either.** Auth is trivially a static Bearer token; the real
-  work is choosing Path A vs B. A key sitting in `.env` connects nothing on its own.
-- **Token is project-scoped and shown once.** It only sees resources in the one Hetzner project it
-  was minted in. If the agent "can't see" a server, the token is for the wrong project. Re-minting
-  is the only recovery — the value is never displayed again.
-- **Read vs Read & Write is decided at mint time.** You cannot upgrade a Read token's scope; you
-  re-create it. Default to Read unless the user explicitly wants the agent to change infra.
-- **Rate limit: 3600 requests/hour per project.** It refills ~1 request/second, not all at once; a
-  burst that drains it returns **HTTP 429** with `RateLimit-Remaining: 0`. A polling agent should
-  back off on 429 and watch the `RateLimit-Remaining` header. Both authenticated and unauthenticated
-  requests count. (https://github.com/hetznercloud/hcloud-go/issues/79)
-- **Hetzner Cloud ≠ Hetzner Robot.** This token works only for the Cloud API
-  (`api.hetzner.cloud`). Dedicated/Robot servers use a separate, different API and won't authenticate
-  with this token.
-- **Self-hosted MCP (Path B) needs `HCLOUD_TOKEN`, not `HETZNER_API_TOKEN`.** dkruyt/mcp-hetzner
-  reads `HCLOUD_TOKEN`; Hermes' MCP wiring injects `MCP_HETZNER_API_KEY`. Map them in the server's
-  own env so the names line up, or the server starts unauthenticated.
-
----
-
-## Verify
-
-Path A — prove the agent can reach Hetzner with the stored token. Confirm the var landed (prints
-the var name only, never the value):
-```bash
-docker exec -u hermes "$AGENT" sh -c 'grep -c "^HETZNER_API_TOKEN=" /opt/data/.env'
-# Should print 1
-```
-Then ask the agent in chat to use its HTTP tool against `https://api.hetzner.cloud/v1/servers` and
-confirm it returns a server list (or a valid empty `{"servers":[]}`). An empty-but-valid response
-is a pass — every layer worked.
-
-Path B — after `/hermes-mcp-add`, confirm tool registration in the gateway logs:
-```bash
-docker exec -u hermes "$AGENT" hermes logs 2>&1 \
-  | grep -iE "registered.*tool|MCP server.*hetzner" | tail -5
-```
-Then trigger a real call: `@<agent> using hetzner, list my servers`.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Assuming a hosted Hetzner MCP exists | There is **no first-party MCP**; a key in `.env` alone connects nothing | Pick Path A (REST) or Path B (self-hosted community MCP) — tell the user which |
+| 2 | Token shown to wrong project's resources | Token is **project-scoped**, shown once, cannot be viewed again | Confirm correct project at mint time; re-mint if wrong |
+| 3 | "Upgrading" a Read token to Read & Write | Scope is fixed at mint time | Re-mint as Read & Write; revoke the old one |
+| 4 | Burst of calls returns `429` | Rate limit is **3600 req/hr per project**, refills ~1/sec, NOT all at once | Backoff on `429`; honour `RateLimit-Remaining` header |
+| 5 | Token "works" but hits the wrong API | Hetzner Cloud (`api.hetzner.cloud`) ≠ Hetzner Robot (dedicated) — separate APIs and tokens | Cloud tokens only authenticate against `api.hetzner.cloud` |
+| 6 | Path B server starts unauthenticated | dkruyt/mcp-hetzner reads `HCLOUD_TOKEN`; Hermes injects `MCP_HETZNER_API_KEY` | Map the names in the server's own env: `HCLOUD_TOKEN=${MCP_HETZNER_API_KEY}` |
+| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
+| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without a trailing newline (silent breakage) | Always `hermes config set`; fallback is the sed pattern with pipe delimiter |
+| 9 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600` |
+| 10 | sed with `/` delimiter on tokens | Future tokens may contain `/+=` | Always use `\|` delimiter |
+| 11 | Container vs host confusion | SSH lands on host but Hermes runs in a container, or vice versa | Step 1 detects both layers; always check `whoami; hostname` first if confused |
 
 ---
 
 ## Definition of done
 
-- [ ] Token validated against `https://api.hetzner.cloud/v1/servers` (HTTP 200) and its scope
-      (Read vs Read & Write) confirmed.
-- [ ] Token stored only in `/opt/data/.env` with `chmod 600` — never in `config.yaml` or chat.
-- [ ] The chosen path is wired: Path A (REST base URL + `Authorization: Bearer ${HETZNER_API_TOKEN}`
-      handed to the agent's HTTP tool) **or** Path B (`/hermes-mcp-add` completed against a
-      self-hosted community MCP, tools registered in logs).
-- [ ] A real query returns Hetzner data (server list or a valid empty response).
-- [ ] User told plainly that no first-party MCP exists and which path was used.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
+- [ ] Idempotency check passed (or `FORCE=1` overrode)
+- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
+- [ ] Token sanity-checked against `GET /v1/servers?per_page=1` → HTTP 200
+- [ ] `HETZNER_API_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
+- [ ] Scope (Read vs Read & Write) confirmed and communicated to the user
+- [ ] Chosen path is wired: Path A (REST base + Bearer header handed to the agent's HTTP tool) **or** Path B (`hermes mcp add hetzner` against self-hosted MCP, tools in logs)
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Path B only: logs show `registered N tool(s) for 'hetzner'` within 30s
+- [ ] Smoke test: `GET /v1/servers?per_page=1` returned `200` (empty array is a pass)
+- [ ] User told plainly that no first-party MCP exists and which path was used
+- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
 
-See `reference/TROUBLESHOOTING.md` for gateway, `.env`, and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
