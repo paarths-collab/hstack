@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# hstack setup — registers the hstack skills with OpenClaw.
+# Safe to re-run (idempotent). No sudo. No network calls.
+#
+# OpenClaw discovers skills in ~/.openclaw/skills/ (personal, user-managed) and
+# .openclaw/skills/ in the repo root (project-level). It loads any SKILL.md
+# found under a configured root, with the same YAML frontmatter format as
+# Claude Code — so hstack skills work verbatim.
+# Docs: https://docs.openclaw.ai/tools/skills
+set -euo pipefail
+
+HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILLS_SRC="$HSTACK_DIR/skills"
+OPENCLAW_SKILLS="${OPENCLAW_SKILLS_DIR:-$HOME/.openclaw/skills}"
+
+echo "hstack setup (OpenClaw)"
+echo "  source : $SKILLS_SRC"
+echo "  target : $OPENCLAW_SKILLS"
+echo
+
+[ -d "$SKILLS_SRC" ] || {
+  echo "ERROR: $SKILLS_SRC not found — run ./setup-openclaw from inside the hstack repo."
+  exit 1
+}
+mkdir -p "$OPENCLAW_SKILLS"
+
+count=0
+for dir in "$SKILLS_SRC"/*/; do
+  [ -f "$dir/SKILL.md" ] || continue
+  name="$(basename "$dir")"
+  link="$OPENCLAW_SKILLS/$name"
+  if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
+  # OpenClaw explicitly accepts skill-directory symlinks (per docs, docs.openclaw.ai/tools/skills)
+  if ln -s "$dir" "$link" 2>/dev/null; then :; else cp -r "$dir" "$link"; fi
+  count=$((count + 1))
+done
+echo "Registered $count skills for OpenClaw."
+
+# OpenClaw looks for optional project-level skills at .openclaw/skills/ in the
+# repo root, plus any AGENTS.md at the top of ~/.openclaw/. Add a top-level
+# marker so the OpenClaw runtime discovers hstack on the next reload.
+CLAW_MD="${OPENCLAW_MD_PATH:-$HOME/.openclaw/AGENTS.md}"
+MARK_START="<!-- hstack:start -->"
+MARK_END="<!-- hstack:end -->"
+SECTION="$MARK_START
+## hstack — self-hosted Hermes Agent deploy
+
+hstack skills are loaded from $OPENCLAW_SKILLS. Every skill is SSH-first (needs \$VPS_IP +
+\$VPS_USER) and idempotent. Use /hermes-deploy for the full end-to-end setup, then any
+/platform-* or /integration-* skill to wire a service into the running Hermes agent.
+$MARK_END"
+
+mkdir -p "$(dirname "$CLAW_MD")"
+touch "$CLAW_MD"
+if grep -q "$MARK_START" "$CLAW_MD" 2>/dev/null; then
+  tmp="$(mktemp)"
+  awk -v s="$MARK_START" -v e="$MARK_END" '
+    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$CLAW_MD" >"$tmp"
+  { cat "$tmp"; echo; echo "$SECTION"; } >"$CLAW_MD"
+  rm -f "$tmp"
+  echo "Updated hstack section in $CLAW_MD"
+else
+  { echo; echo "$SECTION"; } >>"$CLAW_MD"
+  echo "Added hstack section to $CLAW_MD"
+fi
+
+echo
+echo "Done. In OpenClaw, list skills and invoke any /hermes-* /platform-* /integration-* skill."
+echo "  openclaw skills list    # confirm hstack skills are discovered"
+echo "  openclaw /hermes-deploy # or any other skill"
