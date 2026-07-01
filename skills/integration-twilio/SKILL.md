@@ -1,148 +1,277 @@
 ---
 name: integration-twilio
-description: Connect Twilio (SMS, voice, WhatsApp infrastructure) to a running Hermes agent using Account SID + Auth Token against the REST API. Use when the user wants Hermes to send SMS, place calls, or drive Twilio-hosted WhatsApp from chat or skills.
+description: Connect Twilio (SMS, voice, WhatsApp infra) to a self-hosted Hermes Agent over SSH using Account SID + API Key Secret against REST API (Basic auth, form-encoded). Refuses the docs-only hosted MCP. Warns on trial account limits and EU-residency URL. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-twilio — connect Twilio to Hermes
+# /integration-twilio — connect Twilio to a remote Hermes (SSH-first)
 
-You are the engineer connecting Twilio to a running Hermes agent. Twilio is the agent's
-outbound comms infrastructure: SMS, voice, and the carrier side of WhatsApp Business. Work
-autonomously; stop only for things a machine cannot do: minting the credentials in the Twilio
-Console and (for WhatsApp) approving the WhatsApp Sender.
+You are the engineer connecting Twilio to a self-hosted Hermes agent on the user's VPS. You
+(the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as
+root against the VPS. The user does two things a machine cannot:
 
-**Honest auth picture (verified 2026-06):** Twilio ships an official hosted MCP server at
-`https://mcp.twilio.com/docs`, but per Twilio's own docs it is **documentation-only and
-read-only** — "the server provides API search and documentation retrieval. It does not execute
-API calls on your behalf." So it cannot send an SMS. The `twilio-labs/mcp` repo (npm package
-`@twilio-alpha/mcp`) is a **local stdio** server, not a remote HTTP endpoint, and uses
-`ACCOUNT_SID/API_KEY:API_SECRET`. The reliable, headless path for a self-hosted Hermes is the
-**REST API** with Basic Auth, which is what this skill wires.
+1. Mint API Key SID + Secret (preferred) at https://console.twilio.com/us1/account/keys-credentials/api-keys.
+2. Approve WhatsApp Sender (if WhatsApp is in scope) or use sandbox `+14155238886`.
 
-## Before you start — gather (ask once)
+Everything else — credential storage, live REST verify, gateway reload, smoke test — runs on
+the VPS via SSH, idempotently with a rollback path.
 
-1. **Account SID** — starts with `AC`, 34 chars. Find it in the Twilio Console dashboard
-   <https://console.twilio.com/>. Not secret on its own, but treat as sensitive.
-2. **Auth Token** — 32 hex chars, shown next to the Account SID in the Console. Prefer an
-   **API Key SID (`SK...`) + Secret** pair for production
-   (<https://console.twilio.com/us1/account/keys-credentials/api-keys>) — same Basic Auth
-   shape, revocable without rotating the account-wide token.
-3. **From number / Messaging Service SID** — the E.164 sender (`+15551234567`) or a Messaging
-   Service SID (`MG...`). For WhatsApp use `whatsapp:+14155238886` (sandbox) or your approved
-   WhatsApp Sender.
-4. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
+**Honest auth picture (verified 2026-06):** Twilio's hosted MCP at `https://mcp.twilio.com/docs`
+is **documentation-only and read-only** — per Twilio's own docs, "the server provides API
+search and documentation retrieval. It does not execute API calls on your behalf." **So it
+CANNOT send an SMS.** Wiring it as an executor is a common mistake this skill refuses.
 
-Set shell vars from answers (never log the secrets):
-```bash
-AGENT=<container-name>            # e.g. hermes-agent-mxlc-hermes-agent-1
-TWILIO_SID=<AC...>                # Account SID
-TWILIO_TOKEN=<auth-token-or-SK-secret>
-TWILIO_KEY=<SK... or same as TWILIO_SID if using Auth Token>
-TWILIO_FROM=<+15551234567 or MG... or whatsapp:+...>
-```
+The reliable headless path is the **REST API** at `https://api.twilio.com/2010-04-01` (or
+`https://api.dublin.ie1.twilio.com/2010-04-01` for EU residency) with **HTTP Basic auth**
+and **form-encoded bodies** (Twilio uses `x-www-form-urlencoded`, NOT JSON — the #2 mistake).
 
-If using an API Key, the Basic Auth username is the **API Key SID (`SK...`)** and the password
-is the secret. If using the Auth Token, the username is the **Account SID** and the password
-is the Auth Token. Pick one pair and stick with it.
+**API Key SID vs Auth Token:** Prefer **API Key SID (`SK...`) + Secret** for production —
+revocable per-environment without rotating the account-wide Auth Token. Both use the same
+Basic auth shape.
 
 ---
 
-## Step 1 — store the credentials in the Hermes runtime .env (chmod 600)
+## Before you start — gather (ask once, in one batch)
 
-Write to `/opt/data/.env` inside the container via `hermes config set` so Hermes owns the
-write. Never `echo >>` (it can merge onto a prior line) and never put credentials in
-`config.yaml`.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$TWILIO_ACCOUNT_SID` | Account SID (starts `AC`, 34 chars) | Twilio Console dashboard |
+| `$TWILIO_API_KEY` | API Key SID (starts `SK...`) — Basic auth username | https://console.twilio.com/us1/account/keys-credentials/api-keys → Create API Key |
+| `$TWILIO_API_SECRET` | API Key Secret — Basic auth password | Same flow (shown ONCE) |
+| `$TWILIO_FROM` | Sender: E.164 `+15551234567` OR Messaging Service SID `MG...` OR `whatsapp:+...` | Console → Phone Numbers OR Messaging → Services |
+| `$TWILIO_REGION` *(optional)* | `us1` (default) or `ie1` (EU residency) | For EU data residency use `ie1` |
+
+**Alternative:** if the user only has Auth Token (not API Key), use SID as username, Auth
+Token as password. Set `$TWILIO_API_KEY=$TWILIO_ACCOUNT_SID` and `$TWILIO_API_SECRET=<auth-token>`.
+
+Confirm SSH access:
 
 ```bash
-docker exec -i -u hermes "$AGENT" hermes config set TWILIO_ACCOUNT_SID "$TWILIO_SID"
-docker exec -i -u hermes "$AGENT" hermes config set TWILIO_API_KEY     "$TWILIO_KEY"
-docker exec -i -u hermes "$AGENT" hermes config set TWILIO_AUTH_TOKEN  "$TWILIO_TOKEN"
-docker exec -i -u hermes "$AGENT" hermes config set TWILIO_FROM        "$TWILIO_FROM"
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
-
-Verify the vars landed (prints counts, never values):
-```bash
-docker exec "$AGENT" sh -c \
-  "for v in TWILIO_ACCOUNT_SID TWILIO_API_KEY TWILIO_AUTH_TOKEN TWILIO_FROM; do \
-     printf '%s=%s\n' \"\$v\" \"\$(grep -c \"^\$v=\" /opt/data/.env)\"; \
-   done"
-```
-
-> If your Hermes build has no `config set` subcommand, inject directly with the sed pattern
-> from `/hermes-mcp-add` (use the `|` delimiter — Twilio secrets are alnum but stay
-> consistent with the base procedure):
-> ```bash
-> docker exec "$AGENT" sh -c \
->   "grep -q '^TWILIO_AUTH_TOKEN=' /opt/data/.env || printf 'TWILIO_AUTH_TOKEN=\n' >> /opt/data/.env; \
->    sed -i 's|^TWILIO_AUTH_TOKEN=.*|TWILIO_AUTH_TOKEN=${TWILIO_TOKEN}|' /opt/data/.env && chmod 600 /opt/data/.env"
-> ```
 
 ---
 
-## Step 2 — connect Twilio. Pick the path that matches your Hermes build.
+## Step 1 — verify Hermes is reachable on the VPS
 
-A static credential alone does not give the agent a tool surface. Twilio has **no verified
-first-party remote MCP server that executes API calls** as of 2026-06 (the hosted
-`mcp.twilio.com/docs` is documentation-only). Two honest options:
+```bash
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+```
 
-### Path A (preferred) — generic HTTP tool against the Twilio REST API
+Expected: `0.15.x` or `0.17.x`.
 
-This is the supported, headless, production-shape. Point a generic HTTP/tool capability at:
+---
 
-- **Base URL:** `https://api.twilio.com/2010-04-01`
-  (EU residency: `https://api.dublin.ie1.twilio.com/2010-04-01`)
-- **Auth:** HTTP Basic. Username = `TWILIO_API_KEY` (or `TWILIO_ACCOUNT_SID`), password =
-  `TWILIO_AUTH_TOKEN`.
-- **Content type:** `application/x-www-form-urlencoded` (Twilio uses form bodies, not JSON).
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^(TWILIO_ACCOUNT_SID|TWILIO_API_KEY|TWILIO_API_SECRET|TWILIO_FROM)=' ~/.hermes/.env 2>/dev/null" || echo 0)
+if [ "$COUNT" = "4" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Twilio already wired (all 4 vars present). Set FORCE=1 to rewire."
+  exit 0
+fi
+```
+
+---
+
+## Step 3 — HARD GATE (SID format + live REST verify + sender format)
+
+```bash
+# SID format
+printf '%s' "$TWILIO_ACCOUNT_SID" | grep -qE '^AC[0-9a-f]{32}$' \
+  || { echo "ABORT: TWILIO_ACCOUNT_SID must be AC + 32 hex chars."; exit 1; }
+
+# API Key format (either SK... or ACCOUNT_SID as fallback)
+if printf '%s' "$TWILIO_API_KEY" | grep -qE '^SK[0-9a-f]{32}$'; then
+  echo "Using API Key SID (SK...) — recommended."
+elif [ "$TWILIO_API_KEY" = "$TWILIO_ACCOUNT_SID" ]; then
+  echo "Using Account SID as Basic auth username (legacy Auth Token mode)."
+else
+  echo "ABORT: TWILIO_API_KEY must be either SK... or equal to \$TWILIO_ACCOUNT_SID."
+  exit 1
+fi
+
+# Secret sanity
+[ "${#TWILIO_API_SECRET}" -ge 20 ] \
+  || { echo "ABORT: TWILIO_API_SECRET looks too short."; exit 1; }
+
+# Sender format
+case "$TWILIO_FROM" in
+  \+[0-9]*|MG[0-9a-f]*|whatsapp:\+*) : ;;
+  *) echo "ABORT: TWILIO_FROM must be E.164 (+15551234567), Messaging Service SID (MG...), or whatsapp:+..."; exit 1 ;;
+esac
+
+# Base URL by region
+case "${TWILIO_REGION:-us1}" in
+  us1) BASE='https://api.twilio.com/2010-04-01' ;;
+  ie1) BASE='https://api.dublin.ie1.twilio.com/2010-04-01' ;;
+  *) echo "ABORT: TWILIO_REGION must be 'us1' or 'ie1'."; exit 1 ;;
+esac
+
+# Live REST verify
+HTTP=$(curl -sS -o /tmp/t.json -w '%{http_code}' --max-time 10 \
+  -u "$TWILIO_API_KEY:$TWILIO_API_SECRET" \
+  "$BASE/Accounts/$TWILIO_ACCOUNT_SID/Messages.json?PageSize=1" 2>/dev/null) || HTTP=000
+case "$HTTP" in
+  200)
+    echo "Twilio REST OK. Region: ${TWILIO_REGION:-us1}"
+    # Trial-account detection
+    if grep -q '"status": "trial"' /tmp/t.json 2>/dev/null; then
+      echo "WARN: trial account detected. Can only send to VERIFIED numbers. Upgrade or verify destinations."
+    fi ;;
+  401) echo "ABORT: 401 — Basic auth rejected. Check API Key + Secret pair."; exit 1 ;;
+  404) echo "ABORT: 404 — Account SID '$TWILIO_ACCOUNT_SID' not found."; exit 1 ;;
+  *) echo "ABORT: unexpected HTTP $HTTP."; cat /tmp/t.json | head -3; exit 1 ;;
+esac
+rm -f /tmp/t.json
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write TWILIO_ACCOUNT_SID ($TWILIO_ACCOUNT_SID)
+  2. Write TWILIO_API_KEY (${TWILIO_API_KEY:0:4}...)
+  3. Write TWILIO_API_SECRET (length ${#TWILIO_API_SECRET}) — NEVER plaintext-logged
+  4. Write TWILIO_FROM ($TWILIO_FROM)
+  5. Write TWILIO_BASE ($BASE)
+  6. chmod 600 ~/.hermes/.env
+  7. Verify all 5 landed (grep -c)
+  8. No MCP registered (mcp.twilio.com is docs-only; refused for executor)
+  9. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+ 10. Smoke test: GET Messages.json?PageSize=1 from VPS — expect 200
+ 11. Optional real SMS if TEST_TO env var set
+
+Twilio uses form-encoded bodies (NOT JSON).
+Base URL varies by region: us1 vs ie1.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write env (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set TWILIO_ACCOUNT_SID '$TWILIO_ACCOUNT_SID'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set TWILIO_API_KEY '$TWILIO_API_KEY'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set TWILIO_API_SECRET '$TWILIO_API_SECRET'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set TWILIO_FROM '$TWILIO_FROM'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set TWILIO_BASE '$BASE'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^TWILIO_(ACCOUNT_SID|API_KEY|API_SECRET|FROM|BASE)=' ~/.hermes/.env" || echo 0)
+[ "$COUNT" = "5" ] || { echo "FAIL: env vars did not all land (got $COUNT, need 5). Rolling back."; rollback; exit 1; }
+```
+
+Never `echo >>`. Never put secrets in `config.yaml`.
+
+---
+
+## Step 6 — wire the REST surface (no executor MCP to register)
+
+Twilio hosted MCP is docs-only. Generic HTTP tool reads env and calls:
+
+- **Base URL:** `${TWILIO_BASE}` (region-specific)
+- **Auth:** HTTP Basic — `username=${TWILIO_API_KEY}`, `password=${TWILIO_API_SECRET}`
+- **Content-Type:** `application/x-www-form-urlencoded` (NOT JSON)
 
 Common endpoints:
 
 | Action | Method + path |
 |---|---|
-| Send SMS | `POST /Accounts/{AccountSid}/Messages.json` body `To=...&From=...&Body=...` |
-| Send WhatsApp | same as SMS with `From=whatsapp:+...` and `To=whatsapp:+...` |
-| Place call | `POST /Accounts/{AccountSid}/Calls.json` body `To=...&From=...&Url=<TwiML URL>` |
-| Lookup number | `GET https://lookups.twilio.com/v2/PhoneNumbers/{E.164}` |
+| Send SMS | `POST /Accounts/{AccountSid}/Messages.json` — `To=&From=&Body=` |
+| Send WhatsApp | same, but `From=whatsapp:+...` and `To=whatsapp:+...` |
+| Place call | `POST /Accounts/{AccountSid}/Calls.json` — `To=&From=&Url=<TwiML URL>` |
+| Lookup number | `GET https://lookups.twilio.com/v2/PhoneNumbers/{E.164}` (separate host) |
 | List messages | `GET /Accounts/{AccountSid}/Messages.json?PageSize=20` |
 
-Note `lookups.twilio.com` is a separate host (v2 API), not under `api.twilio.com`.
-
-### Path B — local stdio MCP via `@twilio-alpha/mcp`
-
-The `twilio-labs/mcp` repo publishes `@twilio-alpha/mcp` (npm) as a **stdio** server. It
-authenticates with `ACCOUNT_SID/API_KEY:API_SECRET`. Register it only if your Hermes supports
-stdio MCP servers (the HTTP probe flow in `/hermes-mcp-add` does not apply — that is for
-remote HTTP endpoints):
-
-```bash
-docker exec -i -u hermes "$AGENT" \
-  hermes mcp add twilio \
-    --command "npx" \
-    --args "-y,@twilio-alpha/mcp,\${TWILIO_ACCOUNT_SID}/\${TWILIO_API_KEY}:\${TWILIO_AUTH_TOKEN}" \
-    --env "TWILIO_ACCOUNT_SID=\${TWILIO_ACCOUNT_SID},TWILIO_API_KEY=\${TWILIO_API_KEY},TWILIO_AUTH_TOKEN=\${TWILIO_AUTH_TOKEN}"
-```
-
-The flag names (`--command` / `--args` / `--env`) vary by Hermes version. Run
-`docker exec -u hermes "$AGENT" hermes mcp add --help` first and match its stdio syntax. If
-your build is HTTP-MCP-only and cannot launch a stdio command, use Path A.
-
-### Path C (do not use) — wiring `mcp.twilio.com/docs` via `/hermes-mcp-add`
-
-It will register, but every call returns docs/search hits rather than executing the API. The
-agent cannot send an SMS through it. Skip.
+For twilio-labs/mcp stdio (Path B, opt-in): `@twilio-alpha/mcp` npm package as stdio MCP —
+document only, do not auto-wire (still alpha/unstable per Twilio labs).
 
 ---
 
-## Step 3 — reload the gateway so the new env / MCP is picked up
-
-The gateway reads `.env` once at startup. Use stop + run (not `restart`) so the new env is
-re-read cleanly — same rule as `/hermes-mcp-add`.
+## Step 7 — reload the gateway (stop + run, NOT restart)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
 sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 8 — verify + optional real-send smoke test
+
+```bash
+# Read-only ping from VPS
+HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -u \"\$TWILIO_API_KEY:\$TWILIO_API_SECRET\" \
+    \"\$TWILIO_BASE/Accounts/\$TWILIO_ACCOUNT_SID/Messages.json?PageSize=1\"
+")
+[ "$HTTP" = "200" ] \
+  && echo "OK: Twilio REST reachable from VPS." \
+  || { echo "FAIL: HTTP $HTTP. Rolling back."; rollback; exit 1; }
+
+# Optional real SMS send (only if TEST_TO set — user opts in)
+if [ -n "${TEST_TO:-}" ]; then
+  SEND_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 15 \
+      -u \"\$TWILIO_API_KEY:\$TWILIO_API_SECRET\" \
+      -X POST \
+      --data-urlencode 'To=$TEST_TO' \
+      --data-urlencode \"From=\$TWILIO_FROM\" \
+      --data-urlencode 'Body=hstack twilio wiring check' \
+      \"\$TWILIO_BASE/Accounts/\$TWILIO_ACCOUNT_SID/Messages.json\"
+  ")
+  case "$SEND_HTTP" in
+    201) echo "OK: real SMS to $TEST_TO returned 201 (queued). Check the phone." ;;
+    400) echo "WARN: 400 — check E.164 format on To/From." ;;
+    *) echo "WARN: unexpected HTTP $SEND_HTTP." ;;
+  esac
+fi
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^TWILIO_ACCOUNT_SID=/d;
+            /^TWILIO_API_KEY=/d;
+            /^TWILIO_API_SECRET=/d;
+            /^TWILIO_FROM=/d;
+            /^TWILIO_BASE=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Revoke the API Key at https://console.twilio.com/us1/account/keys-credentials/api-keys if compromised."
+}
 ```
 
 ---
@@ -151,62 +280,38 @@ sleep 8
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Wiring `mcp.twilio.com/docs` and expecting SMS to send | It is documentation-only; cannot execute API calls. | Use Path A (REST) or Path B (stdio). |
-| 2 | Sending JSON body to `/Messages.json` | Twilio expects `application/x-www-form-urlencoded`; JSON returns 400. | Use form-encoded bodies. |
-| 3 | `To` / `From` not in E.164 | Twilio rejects with 21211/21212. | Always `+<country><number>`; for WhatsApp prefix `whatsapp:`. |
-| 4 | Auth Token used in dev, never rotated | Account-wide compromise if leaked. | Use API Key SID (`SK...`) + Secret per environment; revocable. |
-| 5 | WhatsApp from a non-approved sender | Twilio returns 63007/63016 outside the sandbox. | Use sandbox `+14155238886` for tests; approved Sender for prod. |
-| 6 | EU customer using `api.twilio.com` | Data residency violation. | Use `api.dublin.ie1.twilio.com` for IE1 region. |
-| 7 | Secret in `config.yaml` or compose `.env` | Wrong file → world-readable or not loaded by runtime. | Only `/opt/data/.env`, `chmod 600`, via `config set`/sed. |
-| 8 | Trial account sending to unverified numbers | Returns 21608 / silent drop. | Verify destination numbers in Console, or upgrade. |
-
----
-
-## Verify
-
-Confirm the credentials and a live call before declaring done.
-
-1. **Vars present (no value leak):**
-   ```bash
-   docker exec "$AGENT" sh -c \
-     "grep -c '^TWILIO_ACCOUNT_SID=' /opt/data/.env; \
-      grep -c '^TWILIO_AUTH_TOKEN=' /opt/data/.env"
-   ```
-   Both should print `1`.
-
-2. **Read-only API ping returns 200** (lists last message; no side effects):
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -u "$TWILIO_API_KEY:$TWILIO_AUTH_TOKEN" \
-       "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Messages.json?PageSize=1"'
-   ```
-   `200` = creds valid. `401` = bad SID/token. `404` = wrong Account SID in the path.
-
-3. **Send a test SMS to a verified number:**
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -u "$TWILIO_API_KEY:$TWILIO_AUTH_TOKEN" \
-       -X POST \
-       --data-urlencode "To=+15555550123" \
-       --data-urlencode "From=$TWILIO_FROM" \
-       --data-urlencode "Body=hermes wiring check" \
-       "https://api.twilio.com/2010-04-01/Accounts/$TWILIO_ACCOUNT_SID/Messages.json"'
-   ```
-   `201` = queued. Replace `+15555550123` with a real verified destination.
-
-4. **End-to-end from chat:** `@<agent> send a Twilio SMS to <verified-number> saying "ping"`
-   should return a Twilio `MessageSid` (`SM...`) and the phone should receive it.
+| 1 | Wiring `mcp.twilio.com/docs` and expecting SMS to send | It is docs-only; cannot execute API calls | This skill refuses; uses REST only |
+| 2 | Sending JSON body to `/Messages.json` | Twilio expects `application/x-www-form-urlencoded`; JSON returns 400 | Always form-encoded bodies |
+| 3 | `To`/`From` not in E.164 | Twilio rejects with 21211/21212 | Always `+<country><number>`; WhatsApp prefix `whatsapp:` |
+| 4 | Auth Token used and never rotated | Account-wide compromise on leak | Use API Key SID (`SK...`) + Secret per env; revocable |
+| 5 | WhatsApp from non-approved sender | 63007/63016 outside sandbox | Use sandbox `+14155238886` for tests; approved Sender for prod |
+| 6 | EU customer using `api.twilio.com` (US1) | Data residency violation | Set `TWILIO_REGION=ie1` for IE1 endpoint |
+| 7 | Trial account sending to unverified numbers | 21608 or silent drop | Verify destinations in Console, or upgrade |
+| 8 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 9 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 10 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 11 | sed with `/` delimiter | Universal rule (Twilio secrets are alnum but future-proof) | Always `\|` delimiter |
+| 12 | `lookups.twilio.com` mixed up with `api.twilio.com` | Different host (v2 API) | Use `https://lookups.twilio.com/v2/PhoneNumbers/{E.164}` for lookups |
+| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
+| 14 | Confusing Account SID and API Key SID | Both start with `AC` or `SK` — different roles | Step 3 validator distinguishes; API Key preferred for auth |
 
 ---
 
 ## Definition of done
 
-- [ ] `TWILIO_ACCOUNT_SID`, `TWILIO_API_KEY` (or matching SID), `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM` are in `/opt/data/.env` with `chmod 600`; none of them are in `config.yaml` or chat.
-- [ ] Twilio is wired via Path A (REST base + Basic Auth documented and reachable) or Path B (stdio MCP tools registered). Path C (docs-only MCP) is not used for execution.
-- [ ] Read-only call to `Messages.json?PageSize=1` from inside the container returns `200`.
-- [ ] A test SMS POST returns `201` and the destination receives the message (or a chat-driven send returns a `MessageSid`).
-- [ ] For WhatsApp: sender is the sandbox number or an approved Twilio WhatsApp Sender; recipient has joined the sandbox if applicable.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if all 4 vars present, unless `FORCE=1`)
+- [ ] HARD GATE passed: Account SID is `AC+32hex`; API Key is `SK+32hex` (or fallback to Account SID); secret ≥20 chars; sender is E.164/MG/`whatsapp:+`; region valid; live `Messages.json` returned 200
+- [ ] Trial account status detected + warned if applicable
+- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
+- [ ] All 5 env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] No MCP server registered (correctly — hosted MCP is docs-only)
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: `Messages.json` from VPS returned 200
+- [ ] Optional real SMS (if `TEST_TO` set): returned 201
+- [ ] Rollback function defined; key revocation URL included
+- [ ] User informed of form-encoded body requirement + region variant + trial-account limits
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, Twilio
+region, and E.164 formatting failure modes.
