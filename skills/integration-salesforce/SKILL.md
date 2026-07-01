@@ -1,199 +1,362 @@
 ---
 name: integration-salesforce
-description: Connect Salesforce (enterprise CRM) to a running Hermes agent — wire the official Salesforce-hosted MCP server (OAuth) or, for a headless static-credential path, store Client Credentials OAuth secrets for the REST API. Use when the user wants their Hermes agent to read or write Salesforce records, run SOQL, or trigger Flows and Apex actions.
+description: Connect Salesforce (enterprise CRM) to a self-hosted Hermes Agent over SSH. Path A — first-party hosted MCP (OAuth + PKCE, requires browser consent). Path B — headless REST via Client Credentials Flow (fully unattended, no MCP). Refuses to pretend a static token "connects" the hosted MCP. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-salesforce — connect Salesforce CRM to Hermes
+# /integration-salesforce — connect Salesforce CRM to a remote Hermes (SSH-first)
 
-You are the engineer connecting Salesforce to a running Hermes agent. Salesforce has a
-**first-party hosted MCP server** (GA April 2026), but it is **OAuth-only** — there is no
-static-token form for it. That breaks the usual one-click "paste a token" promise, so read
-the two paths below and pick the honest one for the user before you touch anything.
+You are the engineer connecting Salesforce to a self-hosted Hermes agent on the user's VPS.
+You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
+as root against the VPS. The user does up to three things a machine cannot:
 
-Two real options:
+1. Create the External Client App (ECA) in Setup → App Manager with the right OAuth scopes
+   (Path A) OR Client Credentials Flow + integration user (Path B).
+2. For Path A only: complete the browser OAuth consent ONCE (refresh token then persists).
+3. Confirm the org type (production vs sandbox/scratch) — changes the MCP URL prefix.
 
-- **Path A — official hosted MCP server (recommended, OAuth + PKCE).** Salesforce-managed
-  endpoint, full permission enforcement. Requires a per-user browser OAuth consent. No static
-  token. Wire it via `/hermes-mcp-add`.
-- **Path B — headless REST API via Client Credentials (static secret).** No MCP server is
-  involved. You store a connected-app client ID + secret in `/opt/data/.env` and let a generic
-  HTTP tool call the Salesforce REST API. This preserves a fully-unattended setup but a bare
-  secret alone does not "connect" anything — you still need a tool that speaks the REST API.
+Everything else — secret storage, live token-exchange verify, gateway reload, smoke test —
+runs on the VPS via SSH, idempotently with a rollback path.
 
-## Before you start — gather (ask once)
+**Honest auth picture (verified 2026-06):** Salesforce has a **first-party hosted MCP**
+(GA April 2026), but it is **OAuth + PKCE ONLY** — Client Credentials Flow is explicitly
+disabled for it; there is no static bearer token. So the choices are real:
 
-1. **Which path** — A (hosted MCP, OAuth, an interactive consent is acceptable) or B (headless
-   REST, fully unattended, static secret).
-2. **My Domain / instance URL** — `https://<mydomain>.my.salesforce.com`. Setup → My Domain.
-3. **Org type** — production vs sandbox/scratch. This changes the MCP server URL prefix.
-4. **Edition** — hosted MCP requires **Enterprise Edition or above**. Confirm before Path A.
-5. **For Path A:** the **External Client App (ECA) consumer key + consumer secret**. Create the
-   ECA at Setup → App Manager → New External Client App (classic Connected Apps are NOT
-   supported for hosted MCP). Scopes: **Access MCP servers (`mcp_api`)** and **Perform requests
-   at any time (`refresh_token`)**. Under Supported Authorization Flows, enable **Authorization
-   Code with PKCE**; leave **Client Credentials Flow off**.
-   Docs: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/create-external-client-app.html
-6. **For Path B:** a **connected app / ECA consumer key + secret with Client Credentials Flow
-   enabled** and an assigned **integration (run-as) user**. Mint at Setup → App Manager.
-   Docs: https://help.salesforce.com/s/articleView?id=xcloud.connected_app_client_credentials_setup.htm
+- **Path A — official hosted MCP (OAuth + PKCE):** Salesforce-managed endpoint, full
+  permission enforcement. Requires browser consent ONCE per user. After consent, refresh
+  token persists; subsequent calls are headless.
+- **Path B — headless REST via Client Credentials Flow:** zero browser interaction. Store
+  the ECA client ID + secret; agent's HTTP tool layer exchanges them for short-lived access
+  tokens at the org's `/services/oauth2/token` endpoint per call (no refresh token, so
+  re-exchange is required). **No first-party MCP is wired here** — the secret alone does
+  NOT connect anything; you also need an HTTP/REST tool that calls the Salesforce API.
 
-Never paste any secret into chat. Secrets go only in `/opt/data/.env` (chmod 600).
+Refusing pretense: this skill will NOT pretend a static-secret stored in env "connects"
+Salesforce. Path A requires the OAuth dance. Path B documents the REST surface but is honest
+that tool implementation lives elsewhere.
 
-Set shell vars from answers:
+**Required edition:** Hosted MCP requires Enterprise Edition or above. Confirm before Path A.
+
+---
+
+## Before you start — gather (ask once, in one batch)
+
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$WIRE_PATH` | `A` (hosted MCP, OAuth+PKCE — recommended) or `B` (REST, headless) | A needs browser consent ONCE; B is fully unattended |
+| `$SF_INSTANCE_URL` | My Domain URL `https://<mydomain>.my.salesforce.com` | Setup → My Domain |
+| `$SF_ORG_TYPE` | `production` or `sandbox` (used for Path A URL prefix) | Salesforce org type |
+| `$SF_SERVER` *(Path A — optional, default `sobject-reads`)* | `sobject-reads` / `sobject-all` / `sobject-mutations` / `flows` / `invocable-actions` / `data-cloud-sql` / `tableau-next` / `prompt-builder` | https://developer.salesforce.com/docs/platform/hosted-mcp-servers/references/reference/servers-reference.html |
+| `$SF_CLIENT_ID` | ECA consumer key (both paths) | Setup → App Manager → New External Client App → API (Enable OAuth Settings) → Consumer Key |
+| `$SF_CLIENT_SECRET` | ECA consumer secret (both paths) | Same place — Consumer Secret |
+
+Path A scopes on the ECA: **`mcp_api` AND `refresh_token`**. Supported Auth Flow:
+**Authorization Code with PKCE**. Client Credentials Flow OFF.
+
+Path B: ECA with **Client Credentials Flow ON** and an **integration (run-as) user**
+assigned with the object permissions the agent needs.
+
+Confirm SSH access:
+
 ```bash
-AGENT=<container-name>                 # docker ps --format '{{.Names}}' | grep hermes
-MYDOMAIN=<https://<mydomain>.my.salesforce.com>
-SERVER=sobject-all                     # or sobject-reads, flows, invocable-actions, data-cloud-sql, tableau-next, prompt-builder
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
 ---
 
-## Path A — official hosted MCP server (OAuth, recommended)
-
-The hosted MCP endpoint pattern is **fixed by Salesforce** (do not run the probe matrix against
-a My Domain URL — the MCP host is `api.salesforce.com`, not your org domain):
-
-- **Production:** `https://api.salesforce.com/platform/mcp/v1/<SERVER-NAME>`
-- **Sandbox / scratch:** `https://api.salesforce.com/platform/mcp/v1/sandbox/<SERVER-NAME>`
-
-`<SERVER-NAME>` is one of the catalog servers: `sobject-all`, `sobject-reads`,
-`sobject-mutations`, `sobject-deletes`, `flows`, `invocable-actions`, `data-cloud-sql`,
-`tableau-next`, `prompt-builder`. Start with `sobject-reads` for least privilege; move to
-`sobject-all` only when writes are required.
-Reference: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/references/reference/servers-reference.html
-
-### Step A1 — confirm the URL form for the org type
+## Step 1 — verify Hermes is reachable on the VPS
 
 ```bash
-URL="https://api.salesforce.com/platform/mcp/v1/${SERVER}"           # production
-# URL="https://api.salesforce.com/platform/mcp/v1/sandbox/${SERVER}" # sandbox/scratch
-echo "$URL"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-### Step A2 — wire it via /hermes-mcp-add
-
-This server uses **OAuth 2.0 Authorization Code + PKCE**, not a bearer header with a static
-token, so the standard probe-then-sed-inject flow only partly applies. Run `/hermes-mcp-add`
-with these facts and let it drive registration + gateway reload:
-
-- **MCP base URL:** the `$URL` from A1 (the `api.salesforce.com/platform/mcp/v1/...` form).
-- **Auth shape:** OAuth (External Client App). Supply the **ECA consumer key** as the OAuth
-  client ID and the **ECA consumer secret** as the client secret. Hermes/MCP performs the
-  browser authorization-code exchange; a refresh token is stored, not a static bearer key.
-- **Where the secret lives:** the ECA consumer secret is the credential to protect. If
-  `/hermes-mcp-add` generates an env var for it, it will be `MCP_SALESFORCE_API_KEY` (or the
-  client-secret slot of the OAuth config). Inject it with the sed-with-`|`-delimiter step from
-  `/hermes-mcp-add` step 4; never `echo >>`.
-
-The one step a machine cannot do: **the first OAuth consent is a browser redirect.** Salesforce
-will prompt the run-as user to approve the ECA. Hand that URL to the user, have them approve
-once, and the refresh token persists. After consent, finish with `/hermes-mcp-add` steps 5–6
-(`gateway stop` + `gateway run`, then verify in logs).
+Expected: `0.15.x` or `0.17.x`.
 
 ---
 
-## Path B — headless REST API (static secret, no MCP server)
-
-No first-party MCP server supports static tokens. If the user needs a fully-unattended setup,
-use the **OAuth 2.0 Client Credentials flow** against the Salesforce REST API. This is a real,
-Salesforce-supported headless pattern: the connected app's client ID + secret are exchanged for
-a short-lived access token at the org token endpoint; no browser, no user interaction.
-Docs: https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_oauth_client_credentials_flow.htm
-
-### Step B1 — store the client ID and secret in /opt/data/.env
+## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-docker exec "$AGENT" sh -c \
-  'hermes config set SF_INSTANCE_URL "'"$MYDOMAIN"'" && \
-   hermes config set SF_CLIENT_ID "<ECA-consumer-key>" && \
-   hermes config set SF_CLIENT_SECRET "<ECA-consumer-secret>" && \
-   chmod 600 /opt/data/.env'
+HAS_INSTANCE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^SF_INSTANCE_URL=' ~/.hermes/.env 2>/dev/null" || echo 0)
+HAS_CLIENT=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^SF_CLIENT_ID=' ~/.hermes/.env 2>/dev/null" || echo 0)
+ALREADY_MCP=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci salesforce" || echo 0)
+if [ "${WIRE_PATH:-A}" = "A" ] && [ "$ALREADY_MCP" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Salesforce MCP already wired (Path A). Set FORCE=1 to rewire."; exit 0
+fi
+if [ "${WIRE_PATH:-A}" = "B" ] && [ "$HAS_INSTANCE" = "1" ] && [ "$HAS_CLIENT" = "1" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Salesforce Client Credentials already wired (Path B). Set FORCE=1 to rewire."; exit 0
+fi
 ```
 
-If `hermes config set` is unavailable, fall back to the `/hermes-mcp-add` sed-inject pattern
-(`sed -i 's|^SF_CLIENT_SECRET=.*|...|' /opt/data/.env`, `|` delimiter, then `chmod 600`).
-Never `echo >>` — it can merge lines.
+---
 
-### Step B2 — confirm the credentials actually mint a token
+## Step 3 — HARD GATE (per-path validation + live verification where possible)
 
 ```bash
-docker exec "$AGENT" sh -c '
-  . /opt/data/.env
-  curl -sS -X POST "$SF_INSTANCE_URL/services/oauth2/token" \
+PATH_CHOSEN=${WIRE_PATH:-A}
+
+# Common: My Domain URL format
+printf '%s' "$SF_INSTANCE_URL" | grep -qE '^https://[A-Za-z0-9-]+\.my\.salesforce\.com$' \
+  || { echo "ABORT: SF_INSTANCE_URL must be 'https://<mydomain>.my.salesforce.com' (no trailing slash)."; exit 1; }
+
+# Common: ECA secrets present
+[ -n "$SF_CLIENT_ID" ] && [ -n "$SF_CLIENT_SECRET" ] \
+  || { echo "ABORT: SF_CLIENT_ID and SF_CLIENT_SECRET are required for both paths."; exit 1; }
+[ "${#SF_CLIENT_SECRET}" -ge 20 ] \
+  || { echo "ABORT: SF_CLIENT_SECRET looks too short."; exit 1; }
+
+if [ "$PATH_CHOSEN" = "A" ]; then
+  SERVER=${SF_SERVER:-sobject-reads}
+  case "${SF_ORG_TYPE:-production}" in
+    production) MCP_URL="https://api.salesforce.com/platform/mcp/v1/$SERVER" ;;
+    sandbox|scratch) MCP_URL="https://api.salesforce.com/platform/mcp/v1/sandbox/$SERVER" ;;
+    *) echo "ABORT: SF_ORG_TYPE must be 'production' or 'sandbox'."; exit 1 ;;
+  esac
+  echo "Path A MCP URL: $MCP_URL (server: $SERVER)"
+
+  # Note: cannot live-probe a PKCE OAuth MCP without browser consent.
+  # The user must complete the consent in Step 6 (the one human step).
+fi
+
+if [ "$PATH_CHOSEN" = "B" ]; then
+  # Live Client Credentials exchange
+  RESP=$(curl -sS --max-time 10 \
+    -X POST "$SF_INSTANCE_URL/services/oauth2/token" \
     -d grant_type=client_credentials \
-    -d client_id="$SF_CLIENT_ID" \
-    -d client_secret="$SF_CLIENT_SECRET" | head -c 200
-'
+    -d "client_id=$SF_CLIENT_ID" \
+    -d "client_secret=$SF_CLIENT_SECRET" 2>/dev/null) || true
+  if printf '%s' "$RESP" | grep -q '"access_token"'; then
+    echo "Salesforce Client Credentials Flow OK."
+  elif printf '%s' "$RESP" | grep -q 'invalid_client\|inactive'; then
+    echo "ABORT: Client Credentials Flow rejected. Ensure ECA has it enabled AND an integration user is assigned."
+    echo "$RESP" | head -c 200
+    exit 1
+  else
+    echo "ABORT: unexpected token response."
+    echo "$RESP" | head -c 200
+    exit 1
+  fi
+fi
 ```
 
-A JSON body with `"access_token"` and `"instance_url"` means the flow works. An
-`invalid_client` or `inactive` error means the connected app has Client Credentials Flow
-disabled or no integration user assigned — fix in Setup before continuing.
+---
 
-### Step B3 — state the honest gap
+## Step 4 — DRY RUN preview (always show before writing)
 
-A stored secret does **not** by itself give the agent Salesforce tools. To act on the REST API
-the agent needs either:
-- a generic HTTP/REST MCP or tool pointed at `$SF_INSTANCE_URL/services/data/vXX.0/` using the
-  token from B2 as `Authorization: Bearer <access_token>`, or
-- a clearly-maintained community Salesforce MCP server.
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  Path: $PATH_CHOSEN
 
-**No first-party static-token MCP server is verified as of 2026-06.** Community local (stdio)
-options exist — e.g. the official CLI-based `@salesforce/mcp` npm package
-(https://github.com/salesforcecli/mcp), which runs locally via `npx -y @salesforce/mcp` and
-relies on Salesforce CLI org auth rather than a header token, so it does not fit the remote-HTTP
-`/hermes-mcp-add` wiring. Do not present a bare key as a finished connection.
+  Always:
+    1. Write SF_INSTANCE_URL ($SF_INSTANCE_URL)
+    2. Write SF_CLIENT_ID (length ${#SF_CLIENT_ID})
+    3. Write SF_CLIENT_SECRET (length ${#SF_CLIENT_SECRET}) — NEVER plaintext-logged
+    4. chmod 600 ~/.hermes/.env
+
+  Path A (hosted MCP, OAuth+PKCE):
+    5. Register MCP via /hermes-mcp-add at $MCP_URL with --auth oauth
+    6. ONE-TIME: user follows browser consent URL (Salesforce prompts to authorize the ECA)
+    7. Reload gateway: stop + run
+    8. Verify in logs: grep "registered.*salesforce"
+
+  Path B (REST via Client Credentials):
+    5. No MCP server registered; generic HTTP tool re-mints access_token per call
+    6. Reload gateway: stop + run
+    7. Smoke test: token mint + SOQL "SELECT Id,Name FROM Account LIMIT 1"
+
+ECA secret is NEVER printed in plaintext beyond a length.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write secrets (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set SF_INSTANCE_URL '$SF_INSTANCE_URL'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set SF_CLIENT_ID '$SF_CLIENT_ID'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set SF_CLIENT_SECRET '$SF_CLIENT_SECRET'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^(SF_INSTANCE_URL|SF_CLIENT_ID|SF_CLIENT_SECRET)=' ~/.hermes/.env" || echo 0)
+[ "$COUNT" = "3" ] || { echo "FAIL: secrets did not all land (got $COUNT, need 3). Rolling back."; rollback; exit 1; }
+```
+
+Never `echo >>`. Never put secrets in `config.yaml`.
+
+---
+
+## Step 6 — wire the chosen path
+
+### Path A — hosted MCP with OAuth + PKCE
+
+```bash
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  ssh "$VPS_USER@$VPS_IP" "
+    hermes mcp add salesforce \
+      --url '$MCP_URL' \
+      --auth oauth \
+      --oauth-client-id '\${SF_CLIENT_ID}' \
+      --oauth-client-secret '\${SF_CLIENT_SECRET}' \
+      --oauth-pkce
+  "
+  echo ""
+  echo "ACTION REQUIRED: Hermes will print an authorization URL for the user."
+  echo "Open it in a browser logged in as the desired Salesforce user."
+  echo "Approve the External Client App. After approval, the refresh token persists."
+  echo "Watch 'hermes logs gateway -f' for the consent URL and confirmation."
+fi
+```
+
+### Path B — headless REST via Client Credentials Flow
+
+```bash
+if [ "${WIRE_PATH:-A}" = "B" ]; then
+  echo "Path B: no MCP server registered. Generic HTTP/REST tool layer reads env vars."
+  echo ""
+  echo "Tool implementation contract (the generic HTTP tool layer must do, per call):"
+  echo "  1. POST \$SF_INSTANCE_URL/services/oauth2/token"
+  echo "     -d grant_type=client_credentials -d client_id=\$SF_CLIENT_ID -d client_secret=\$SF_CLIENT_SECRET"
+  echo "  2. Parse access_token + instance_url from JSON response"
+  echo "  3. Call REST: Authorization: Bearer <access_token>"
+  echo "     e.g. GET \$instance_url/services/data/v60.0/query?q=SELECT+Id,Name+FROM+Account+LIMIT+5"
+  echo "  4. Client Credentials returns NO refresh_token; re-mint on every expiry"
+fi
+```
+
+---
+
+## Step 7 — reload the gateway (stop + run, NOT restart)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 3
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
+```
+
+---
+
+## Step 8 — verify
+
+```bash
+if [ "${WIRE_PATH:-A}" = "A" ]; then
+  REGISTERED=0
+  for i in $(seq 1 12); do
+    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
+         | grep -qiE "registered.*tool.*salesforce|MCP server.*salesforce.*(ok|ready)"; then
+      REGISTERED=1; echo "OK: salesforce MCP registered (consent completed)."; break
+    fi
+    sleep 5
+  done
+  [ "$REGISTERED" = "1" ] || { echo "FAIL: salesforce not in logs after 60s. Did the user complete browser consent? Rolling back."; rollback; exit 1; }
+fi
+
+if [ "${WIRE_PATH:-A}" = "B" ]; then
+  # Live REST smoke test from inside the container
+  RECORDS=$(ssh "$VPS_USER@$VPS_IP" "
+    . ~/.hermes/.env 2>/dev/null
+    TOK=\$(curl -sS --max-time 10 -X POST \"\$SF_INSTANCE_URL/services/oauth2/token\" \
+      -d grant_type=client_credentials \
+      -d client_id=\"\$SF_CLIENT_ID\" \
+      -d client_secret=\"\$SF_CLIENT_SECRET\" \
+      | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')
+    [ -z \"\$TOK\" ] && { echo NO_TOKEN; exit 0; }
+    INST=\$(curl -sS --max-time 10 -X POST \"\$SF_INSTANCE_URL/services/oauth2/token\" \
+      -d grant_type=client_credentials \
+      -d client_id=\"\$SF_CLIENT_ID\" \
+      -d client_secret=\"\$SF_CLIENT_SECRET\" \
+      | sed -n 's/.*\"instance_url\":\"\\([^\"]*\\)\".*/\\1/p')
+    curl -sS --max-time 10 -H \"Authorization: Bearer \$TOK\" \
+      \"\$INST/services/data/v60.0/query?q=SELECT+Id,Name+FROM+Account+LIMIT+1\" \
+      | head -c 200
+  ")
+  case "$RECORDS" in
+    NO_TOKEN) echo "FAIL: no access_token. Rolling back."; rollback; exit 1 ;;
+    *records*|*\"totalSize\"*) echo "OK: REST query returned data shape." ;;
+    *) echo "WARN: unexpected query response: $RECORDS" ;;
+  esac
+fi
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  if [ "${WIRE_PATH:-A}" = "A" ]; then
+    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove salesforce 2>/dev/null || true"
+  fi
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^SF_INSTANCE_URL=/d;
+            /^SF_CLIENT_ID=/d;
+            /^SF_CLIENT_SECRET=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Revoke the ECA in Salesforce Setup → App Manager if compromised."
+}
+```
 
 ---
 
 ## Pitfalls
 
-- **The hosted MCP server is OAuth-only.** Client Credentials Flow is explicitly disabled for
-  it; there is no static bearer token to paste. If the user insists on zero interaction, that is
-  Path B (REST), not the MCP server.
-- **MCP host is `api.salesforce.com`, not your My Domain.** A common 404/405 cause is pointing
-  the client at `https://<mydomain>.my.salesforce.com/...mcp`. Use the
-  `api.salesforce.com/platform/mcp/v1/...` form, with the `sandbox/` segment for non-production.
-- **External Client App, not classic Connected App.** Hosted MCP requires an ECA. A classic
-  Connected App will authenticate but the MCP server will reject it.
-- **Missing scopes.** Without both `mcp_api` and `refresh_token`, OAuth completes but tool calls
-  fail. Re-check the ECA OAuth scopes.
-- **Client Credentials needs a run-as user.** Path B fails with `inactive`/`invalid_client` if
-  no integration user is assigned to the connected app, or if that user lacks the object
-  permissions you expect — the agent inherits exactly that user's FLS and sharing.
-- **Token lifetime.** Client Credentials issues short-lived access tokens with **no refresh
-  token**; the tool must re-POST to `/services/oauth2/token` when it expires (per Salesforce
-  docs). Do not cache a token as if it were static.
-- **API limits.** Salesforce enforces per-org daily API request limits; a chatty agent can
-  exhaust them. Prefer SOQL with selective filters over broad record scans.
-- **Least privilege.** Default to `sobject-reads` (Path A) before granting `sobject-all`.
+| # | Pitfall | Why it bites | Prevention |
+|---|---------|--------------|------------|
+| 1 | Pretending static secret "connects" the hosted MCP | Hosted MCP refuses Client Credentials; only OAuth+PKCE works | This skill makes Path A require browser consent; Path B is REST-only |
+| 2 | MCP URL pointing at `<mydomain>.my.salesforce.com` | MCP host is `api.salesforce.com`, not your org domain — 404/405 | Step 3 derives correct URL from `$SF_ORG_TYPE` |
+| 3 | Classic Connected App instead of External Client App (ECA) | Hosted MCP requires ECA; classic apps authenticate but MCP rejects | Tell user: create ECA, not classic Connected App |
+| 4 | Missing OAuth scopes (`mcp_api` AND `refresh_token`) | OAuth completes but tool calls 401/403 | Pre-flight checklist before Path A |
+| 5 | Client Credentials without integration user | `inactive` / `invalid_client` error | Step 3 catches this; Setup → ECA → assign run-as user |
+| 6 | Client Credentials caches token as if static | Issues short-lived access token, NO refresh token | Tool must re-POST `/oauth2/token` on every expiry |
+| 7 | API limits (per-org daily request quota) | Chatty agent exhausts limit; all calls 429 | Prefer selective SOQL over broad scans; monitor limit |
+| 8 | Pointing at production when targeting sandbox | Wrong URL prefix → 404 | Step 3 enforces `production` vs `sandbox` |
+| 9 | Sandbox API URL has different MCP path | `/platform/mcp/v1/sandbox/<server>` not just `/platform/mcp/v1/<server>` | Step 3 derives correctly |
+| 10 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 11 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 12 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 13 | Granting `sobject-all` when `sobject-reads` suffices | Over-broad permissions | Default Path A to `sobject-reads`; upgrade only when writes needed |
+| 14 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
 
-## Verify
-
-- **Path A:** after consent + gateway reload, `/hermes-mcp-add` step 6 — `hermes logs` shows
-  `registered N tool(s)` for the Salesforce MCP. Then from chat: `@<agent> using salesforce,
-  query the 5 most recent Accounts`. A populated or empty-but-valid result is a pass.
-- **Path B:** Step B2 returns an `access_token`, and a real REST read returns rows, e.g.:
-  ```bash
-  docker exec "$AGENT" sh -c '
-    . /opt/data/.env
-    TOK=$(curl -sS -X POST "$SF_INSTANCE_URL/services/oauth2/token" \
-      -d grant_type=client_credentials -d client_id="$SF_CLIENT_ID" \
-      -d client_secret="$SF_CLIENT_SECRET" | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
-    curl -sS -H "Authorization: Bearer $TOK" \
-      "$SF_INSTANCE_URL/services/data/v60.0/query?q=SELECT+Id,Name+FROM+Account+LIMIT+5"
-  '
-  ```
-  A JSON body with a `records` array is a pass.
+---
 
 ## Definition of done
 
-- [ ] Path chosen and the OAuth-vs-static tradeoff stated plainly to the user.
-- [ ] Secrets live only in `/opt/data/.env` with `chmod 600`; nothing in `config.yaml` or chat.
-- [ ] Path A: hosted MCP registered via `/hermes-mcp-add`, first OAuth consent completed, logs
-      show registered tools; or Path B: token endpoint returns an `access_token` and a REST read
-      returns rows.
-- [ ] Least-privilege server/user confirmed (`sobject-reads` or a scoped integration user).
-- [ ] A real call returns data (or a valid empty result) end to end.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if already wired for chosen path, unless `FORCE=1`)
+- [ ] HARD GATE passed: instance URL is `*.my.salesforce.com`; client ID + secret present + ≥20 chars; Path A → MCP URL derived from org type; Path B → Client Credentials live exchange returned access_token
+- [ ] Dry-run shown to user; OAuth-vs-static tradeoff stated plainly; user approved (or `AUTO_APPROVE=1`)
+- [ ] All 3 env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] Path A: MCP registered with OAuth+PKCE; user completed browser consent ONCE
+- [ ] Path B: REST surface documented with token-mint-per-call contract
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Path A: logs show `registered N tool(s)` post-consent
+- [ ] Path B: live REST query (`SELECT Id,Name FROM Account LIMIT 1`) returned a records-shaped response
+- [ ] Least-privilege server chosen (default `sobject-reads`; widen only with explicit need)
+- [ ] Rollback function defined; ECA revocation instructions included
 
-See `reference/TROUBLESHOOTING.md` for gateway reload, OAuth consent, and MCP registration failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, OAuth
+consent, and Salesforce ECA failure modes.

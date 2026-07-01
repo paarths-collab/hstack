@@ -1,157 +1,255 @@
 ---
 name: integration-zoom
-description: Connect Zoom (meetings, cloud recordings) to a running Hermes agent using Server-to-Server OAuth credentials. Use when the user wants Hermes to create, list, or fetch Zoom meetings and read cloud recording metadata.
+description: Connect Zoom (meetings, users, webinars, reports) to a self-hosted Hermes Agent over SSH via Server-to-Server OAuth. Refuses the hosted MCP (OAuth+PKCE only). Warns explicitly if cloud recordings requested (S2S can't do them; requires General OAuth Path B). Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
-# /integration-zoom — connect Zoom to Hermes
+# /integration-zoom — connect Zoom to a remote Hermes (SSH-first)
 
-You are the engineer connecting Zoom to a running Hermes agent. Primary use is meetings and
-recordings: create / list / fetch meetings, read past meeting metadata, list cloud recordings.
-Work autonomously; stop only for what a machine cannot do: creating the Server-to-Server OAuth
-app in the Zoom Marketplace and copying the three credentials out.
+You are the engineer connecting Zoom to a self-hosted Hermes agent on the user's VPS. You
+(the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as
+root against the VPS. The user does one thing a machine cannot: create the Server-to-Server
+OAuth app in Zoom Marketplace, add scopes, activate, and copy the three credentials.
 
-**Honest auth picture (verified 2026-06):** Zoom ships an official remote MCP server family
-(<https://developers.zoom.us/docs/mcp/>), but it requires **OAuth 2.1 with PKCE** — a user-driven
-browser flow. Zoom docs state: "your MCP client must include it as a Bearer token in the
-Authorization header," but the token must come from an interactive OAuth handshake, not a static
-secret. That breaks the headless promise for a server-side agent, so we do **not** wire the
-hosted MCP via `/hermes-mcp-add`. Instead we drive the Zoom REST API directly using
-**Server-to-Server OAuth** (S2S), which gives Hermes a renewable bearer token from three static
-credentials.
+Everything else — credential storage, live token mint, gateway reload, smoke test — runs on
+the VPS via SSH, idempotently with a rollback path.
 
-**S2S scope caveat:** the `cloud_recording:*` scopes are **not available** to S2S apps. If the
-user needs cloud recording access, you must create a **General** OAuth app instead (still
-documented below in Step 3). Meetings, users, webinars, and reports work fine with S2S.
+**Honest auth picture (verified 2026-06):** Zoom ships an official hosted MCP
+(https://developers.zoom.us/docs/mcp/) but it requires **OAuth 2.1 + PKCE** — user browser
+flow. Bearer-token clients cannot complete the handshake. So we do NOT wire the hosted MCP.
+The headless path is **Server-to-Server OAuth (S2S)**: three static credentials mint a
+1-hour bearer token per call.
 
-## Before you start — gather (ask once)
+**S2S scope caveat — CLOUD RECORDINGS NOT AVAILABLE.** The `cloud_recording:*` scopes are
+BLOCKED for S2S apps. If cloud recordings are required, drop the requirement OR switch to a
+**General** OAuth app (interactive install; Path B, documented).
 
-1. **Server-to-Server OAuth app credentials** — three values:
-   - `ZOOM_ACCOUNT_ID`
-   - `ZOOM_CLIENT_ID`
-   - `ZOOM_CLIENT_SECRET`
-
-   Mint them at <https://marketplace.zoom.us/develop/create> → **Server-to-Server OAuth** →
-   **Create** → name the app → on the **App Credentials** tab copy all three values → on
-   **Scopes** add at minimum `meeting:read:admin`, `meeting:write:admin`, `user:read:admin`
-   (add `report:read:admin` for analytics). Click **Activate**. Account-level admin is required.
-2. **Recording access?** If the user needs cloud recordings, the S2S app type will not work —
-   note this and either drop the requirement or switch to a General OAuth app (interactive
-   install required).
-3. **Agent container name** — `docker ps --format '{{.Names}}' | grep hermes` on the host.
-
-Set shell vars from answers (never log secrets):
-```bash
-AGENT=<container-name>     # e.g. hermes-agent-mxlc-hermes-agent-1
-ACCOUNT_ID=<zoom-account-id>
-CLIENT_ID=<zoom-client-id>
-CLIENT_SECRET=<zoom-client-secret>
-```
+**Token lifecycle:** S2S access tokens expire after 3600 seconds and have NO refresh token.
+Re-mint on 401 or refresh every ~55 minutes.
 
 ---
 
-## Step 1 — store the three credentials in the Hermes runtime .env (chmod 600)
+## Before you start — gather (ask once, in one batch)
 
-Write the secrets to `/opt/data/.env` inside the container. Use `hermes config set` so Hermes
-owns the write; never `echo >>` (it can merge onto a prior line) and never put credentials in
-`config.yaml`.
+| Variable | What | Where to get it |
+|----------|------|-----------------|
+| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
+| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
+| `$ZOOM_ACCOUNT_ID` | S2S OAuth account ID | Zoom Marketplace → Develop → your S2S app → App Credentials |
+| `$ZOOM_CLIENT_ID` | S2S OAuth client ID | Same |
+| `$ZOOM_CLIENT_SECRET` | S2S OAuth client secret | Same |
+| `$NEEDS_RECORDINGS` *(optional)* | `1` if cloud recordings needed | Skill aborts and points to Path B if S2S was chosen |
+
+Zoom Marketplace setup:
+1. https://marketplace.zoom.us/develop/create → Server-to-Server OAuth → Create → name it
+2. App Credentials tab → copy Account ID, Client ID, Client Secret
+3. Scopes: at minimum `meeting:read:admin`, `meeting:write:admin`, `user:read:admin`
+   (add `report:read:admin` for analytics)
+4. **Activate** the app (Activation tab)
+
+Confirm SSH access:
 
 ```bash
-docker exec -i -u hermes "$AGENT" hermes config set ZOOM_ACCOUNT_ID "$ACCOUNT_ID"
-docker exec -i -u hermes "$AGENT" hermes config set ZOOM_CLIENT_ID "$CLIENT_ID"
-docker exec -i -u hermes "$AGENT" hermes config set ZOOM_CLIENT_SECRET "$CLIENT_SECRET"
-docker exec "$AGENT" sh -c "chmod 600 /opt/data/.env"
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
+    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
+  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
-Verify all three vars landed (each prints `1`, never the value):
+---
+
+## Step 1 — verify Hermes is reachable on the VPS
+
 ```bash
-docker exec "$AGENT" sh -c "grep -cE '^ZOOM_(ACCOUNT|CLIENT)_ID=|^ZOOM_CLIENT_SECRET=' /opt/data/.env"
+ssh "$VPS_USER@$VPS_IP" '
+  set -e
+  if command -v hermes >/dev/null 2>&1; then
+    HERMES="$(command -v hermes)"
+  elif [ -x "$HOME/.local/bin/hermes" ]; then
+    HERMES="$HOME/.local/bin/hermes"
+  elif docker ps --format "{{.Names}}" | grep -q hermes; then
+    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
+    HERMES="docker exec $AGENT hermes"
+  else
+    echo "FAIL: hermes not found on host or in container"; exit 1
+  fi
+  echo "Using: $HERMES"
+  $HERMES --version
+' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
 ```
 
-> If your Hermes build has no `config set` subcommand, use the sed pattern from
-> `/hermes-mcp-add` (note the `|` delimiter — client secrets contain `/`, `+`, `=`):
+Expected: `0.15.x` or `0.17.x`.
+
+---
+
+## Step 2 — idempotency check (skip if already wired)
+
+```bash
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^ZOOM_(ACCOUNT_ID|CLIENT_ID|CLIENT_SECRET)=' ~/.hermes/.env 2>/dev/null" || echo 0)
+if [ "$COUNT" = "3" ] && [ "${FORCE:-0}" != "1" ]; then
+  echo "Zoom already wired (all 3 creds present). Set FORCE=1 to rewire."
+  exit 0
+fi
+```
+
+---
+
+## Step 3 — HARD GATE (recording requirement + live S2S token mint)
+
+```bash
+# S2S cannot do cloud recordings — abort if requested
+if [ "${NEEDS_RECORDINGS:-0}" = "1" ]; then
+  echo "ABORT: NEEDS_RECORDINGS=1 but S2S OAuth cannot access cloud_recording:* scopes."
+  echo "Options:"
+  echo "  1. Drop the recording requirement and continue with S2S (meetings/users/webinars/reports work)."
+  echo "  2. Create a General OAuth app in Zoom Marketplace (requires interactive browser install)."
+  echo "     Docs: https://developers.zoom.us/docs/integrations/oauth/"
+  echo "Set NEEDS_RECORDINGS=0 to proceed with S2S (no recordings)."
+  exit 1
+fi
+
+# Basic sanity on the three vars
+[ -n "$ZOOM_ACCOUNT_ID" ] && [ -n "$ZOOM_CLIENT_ID" ] && [ -n "$ZOOM_CLIENT_SECRET" ] \
+  || { echo "ABORT: all 3 S2S credentials required."; exit 1; }
+[ "${#ZOOM_CLIENT_SECRET}" -ge 20 ] \
+  || { echo "ABORT: ZOOM_CLIENT_SECRET looks too short."; exit 1; }
+
+# Live S2S token mint
+RESP=$(curl -sS --max-time 10 \
+  -X POST 'https://zoom.us/oauth/token' \
+  -u "$ZOOM_CLIENT_ID:$ZOOM_CLIENT_SECRET" \
+  -d "grant_type=account_credentials&account_id=$ZOOM_ACCOUNT_ID" 2>/dev/null) || true
+if printf '%s' "$RESP" | grep -q '"access_token"'; then
+  echo "Zoom S2S OK: token mint successful."
+elif printf '%s' "$RESP" | grep -q 'invalid_client'; then
+  echo "ABORT: invalid_client — CLIENT_ID/CLIENT_SECRET mismatch."; exit 1
+elif printf '%s' "$RESP" | grep -q 'invalid_request'; then
+  echo "ABORT: invalid_request — ACCOUNT_ID wrong or scopes missing. Re-check Marketplace."; exit 1
+elif printf '%s' "$RESP" | grep -q '4300'; then
+  echo "ABORT: 4300 — S2S app not activated. Open the app in Marketplace → Activation → Activate."; exit 1
+else
+  echo "ABORT: unexpected token response."; echo "$RESP" | head -3; exit 1
+fi
+```
+
+---
+
+## Step 4 — DRY RUN preview (always show before writing)
+
+```bash
+cat <<EOF
+DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
+  1. Write ZOOM_ACCOUNT_ID ($ZOOM_ACCOUNT_ID)
+  2. Write ZOOM_CLIENT_ID ($ZOOM_CLIENT_ID)
+  3. Write ZOOM_CLIENT_SECRET (length ${#ZOOM_CLIENT_SECRET}) — NEVER plaintext-logged
+  4. chmod 600 ~/.hermes/.env
+  5. Verify all 3 landed (grep -c)
+  6. No MCP server registered (Zoom MCP is OAuth+PKCE, refused)
+  7. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+  8. Smoke test: mint token + GET /v2/users/me/meetings?page_size=1 — expect 200
+
+S2S tokens live 3600s with NO refresh — REST tool must re-mint per expiry.
+EOF
+```
+
+Wait for confirmation (or `AUTO_APPROVE=1`).
+
+---
+
+## Step 5 — write the 3 credentials (chmod 600)
+
+```bash
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZOOM_ACCOUNT_ID '$ZOOM_ACCOUNT_ID'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZOOM_CLIENT_ID '$ZOOM_CLIENT_ID'"
+ssh "$VPS_USER@$VPS_IP" "hermes config set ZOOM_CLIENT_SECRET '$ZOOM_CLIENT_SECRET'"
+ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+
+COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^ZOOM_(ACCOUNT_ID|CLIENT_ID|CLIENT_SECRET)=' ~/.hermes/.env" || echo 0)
+[ "$COUNT" = "3" ] || { echo "FAIL: credentials did not all land (got $COUNT, need 3). Rolling back."; rollback; exit 1; }
+```
+
+> Sed fallback (pipe delimiter — secrets contain `/+=`):
 > ```bash
-> docker exec "$AGENT" sh -c "
->   for kv in 'ZOOM_ACCOUNT_ID=${ACCOUNT_ID}' 'ZOOM_CLIENT_ID=${CLIENT_ID}' 'ZOOM_CLIENT_SECRET=${CLIENT_SECRET}'; do
->     k=\${kv%%=*}
->     grep -q \"^\${k}=\" /opt/data/.env || printf '%s\n' \"\${k}=\" >> /opt/data/.env
->     sed -i \"s|^\${k}=.*|\${kv}|\" /opt/data/.env
+> ssh "$VPS_USER@$VPS_IP" "
+>   for KV in 'ZOOM_ACCOUNT_ID=$ZOOM_ACCOUNT_ID' 'ZOOM_CLIENT_ID=$ZOOM_CLIENT_ID' 'ZOOM_CLIENT_SECRET=$ZOOM_CLIENT_SECRET'; do
+>     K=\$(printf '%s' \"\$KV\" | cut -d= -f1)
+>     grep -q \"^\$K=\" ~/.hermes/.env || printf '%s\n' \"\$K=\" >> ~/.hermes/.env
+>     sed -i \"s|^\$K=.*|\$KV|\" ~/.hermes/.env
 >   done
->   chmod 600 /opt/data/.env"
+>   chmod 600 ~/.hermes/.env
+> "
 > ```
 
+Never `echo >>`. Never put secrets in `config.yaml`.
+
 ---
 
-## Step 2 — confirm credentials by minting a real access token
+## Step 6 — REST surface (no MCP to register)
 
-Zoom S2S returns a 1-hour bearer token. Run the mint inside the container so the secrets stay
-in env and never appear in shell history.
+The Zoom hosted MCP is not reachable for headless Hermes. Generic HTTP tool reads env and:
+
+- **Token endpoint:** `POST https://zoom.us/oauth/token` — Basic auth `$ZOOM_CLIENT_ID:$ZOOM_CLIENT_SECRET`, body `grant_type=account_credentials&account_id=$ZOOM_ACCOUNT_ID` → returns `access_token` (expires 3600s)
+- **API base:** `https://api.zoom.us/v2`
+- **Auth on API calls:** `Authorization: Bearer <access_token>`
+
+Common endpoints (S2S-compatible):
+- `GET /users/{userId}/meetings` — list scheduled meetings (`me` = the host)
+- `POST /users/{userId}/meetings` — create meeting
+- `GET /meetings/{meetingId}` — fetch one meeting
+- `GET /past_meetings/{meetingId}` — past meeting details
+- `GET /report/users/{userId}/meetings` — usage reports
+
+NOT S2S-compatible (require General OAuth Path B):
+- `GET /users/{userId}/recordings`
+- `GET /meetings/{meetingId}/recordings`
+
+---
+
+## Step 7 — reload the gateway (stop + run, NOT restart)
 
 ```bash
-docker exec -u hermes "$AGENT" sh -c '
-  curl -sS -o /tmp/zoom_tok -w "%{http_code}\n" \
-    -X POST "https://zoom.us/oauth/token" \
-    -u "$ZOOM_CLIENT_ID:$ZOOM_CLIENT_SECRET" \
-    -d "grant_type=account_credentials&account_id=$ZOOM_ACCOUNT_ID"
-  grep -q access_token /tmp/zoom_tok && echo OK || echo FAIL
-  rm -f /tmp/zoom_tok'
+ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
+sleep 3
+ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
+sleep 5
 ```
 
-- `200` + `OK` — credentials valid; you can mint tokens.
-- `400 invalid_request` — `account_id` wrong or missing scopes; re-check Step 2 of Marketplace.
-- `401 invalid_client` — `client_id` / `client_secret` mismatch; re-copy from App Credentials.
-- `4300` (Zoom error) — app not Activated; click **Activate** in the Marketplace.
-
 ---
 
-## Step 3 — connect Zoom. No first-party static-bearer MCP exists, so use the REST API.
-
-**No first-party MCP server verified as of 2026-06 for headless server-to-server use.** Zoom's
-hosted MCP servers (<https://developers.zoom.us/docs/mcp/>) require OAuth 2.1 + PKCE in a
-user's browser; bearer-token-only clients cannot complete the handshake. Pick one of:
-
-### Path A (recommended for meetings/users/webinars) — generic HTTP tool against Zoom REST
-
-Point a generic HTTP/tool capability at the Zoom REST API. The agent mints a fresh access token
-per request (or caches for ~55 minutes) using the credentials in `/opt/data/.env`.
-
-- **Token endpoint:** `POST https://zoom.us/oauth/token` (Basic auth `$ZOOM_CLIENT_ID:$ZOOM_CLIENT_SECRET`,
-  body `grant_type=account_credentials&account_id=$ZOOM_ACCOUNT_ID`)
-- **API base URL:** `https://api.zoom.us/v2`
-- **Auth header on API calls:** `Authorization: Bearer <access_token>`
-- **Common endpoints:**
-  - `GET /users/{userId}/meetings` — list scheduled meetings (userId `me` works for the host)
-  - `POST /users/{userId}/meetings` — create a meeting
-  - `GET /meetings/{meetingId}` — fetch one meeting
-  - `GET /past_meetings/{meetingId}` — past meeting details
-  - `GET /report/users/{userId}/meetings` — usage reports
-
-### Path B (only if recordings are required) — General OAuth app, interactive install
-
-S2S cannot read cloud recordings. If the user needs `GET /users/{userId}/recordings` or
-`GET /meetings/{meetingId}/recordings`, create a **General** OAuth app in the Marketplace, run
-the interactive consent flow once to capture a refresh token, store `ZOOM_REFRESH_TOKEN` in
-`/opt/data/.env` (same `hermes config set` flow as Step 1), and exchange it for access tokens
-with `grant_type=refresh_token`. Flag this to the user — it requires a one-time browser step
-that a headless agent cannot do alone.
-
-### Path C (last resort) — community stdio MCP
-
-Community stdio MCPs exist (e.g. `echelon-ai-labs/zoom-mcp` on GitHub). Treat as unaudited;
-prefer Path A. If you do register one, use the stdio MCP pattern from `/integration-notion`
-Path A, exporting `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET` into the child env.
-
----
-
-## Step 4 — reload the gateway so the new env is picked up
-
-The gateway reads `.env` once at startup. Use stop + run (not `restart`) so the new env is
-re-read cleanly — same rule as `/hermes-mcp-add`.
+## Step 8 — live smoke test (from inside the container)
 
 ```bash
-docker exec -u hermes "$AGENT" hermes gateway stop
-sleep 3
-docker exec -d -u hermes "$AGENT" hermes gateway run
-sleep 8
+RESULT=$(ssh "$VPS_USER@$VPS_IP" "
+  . ~/.hermes/.env 2>/dev/null
+  TOK=\$(curl -sS --max-time 10 -X POST 'https://zoom.us/oauth/token' \
+    -u \"\$ZOOM_CLIENT_ID:\$ZOOM_CLIENT_SECRET\" \
+    -d \"grant_type=account_credentials&account_id=\$ZOOM_ACCOUNT_ID\" \
+    | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')
+  [ -z \"\$TOK\" ] && echo NO_TOKEN && exit 0
+  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+    -H \"Authorization: Bearer \$TOK\" \
+    'https://api.zoom.us/v2/users/me/meetings?page_size=1'
+")
+case "$RESULT" in
+  200) echo "OK: Zoom REST reachable from VPS (S2S token + /users/me/meetings)." ;;
+  NO_TOKEN) echo "FAIL: no access_token minted. Rolling back."; rollback; exit 1 ;;
+  *) echo "WARN: unexpected HTTP $RESULT." ;;
+esac
+```
+
+---
+
+## Rollback (auto-runs on any failure above)
+
+```bash
+rollback() {
+  ssh "$VPS_USER@$VPS_IP" "
+    sed -i '/^ZOOM_ACCOUNT_ID=/d;
+            /^ZOOM_CLIENT_ID=/d;
+            /^ZOOM_CLIENT_SECRET=/d' ~/.hermes/.env
+    chmod 600 ~/.hermes/.env
+  "
+  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
+  echo "Rolled back. Rotate the S2S secret in Marketplace → App Credentials if compromised."
+}
 ```
 
 ---
@@ -160,44 +258,37 @@ sleep 8
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Trying to wire the hosted Zoom MCP with a static bearer | Zoom MCP requires OAuth 2.1 + PKCE; no headless bearer path. | Drive the REST API directly (Path A). |
-| 2 | Picking S2S then asking for cloud recordings | `cloud_recording:*` scopes are blocked for Server-to-Server OAuth apps. | Use a General OAuth app (Path B) or drop the requirement. |
-| 3 | Caching the access token forever | S2S tokens expire after 3600 seconds and have no refresh token. | Re-mint on `401`, or refresh every ~55 minutes. |
-| 4 | App created but token call returns `4300` | App was never Activated in the Marketplace. | Open the app → **Activation** tab → Activate. |
-| 5 | Missing scopes show as `4711` on API calls | Scopes were not granted before activation. | Add scopes, re-activate, mint a new token. |
-| 6 | Secret in `config.yaml` or compose `.env` | Wrong file → world-readable or not loaded by Hermes runtime. | Only `/opt/data/.env`, `chmod 600`, via `config set` / sed. |
-| 7 | Rate limits on heavy meeting lists | Zoom enforces per-account QPS limits; bursts get `429`. | Honor `Retry-After`; paginate with `next_page_token`. |
-
----
-
-## Verify
-
-Confirm credentials and a live call before declaring done.
-
-1. **Token mint works (already done in Step 2).** Re-run if needed; expect `200` + `OK`.
-2. **Real API call returns data.** Run inside the container so the token never appears in logs:
-   ```bash
-   docker exec -u hermes "$AGENT" sh -c '
-     TOK=$(curl -sS -X POST "https://zoom.us/oauth/token" \
-       -u "$ZOOM_CLIENT_ID:$ZOOM_CLIENT_SECRET" \
-       -d "grant_type=account_credentials&account_id=$ZOOM_ACCOUNT_ID" \
-       | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
-     curl -sS -o /dev/null -w "%{http_code}\n" \
-       -H "Authorization: Bearer $TOK" \
-       "https://api.zoom.us/v2/users/me/meetings?page_size=1"'
-   ```
-   `200` = scopes correct, account active. `401` = bad / expired token. `4711` = missing scope.
-3. **End-to-end from chat:** `@<agent> list my upcoming Zoom meetings` should return real
-   meetings (or a valid empty list if the account has none scheduled).
+| 1 | Wiring the hosted Zoom MCP with static bearer | Zoom MCP requires OAuth 2.1 + PKCE (browser) — no headless path | This skill refuses; uses REST only |
+| 2 | S2S + cloud recordings | `cloud_recording:*` scopes BLOCKED for S2S | Step 3 hard-aborts on `NEEDS_RECORDINGS=1`; documents Path B (General OAuth) |
+| 3 | Caching S2S token forever | Tokens die at 3600s, NO refresh | Tool must re-mint on 401 or every ~55min |
+| 4 | App created but token 4300 error | App never Activated in Marketplace | Marketplace → Activation → Activate |
+| 5 | 4711 on API calls | Scopes not granted before activation | Add scopes → re-activate → mint new token |
+| 6 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
+| 7 | Rate limits per-account QPS | Bursty meeting lists 429 | Honor `Retry-After`; paginate with `next_page_token` |
+| 8 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
+| 9 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
+| 10 | sed with `/` delimiter | Secrets contain `/+=` | Always `\|` delimiter |
+| 11 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
+| 12 | Confusing Marketplace app types (JWT, OAuth, S2S, Meeting SDK) | Wrong app type = wrong flow | This skill is S2S only; note Path B requires General OAuth (interactive) |
+| 13 | Missing `user:read:admin` scope | 401 on `/users/me/meetings` | Include in minimum scope set |
+| 14 | Community stdio MCP `echelon-ai-labs/zoom-mcp` used unaudited | Third-party code with your S2S creds | Path C last resort; document only |
 
 ---
 
 ## Definition of done
 
-- [ ] `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET` are all in `/opt/data/.env` with `chmod 600`; none in `config.yaml` or chat.
-- [ ] Token mint at `https://zoom.us/oauth/token` returns `200` with an `access_token`.
-- [ ] `GET /v2/users/me/meetings` returns `200` from inside the container.
-- [ ] Chat-driven meeting list returns real data (or valid empty result).
-- [ ] If recordings were requested, the user is told S2S cannot do it and Path B is documented.
+- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
+- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
+- [ ] Idempotency check ran (skipped if all 3 creds present, unless `FORCE=1`)
+- [ ] HARD GATE passed: NEEDS_RECORDINGS not set to 1 (or user directed to Path B); all 3 creds present + secret ≥20 chars; live S2S token mint returned an access_token
+- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
+- [ ] All 3 creds written to `~/.hermes/.env`, `chmod 600`, verified by grep
+- [ ] No MCP registered (correctly — Zoom MCP is OAuth+PKCE)
+- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Smoke test: token mint from VPS + `GET /v2/users/me/meetings?page_size=1` returned 200
+- [ ] REST surface documented (token mint contract + S2S-compatible endpoints)
+- [ ] User informed that recordings need Path B (General OAuth) and that S2S tokens die every hour
+- [ ] Rollback function defined; secret rotation instructions included
 
-See `reference/TROUBLESHOOTING.md` for gateway reload and OAuth credential failure modes.
+See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, S2S
+activation, and Zoom scope failure modes.
