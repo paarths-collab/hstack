@@ -11,7 +11,7 @@ echo "=== hstack setup-all ==="
 echo "Installing hstack skills into every supported environment."
 echo
 
-for ide in "setup" "setup-codex" "setup-cursor" "setup-hermes" "setup-gemini"; do
+for ide in "setup" "setup-codex" "setup-cursor" "setup-hermes" "setup-gemini" "setup-openclaw"; do
   if [ -x "./$ide" ]; then
     echo "--- $ide ---"
     "./$ide" || echo "WARN: $ide failed (continuing)"
@@ -20,4 +20,4 @@ for ide in "setup" "setup-codex" "setup-cursor" "setup-hermes" "setup-gemini"; d
 done
 
 echo "=== Done ==="
-echo "Skills are now available in: Claude Code, Codex, Cursor, Hermes, Gemini CLI"
+echo "Skills are now available in: Claude Code, Codex, Cursor, Hermes, Gemini CLI, OpenClaw"
