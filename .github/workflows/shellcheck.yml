@@ -5,10 +5,13 @@ on:
     paths:
       - "setup"
       - "**.sh"
+      - ".github/workflows/shellcheck.yml"
   pull_request:
     paths:
       - "setup"
       - "**.sh"
+      - ".github/workflows/shellcheck.yml"
+  workflow_dispatch:
 
 jobs:
   shellcheck:
@@ -22,24 +25,20 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y shellcheck shfmt
 
-      - name: Collect shell files
-        id: files
-        run: |
-          # Find *.sh anywhere, plus the bare 'setup' script at repo root
-          files=$(find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*")
-          # Add 'setup' only if it has a bash shebang
-          if head -1 setup 2>/dev/null | grep -qE '(bash|sh)'; then
-            files="$files setup"
-          fi
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-          echo "Targets: $files"
-
       - name: ShellCheck
         run: |
-          # SC2086 (word-splitting on unquoted vars) is the most important class — keep strict
-          shellcheck --severity=warning ${{ steps.files.outputs.files }}
+          # Find *.sh anywhere, plus the bare 'setup' script at repo root
+          # (only if it has a bash/sh shebang). Feed via xargs so multi-line
+          # file lists work without GITHUB_OUTPUT heredoc gymnastics.
+          {
+            find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
+            if head -1 setup 2>/dev/null | grep -qE '(bash|sh)'; then echo setup; fi
+          } | xargs shellcheck --severity=warning
 
       - name: shfmt (format diff)
         run: |
           # -i 2: 2-space indent  -ci: case-indent  -bn: binary-op on new line
-          shfmt -i 2 -ci -bn -d ${{ steps.files.outputs.files }}
+          {
+            find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
+            if head -1 setup 2>/dev/null | grep -qE '(bash|sh)'; then echo setup; fi
+          } | xargs shfmt -i 2 -ci -bn -d
