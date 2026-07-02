@@ -327,6 +327,167 @@ esac
 
 ---
 
+## Rate limits and capacity planning
+
+Segment's Tracking API is designed to accept high volumes — there's no
+per-hour cap on `/v1/track`, `/v1/identify`, etc. What you actually hit:
+
+| Constraint | Value | Enforced by |
+|---|---|---|
+| Single event max size | **32 KB** | `413 Request Too Large` |
+| `/v1/batch` payload max | **500 KB total, 500 events per call** | `413`; oversize events dropped from batch |
+| Server-side throughput | ~1,000 events/sec sustained per source | Never rate-limits inline — but destinations behind Segment will throttle |
+| **MTU (Monthly Tracked Users)** | plan-dependent — free tier: 1,000/mo, Team: 10,000/mo | Segment stops forwarding to destinations when exceeded; `/v1/track` still 200s |
+| Public API | 60 requests / minute / token | `429` with `Retry-After` |
+
+**MTU is the real cost surface, not event volume.** Every unique `userId` in a
+rolling 30-day window counts as one MTU. Anonymous sessions with rotating
+`anonymousId` values each count too. Agents that emit `track` for every message
+with `anonymousId: uuid4()` will burn through the free tier in a day. Reuse
+`anonymousId` per Telegram/Discord/Slack user across their session so the same
+user counts once, not 400 times.
+
+**Destination throttling propagates back only via delivery-metrics.** Segment
+accepts your `/v1/track` and 200s regardless of whether downstream Mixpanel
+or Amplitude rate-limits. To detect throttled destinations, poll the Public API
+delivery-metrics endpoint (see the REST doc), or set up an alert email in
+Segment UI → Destinations → your destination → **Delivery Overview**.
+
+**Batching guidance.** For agents pushing bursty traffic (Telegram bot with a
+webhook fan-out), send `/v1/batch` every 200ms with up to 500 events. Single
+`/v1/track` per event is fine below ~50 events/sec; above that, batch.
+
+**Retention:** Segment stores the events it forwards for 7 days for debugging
+in Source Debugger. Beyond that, retention lives in your destinations
+(BigQuery, Snowflake, S3, etc.). Do not use Segment as a data store.
+
+---
+
+## Worked debugging scenarios
+
+### Scenario A — "Events appear in Source Debugger but not in Mixpanel"
+
+Segment 200s regardless of destination success. Debug order:
+
+1. **Destination status.** UI → Connections → Destinations → Mixpanel →
+   **Delivery Overview**. Look for "Failed" bars over the last 24h.
+2. **Destination-specific transformation.** Mixpanel expects `event` names, but
+   Segment forwards `traits` on `identify`. If your `properties` block was
+   named `traits` by mistake, Mixpanel silently drops the event.
+3. **Destination throttle window.** Mixpanel enforces a 200-event burst; Segment
+   auto-retries with backoff for up to 4 hours, then drops.
+4. **Sampling filter on the destination.** UI → Destinations → Mixpanel →
+   **Transformations**. A "Sample X%" filter set to 0 silently drops all.
+
+Check the flow with the Public API:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" '
+  set -a; . ~/.hermes/.env; set +a
+  curl -sS -H "Authorization: Bearer $SEGMENT_PUBLIC_TOKEN" \
+    "https://api.segmentapim.com/v1beta/delivery-metrics/sources/<SOURCE_ID>" | \
+    python3 -m json.tool | head -40
+'
+```
+
+Non-zero `failed` count = destination is the problem, not the pipe.
+
+### Scenario B — "MTU dashboard shows 50k but I have 200 real users"
+
+The `userId` field is being set with something ephemeral (session id, request
+uuid, timestamp). Every unique value counts as one MTU. Fix:
+
+- Discord/Slack: use the stable snowflake user id (`<@1234567890>` → `1234567890`).
+- Telegram: use `chat.id` for private chats or `from.id` for groups.
+- WhatsApp: use the E.164 phone number without `+`.
+- Never call `identify` with `userId: uuid.uuid4()`. That is 100% of the bug in
+  90% of the cases where MTU explodes.
+
+Audit which userIds you're emitting:
+
+```bash
+# On the VPS, sample the last 100 events emitted:
+grep -a '"event":"track"' /var/log/hermes/segment-emit.log | \
+  tail -100 | python3 -c "import json,sys; [print(json.loads(l)['userId']) for l in sys.stdin]" | sort -u
+```
+
+If the unique-count on 100 events is > ~20 for a bot with 20 known users, you
+have per-message anonymous IDs.
+
+### Scenario C — "Events out-of-order in the destination warehouse"
+
+Segment guarantees at-least-once delivery per event but does not guarantee
+ordering. If ordering matters (funnel analysis, session reconstruction):
+
+- Emit a monotonic `timestamp` field on every `track` call (ISO 8601, UTC).
+- Include a `context.messageId` (UUIDv7 is ideal — sortable + unique).
+- Use the timestamp for warehouse ORDER BY, not the destination's ingested-at.
+
+Segment respects the `timestamp` you provide unless it's more than 24h old (then
+it clamps to server time).
+
+### Scenario D — "EU-region source but events showing up in US warehouse"
+
+Two-part fix:
+
+1. **Source region.** UI → Sources → your source → Settings → **Region**. If
+   this shows US, the source was created in the US region. You cannot migrate
+   a source's region; create a new EU source, update `SEGMENT_WRITE_KEY` and
+   `SEGMENT_REGION` on the VPS via `hermes config set`, then delete the old
+   source once traffic has drained.
+2. **Destination region.** BigQuery / Snowflake / S3 destinations have their
+   own region setting. Segment can cross-region-copy but you pay egress. Set
+   the destination region to match the source region.
+
+---
+
+## Credential rotation procedure
+
+Segment has three credential types; rotation mechanics differ.
+
+**Write key (`SEGMENT_WRITE_KEY`) — per-source, ~32-char alnum:**
+
+Simple, but there's a subtle trap: Segment does NOT let you view an existing
+write key after creation. Only newly-minted keys are visible; existing ones
+show as `****`.
+
+1. UI → Sources → your source → Settings → API Keys → **Regenerate Write Key**.
+   Copy the new value immediately.
+2. On the VPS: `hermes config set SEGMENT_WRITE_KEY '<new>'`.
+3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
+4. Re-run Step 9's smoke test. Confirm the event appears in Source Debugger.
+5. The old key is invalidated automatically at regenerate time — no separate
+   revoke step. Any other integration using the old key breaks *now*.
+
+**Public API token (`SEGMENT_PUBLIC_TOKEN`) — workspace-scoped bearer:**
+
+1. UI → Workspace Settings → Access Management → Tokens → **Create Token**.
+   Scope to the minimum: `workspace_read`, `sources_read`,
+   `destinations_read`, `delivery_metrics_read`.
+2. On the VPS: `hermes config set SEGMENT_PUBLIC_TOKEN '<new>'`.
+3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
+4. Confirm with
+   `curl -H "Authorization: Bearer $SEGMENT_PUBLIC_TOKEN" https://api.segmentapim.com/v1beta/workspaces` → 200.
+5. Delete the old token in the UI.
+
+**Region migration (`SEGMENT_REGION` from `us` → `eu` or vice versa):**
+
+You cannot migrate a source's region. Procedure:
+
+1. Create a new source in the target region. Copy its write key.
+2. On the VPS: rotate `SEGMENT_WRITE_KEY` and `SEGMENT_REGION` in the same
+   `hermes config set` batch. Gateway stop + run.
+3. Wait 24h for outstanding delivery-metrics to drain from the old source (some
+   destinations acknowledge up to 24h late).
+4. Delete the old source. This severs its destinations — recreate them on the
+   new source if you need them.
+
+**Blast-radius after rotation:** After ANY rotation, grep `~/.hermes/logs/*` and
+`/var/log/*` for the old key prefix. Purge any file that contains it. Segment
+does not track key-usage history you can consult after invalidation.
+
+---
+
 ## Rollback (auto-runs on any failure above)
 
 ```bash
@@ -360,6 +521,13 @@ rollback() {
 | 10 | Container vs host confusion | Env on host but Hermes runs in container. | Step 1 detects layer; verify env inside gateway (Step 8). |
 | 11 | `gateway restart` for env changes | Restart doesn't reliably re-read `.env`. | Always `stop` + `run`. |
 | 12 | Logging event payloads | Traits often contain PII (email, plan tier, org). | Log status codes only; redact `traits` if you must log more. |
+| 13 | Using UUIDv4 as `userId` per message | Every unique userId in a 30-day window counts as an MTU. Free tier burns in a day. | Use stable platform IDs (Discord snowflake, Telegram `from.id`, WhatsApp E.164). |
+| 14 | 200 from `/v1/track` treated as "arrived at destination" | Segment 200s regardless of downstream success. Mixpanel/Amplitude may 429 for hours. | Poll delivery-metrics on the Public API; alert on non-zero `failed`. |
+| 15 | Regenerating write key without warning downstream | Segment invalidates the old key immediately; any other integration using it breaks now. | Audit before rotating; coordinate rotations. |
+| 16 | Assuming Segment stores events long-term | Source Debugger keeps 7 days; the "warehouse" is *your* destination (BigQuery, Snowflake). | Wire a warehouse destination early; don't rely on Segment for historical queries. |
+| 17 | Segment write key committed via `hermes config set` fails silently on empty | If `$SEGMENT_WRITE_KEY` is empty (env didn't propagate), the config-set writes `SEGMENT_WRITE_KEY=` — Basic auth against empty user is `401`. | Format-check length ≥ 20 in Step 3 (this skill does); verify env inside gateway in Step 8. |
+| 18 | Destination-side sample filter set to 0% | UI's Transformations tab has a sampling slider; 0% means "drop all" and it's easy to nudge. | Alert on delivery-metrics `dropped_by_transformation`. |
+| 19 | Timestamp older than 24h clamped to server time | Backfilling historical events loses their timestamps. | Use Segment's Replay feature or upload via warehouse pipeline instead. |
 
 ---
 

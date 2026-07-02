@@ -310,6 +310,160 @@ esac
 
 ---
 
+## Rate limits and capacity planning
+
+Datadog rate-limits per endpoint class, not globally. Every response includes
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (seconds until
+the window resets), and `X-RateLimit-Period` (window size in seconds). Read them
+before writing retry logic.
+
+| Endpoint class | Default limit (per org) | Reset | Notes |
+|---|---|---|---|
+| `POST /api/v1/events` | 1,000 / hour | rolling 3600s | 429 with `Retry-After`; consider `POST /api/v2/events` for higher throughput plans |
+| `POST /api/v2/series` (metrics) | 3,600 / hour on the free/pro plans, 60,000+ on enterprise | rolling 3600s | Batch metrics into a single call — up to 3.2 MB payload, no per-series cap |
+| Log intake `POST /api/v2/logs` | 5 MB / request, 1,000 logs / request | per request | No hourly cap; billed by ingestion GB — the real cost gate |
+| `GET /api/v1/monitor` | 60 / hour | rolling 3600s | Deceptively low; cache monitor lists locally when you can |
+| `POST /api/v1/monitor` (create/update/mute) | 60 / hour | rolling 3600s | Mutations share the read budget |
+| `POST /api/v2/incidents` | 100 / hour | rolling 3600s | An incident storm can hit this fast |
+
+**Retry pattern the agent should follow when it hits `429`:**
+
+```bash
+# Read Retry-After from the response header; fall back to Reset epoch delta.
+retry_after=$(curl -sSD - -o /dev/null -H "DD-API-KEY: $DD_API_KEY" \
+                "$DD_HOST/api/v1/events" | grep -i '^Retry-After:' | awk '{print $2}' | tr -d '\r')
+sleep "${retry_after:-30}"
+```
+
+**Ingestion-cost gate (metrics + logs):** Datadog bills logs by ingested GB and
+metrics by custom-metric-count. Agents that emit one metric per message on a
+Telegram bot with 50k msgs/day can trip the free-tier metric cap in one
+afternoon. Cap emission at the agent side: sample logs, aggregate metrics into
+5-min buckets, dedupe events by title within a rolling window.
+
+**Long-term storage vs live view:** Events retained 15 days, metrics 15 months
+at 1-min resolution then rolled up, logs 15 days by default (indexable), 30 days
+in Live Search cold storage. If an agent needs to correlate against events > 15
+days old, snapshot to `integration-r2` weekly rather than expecting Datadog to
+retain them.
+
+---
+
+## Worked debugging scenarios
+
+### Scenario A — "Datadog was working, then this morning every call returns 403"
+
+Symptoms: no config changes on the VPS side; the smoke test in Step 9 now fails
+with `validate=403`.
+
+Diagnosis order:
+
+1. **Rotate check.** Did anyone rotate the API or App key in the Datadog UI without
+   pushing the new value via `hermes config set`? Ask, then check
+   Organization Settings → API Keys → sort by "Modified" desc.
+2. **Site mismatch after org migration.** Datadog sometimes migrates enterprise
+   orgs between sites (US1 → US5). The old `DD_SITE` value is stale.
+   `curl -H "DD-API-KEY:$DD_API_KEY" https://api.us5.datadoghq.com/api/v1/validate`
+   — if that returns 200, update `DD_SITE`.
+3. **App Key scope revoked.** Personal Settings → Application Keys → check the
+   key's scopes. A collaborator with admin rights can prune scopes.
+4. **Account suspension.** Overdue invoice → org-wide 403 from all endpoints.
+   Datadog does not clearly communicate this on the API; check billing.
+
+Once fixed: `hermes config set DD_SITE 'us5.datadoghq.com'`, then
+`hermes gateway stop && hermes gateway run` (never `restart`).
+
+### Scenario B — "Metrics show up in Events Explorer but not in dashboards"
+
+Root cause is almost always the tag namespace. Datadog silently accepts
+mis-typed tags but you can't filter dashboards on them.
+
+Debug:
+
+```bash
+# List tag keys emitted in the last 10 min
+ssh "$VPS_USER@$VPS_IP" '
+  set -a; . ~/.hermes/.env; set +a
+  curl -sS -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
+    "https://api.$DD_SITE/api/v1/tags/hosts" | python3 -m json.tool | grep source
+'
+```
+
+If you see `source:hstack` and `source:Hstack`, you have case drift. Tags are
+case-sensitive in filters but lowercase-normalized in some UI views — a nasty
+mismatch. Fix: sanitize all tag emit code to `tr '[:upper:]' '[:lower:]'`.
+
+### Scenario C — "Monitor mute worked but the monitor still alerted"
+
+Datadog has two mute mechanisms: (a) `POST /v1/monitor/{id}/mute` — mutes the
+monitor globally, (b) `POST /v1/monitor/{id}/mute?scope=env:staging` —
+mutes only the scope. Passing an empty scope string is treated as (a); passing
+a malformed scope silently mutes nothing. Confirm with:
+
+```bash
+curl -sS -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
+  "https://api.$DD_SITE/api/v1/monitor/$MONITOR_ID" | python3 -m json.tool | grep -A2 '"options"'
+```
+
+The response block will show `"silenced": {}` when nothing is muted. If your
+mute call returned 200 but the block is `{}`, the scope was malformed.
+
+### Scenario D — "Log intake returns 202 but logs never appear"
+
+Two independent causes worth checking in order:
+
+1. **Wrong intake host.** Skills using `api.$DD_SITE/api/v2/logs` — that's the
+   Public API, not intake. Real intake is `http-intake.logs.$DD_SITE`. The
+   Public API accepts your call and drops it.
+2. **Log index filter drops the log.** Logs → Configuration → Indexes.
+   Filters run before indexing; a filter with a typo silently drops matching
+   logs. Add a temporary catch-all index to isolate.
+
+---
+
+## Credential rotation procedure
+
+Datadog credentials come in three flavors, each with distinct rotation
+mechanics:
+
+**API key (`DD_API_KEY`) — 32-char hex, submit-scope:**
+
+1. Datadog UI → Organization Settings → API Keys → **New Key**. Copy the value.
+2. On the VPS: `hermes config set DD_API_KEY '<new>'`.
+3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
+4. Re-run Step 9's smoke test; confirm `validate=200`.
+5. Back in the UI, disable the old key. Wait 10 minutes to confirm no other
+   integration was silently using it (log intake, agent daemon, external
+   collectors will 403 loudly), then delete it.
+
+**Application key (`DD_APP_KEY`) — 40-char hex, adds query + mutation scope:**
+
+1. UI → Personal Settings → Application Keys → **New Key**. Match the scopes
+   listed in the gather table exactly: `metrics_read`, `monitors_read`,
+   `monitors_write`, `events_write`, `logs_write`. Do NOT grant "all scopes."
+2. On the VPS: `hermes config set DD_APP_KEY '<new>'`.
+3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
+4. Re-run Step 9's smoke test AND
+   `curl -H "DD-API-KEY:$DD_API_KEY" -H "DD-APPLICATION-KEY:$DD_APP_KEY" $DD_HOST/api/v1/monitor?page_size=1`
+   — needs 200 for query scope confirmation.
+5. Delete the old key in the UI.
+
+**Site (`DD_SITE`) — rare, but sometimes forced by an enterprise migration:**
+
+1. New site announced by Datadog support → new keys minted on the new site.
+2. Rotate `DD_API_KEY`, `DD_APP_KEY`, AND `DD_SITE` in the same
+   `hermes config set` batch, then a single gateway stop+run.
+3. Update `DD_SITE` references in every skill's `/opt/data/*-rest.md` if they
+   hard-coded the old site (they should reference `${DD_SITE}` — grep to
+   confirm).
+
+**Rotation-triggered blast-radius review:** After any rotation, check that the
+old key doesn't appear in `~/.hermes/logs/*.log` or `/var/log/*` on the VPS.
+If it does, purge the file (the token is worthless once revoked, but grep-scans
+by future security auditors will flag it as a live-looking secret).
+
+---
+
 ## Rollback (auto-runs on any failure above)
 
 ```bash
@@ -344,6 +498,13 @@ rollback() {
 | 11 | Container vs host confusion | Env on host but Hermes in container. | Step 1 detects layer; verify env inside gateway (Step 8). |
 | 12 | Emitting events without tags | Datadog Events Explorer is unfiltered — ops can't correlate. | Always tag: `source:hermes-agent`, `env:prod`, `skill:…`. |
 | 13 | Monitor mutate without approval | Auto-mute can hide real outages. | Require `WRITES_ACKNOWLEDGED=1`; log every mutate. |
+| 14 | Log intake at `api.$DD_SITE/api/v2/logs` | Public API accepts and drops; intake host is `http-intake.logs.$DD_SITE`. | Use the doc's host table; grep the REST doc for `http-intake.logs`. |
+| 15 | Ingesting one metric per message | Custom-metric count trips the free-tier cap within a day on any bot with real traffic. | Aggregate into 5-min buckets; sample logs; dedupe events by title. |
+| 16 | Mute call with malformed `scope=` param | Datadog returns 200 but the monitor stays unmuted. | Verify the `silenced:` block on the monitor; retry with a validated scope string. |
+| 17 | Case-drift on tags (`source:hstack` vs `source:Hstack`) | Filters are case-sensitive; UI is not. Dashboards show empty, Events Explorer shows data. | Lowercase all tag values client-side before emit. |
+| 18 | Monitor list endpoint deceptively rate-limited (60/hr) | An agent that polls monitors every minute exhausts the budget in an hour. | Cache monitor list locally; refresh on webhook, not on poll. |
+| 19 | Enterprise site migration (`us1` → `us5`) breaks old keys | 403 with a misleading "not authorized" message. | Re-mint keys on the new site; update `DD_SITE`; grep for hard-coded old-site URLs. |
+| 20 | Trial expiring silently downgrades scopes | An App Key that had `monitors_write` on trial loses it when the org reverts to Pro. | Monitor billing; alert on trial-end 14 days out. |
 
 ---
 

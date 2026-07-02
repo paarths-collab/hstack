@@ -416,6 +416,206 @@ esac
 
 ---
 
+## Sync-mode selection guide (Path A)
+
+Path A operates on files in `$OBSIDIAN_VAULT_DIR`. The sync tool determines
+who is the writer of record. Pick per your usage:
+
+**`git` — single writer, agent-primary, laptop-secondary.**
+Best when the agent writes far more often than the human. Every 15 minutes,
+the cron pulls (accepting laptop changes if any), then commits + pushes. If
+both sides edited the same file since the last cron, you get a merge conflict
+and the cron stops until a human resolves. Add a Discord/Telegram alert on
+non-zero exit from `/usr/local/bin/obsidian-vault-sync` so you notice.
+
+**`syncthing` — genuine multi-writer.**
+Best when the laptop and the agent both write frequently. Syncthing detects
+per-file conflicts and creates `.sync-conflict-YYYYMMDD-HHMMSS.md` sibling
+files rather than merging. The agent should treat any file matching
+`*.sync-conflict-*` as read-only and surface it to the user for reconciliation.
+
+**`rclone` — one-way agent → cloud.**
+Best when the agent produces knowledge (research summaries, meeting notes,
+research capsules) and the user consumes it via Obsidian Sync / iCloud / Dropbox.
+Run every 5-10 minutes via cron. Two-way rclone with `sync` is technically
+possible but the mtime-based comparison is fragile — prefer syncthing for
+two-way.
+
+**`manual` — for testing, staging, and one-shot loads.**
+No cron installed. The agent writes; the human runs `git pull` or `rsync` when
+they want to see updates. Sensible while onboarding, not for production.
+
+### Sync-mode ↔ Obsidian Sync interaction
+
+The paid Obsidian Sync product runs *on the desktop app*, not on the VPS. If
+the user has Obsidian Sync enabled AND you configure Path A + `git`, two
+different sync systems fight over the vault. Rules:
+
+- **Obsidian Sync alone** — Path A + `manual` sync mode, and the agent uses
+  the vault via a laptop-mounted network share. Slow and fragile; not
+  recommended.
+- **hstack sync alone** — Path A + `git`/`syncthing`/`rclone`, and Obsidian
+  Sync stays off. Recommended.
+- **Both** — do not. Data loss is a matter of when, not if.
+
+---
+
+## Rate limits, reachability, and the desktop-app dependency
+
+### Path A — vault as files
+
+No rate limits. Constraints:
+
+- **Disk I/O on the VPS.** A busy agent writing every message to a note file
+  can produce 100+ MB of `.md` per week. `du -sh $OBSIDIAN_VAULT_DIR` weekly;
+  archive older-than-90-days notes into a subfolder if size becomes a concern.
+- **Git repo size (`git` mode).** A cron committing 100 files/day into a
+  private GitHub repo works for years, but GitHub's soft cap is 5 GB. Rotate
+  the repo annually by squashing old history: `git checkout --orphan clean
+  main; git commit -m 'squash pre-2027'; git push --force`.
+- **Wikilink case-sensitivity.** Obsidian resolves `[[Foo]]` → `Foo.md`
+  case-insensitively; a case-insensitive filesystem (macOS default, exFAT)
+  hides the difference. On the Linux VPS (ext4, case-sensitive) two notes
+  differing only in case can coexist and both be broken from Obsidian's POV.
+
+### Path B — Local REST API over tunnel
+
+Rate-limited only by the desktop app's local capacity. Real constraints:
+
+| Constraint | Value | Symptom |
+|---|---|---|
+| Desktop app must be running | mandatory | HTTP 000 (connection refused) |
+| Tailscale/Cloudflare tunnel must be up | mandatory | HTTP 000 or DNS resolution failure |
+| Plugin update breaks stdio API | plugin author's discretion | 500 with an obscure body; check plugin version |
+| Laptop sleep → tunnel timeout | 30 sec typical | 000 for one call, then reconnect |
+| macOS App Nap | when Obsidian minimized > 15 min | Sluggish responses; enable "Prevent App Nap" in Activity Monitor |
+| Windows/Linux screen lock | usually irrelevant | works |
+
+**Availability estimate for Path B:** ~85% uptime for a normal knowledge-worker
+laptop (asleep at night, closed on weekends). Do not use for time-critical
+agent workflows. Fine for "when you get a chance, summarize today's messages
+into daily note."
+
+### Path C — mcp-obsidian stdio wrapper
+
+Reachability identical to Path B (wraps the same REST API). Added constraints:
+
+- `uvx` needs Python 3.11+ inside the Hermes container. Verify with
+  `docker exec <container> python3 --version`.
+- First-call cold start after `uvx mcp-obsidian` fetches the package — 3-15
+  seconds. Warm the cache in Step 6 (this skill does).
+- Plugin version churn — the wrapper is maintained by MarkusPfundstein and
+  pinned in `VERSIONS.txt`. Bumping requires reading their changelog for
+  breaking changes.
+
+---
+
+## Worked debugging scenarios
+
+### Scenario A — "Path B smoke test returns 000 (no response)"
+
+Possible causes, in likelihood order:
+
+1. **Desktop app is closed.** Ask the user. Fix: reopen Obsidian on the laptop.
+2. **Tailscale/Cloudflare Tunnel is down.** From the VPS: `curl -k -sSD -
+   -o /dev/null $OBSIDIAN_API_URL/ 2>&1 | head`. DNS-fail or connection-refused
+   → tunnel is the problem. Restart the tunnel client on the laptop.
+3. **Laptop is asleep / hibernating.** The tunnel client goes with the OS.
+   Wake the laptop, wait 30 seconds for the tunnel to re-establish.
+4. **Firewall on the laptop.** Newly-installed corporate MDM sometimes blocks
+   127.0.0.1:27124. Test locally on the laptop first: `curl -k https://127.0.0.1:27124/`.
+5. **Plugin disabled after update.** Obsidian sometimes disables plugins on
+   version bump. UI → Settings → Community plugins → confirm "Local REST API"
+   is on.
+
+### Scenario B — "Path A cron is silently not syncing"
+
+Symptoms: laptop-side changes don't appear on VPS, or vice versa.
+
+Debug:
+
+```bash
+ssh "$VPS_USER@$VPS_IP" 'tail -50 /var/log/obsidian-vault-sync.log'
+```
+
+Common findings:
+
+- `fatal: Authentication failed` — deploy key expired or was rotated. Regenerate
+  in GitHub Settings → Deploy keys.
+- `error: Your local changes to the following files would be overwritten by
+  merge` — a laptop write conflicts with an unpushed agent write. The cron
+  stops. Fix: SSH in, cd to vault, `git status`, resolve manually.
+- `CONFLICT (content):` — merge conflicts from concurrent edits. Resolve, commit,
+  push. Consider migrating to Syncthing if this happens weekly.
+- Empty log for many days — cron didn't run. Check `crontab -l` for the entry;
+  check `journalctl -u cron` for errors.
+
+### Scenario C — "Frontmatter got mangled after a PATCH"
+
+Symptom: after an agent-side edit, YAML frontmatter no longer parses in
+Obsidian. Common cause: `PATCH /vault/{path}` with `Target-Type: heading` on
+a file where the first heading is inside the frontmatter block.
+
+Fix at the agent side:
+
+- Use `Target-Type: frontmatter` for frontmatter edits.
+- Use `Target-Type: heading` only for `##`-level and below.
+- Before PATCH, GET the note with `Accept: application/vnd.olrapi.note+json`
+  to read parsed frontmatter separately.
+
+### Scenario D — "Wikilinks broken on laptop but working on VPS"
+
+Case-sensitivity mismatch: the VPS ext4 filesystem is case-sensitive; the
+laptop APFS/NTFS is case-insensitive. If the agent created `Note.md` and the
+user has an existing `note.md` in a synced folder, one silently overwrites the
+other on the laptop. Both exist on the VPS.
+
+Prevention:
+
+- Normalize new note filenames to lowercase at agent side.
+- Weekly check on the VPS:
+  `find $OBSIDIAN_VAULT_DIR -type f -name '*.md' | tr '[:upper:]' '[:lower:]' | sort | uniq -d`
+  — output is filenames that only differ in case.
+
+---
+
+## Credential + access rotation procedure
+
+**Path B/C `OBSIDIAN_API_KEY` rotation:**
+
+1. Desktop app → Settings → Community plugins → Local REST API →
+   **Regenerate API Key**.
+2. On the VPS: `hermes config set OBSIDIAN_API_KEY '<new>'`.
+3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
+4. Re-run Step 9's smoke test.
+5. No separate revoke — regeneration invalidates the old key.
+
+**Path A + git deploy-key rotation:**
+
+1. GitHub → your vault repo → Settings → Deploy keys → **Delete** the old key.
+2. On the VPS: `ssh-keygen -t ed25519 -f ~/.ssh/vault_deploy -N "" -C "vault-deploy $(date -u +%F)"`.
+3. Add the new pubkey (`~/.ssh/vault_deploy.pub`) as a deploy key on GitHub
+   with write access.
+4. Add a Host entry to `~/.ssh/config` for the vault repo so git uses the new
+   key:
+   ```
+   Host github-vault
+       HostName github.com
+       User git
+       IdentityFile ~/.ssh/vault_deploy
+   ```
+5. Update the remote URL: `cd $OBSIDIAN_VAULT_DIR && git remote set-url origin
+   git@github-vault:<user>/<repo>.git`.
+6. Test: `git fetch --all`. Cron will pick it up next run.
+
+**Tunnel token rotation (Tailscale auth key / Cloudflare Tunnel token):**
+
+Provider-specific. In both cases, generate the new token, apply on the laptop
+first, verify tunnel is up with the new token, then update if the VPS uses the
+same tunnel for outbound (Path A + syncthing sometimes does).
+
+---
+
 ## Rollback (auto-runs on any failure above)
 
 ```bash
