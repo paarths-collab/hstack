@@ -87,7 +87,7 @@ Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 - **ai-tools** — openai-tools (image/audio/embeddings/batch), elevenlabs (TTS), replicate
 - **storage** — r2, s3-compatible
 - **crm** — hubspot, salesforce, pipedrive, zoho
-- **docs** — notion, confluence, google-workspace, microsoft-365
+- **docs** — notion, confluence, google-workspace, microsoft-365, obsidian
 - **dev** — github, gitlab, bitbucket
 - **pm** — linear, asana, clickup, jira, monday, trello
 - **cloud** — aws, gcp, azure, cloudflare, digitalocean, hetzner, netlify, render
