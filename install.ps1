@@ -56,7 +56,7 @@ $Tiers = @{
     'ai-tools'   = @('integration-openai-tools','integration-elevenlabs','integration-replicate')
     storage      = @('integration-r2')
     crm          = @('integration-hubspot','integration-salesforce','integration-pipedrive','integration-zoho-crm')
-    docs         = @('integration-notion','integration-google-workspace','integration-microsoft-365')
+    docs         = @('integration-notion','integration-google-workspace','integration-microsoft-365','integration-obsidian')
     dev          = @('integration-github','integration-gitlab','integration-bitbucket')
     pm           = @('integration-jira','integration-linear','integration-asana','integration-clickup','integration-monday','integration-trello','integration-airtable')
     cloud        = @('integration-aws','integration-gcp','integration-azure','integration-digitalocean','integration-hetzner','integration-cloudflare','integration-vercel','integration-netlify','integration-railway','integration-render')
@@ -208,7 +208,7 @@ Available integration tiers:
   ai-tools         - openai-tools, elevenlabs, replicate
   storage          - r2
   crm              - hubspot, salesforce, pipedrive, zoho-crm
-  docs             - notion, google-workspace, microsoft-365
+  docs             - notion, google-workspace, microsoft-365, obsidian
   dev              - github, gitlab, bitbucket
   pm               - jira, linear, asana, clickup, monday, trello, airtable
   cloud            - aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render

@@ -58,7 +58,7 @@ TIERS[code]="integration-e2b"
 TIERS[ai-tools]="integration-openai-tools integration-elevenlabs integration-replicate"
 TIERS[storage]="integration-r2"
 TIERS[crm]="integration-hubspot integration-salesforce integration-pipedrive integration-zoho-crm"
-TIERS[docs]="integration-notion integration-google-workspace integration-microsoft-365"
+TIERS[docs]="integration-notion integration-google-workspace integration-microsoft-365 integration-obsidian"
 TIERS[dev]="integration-github integration-gitlab integration-bitbucket"
 TIERS[pm]="integration-jira integration-linear integration-asana integration-clickup integration-monday integration-trello integration-airtable"
 TIERS[cloud]="integration-aws integration-gcp integration-azure integration-digitalocean integration-hetzner integration-cloudflare integration-vercel integration-netlify integration-railway integration-render"
@@ -268,7 +268,7 @@ Available integration tiers:
   9) ai-tools         - openai-tools (DALL-E, Whisper, embeddings), elevenlabs (voice), replicate
  10) storage          - r2 (zero-egress S3-compat)
  11) crm              - hubspot, salesforce, pipedrive, zoho-crm
- 12) docs             - notion, google-workspace, microsoft-365
+ 12) docs             - notion, google-workspace, microsoft-365, obsidian
  13) dev              - github, gitlab, bitbucket
  14) pm               - jira, linear, asana, clickup, monday, trello, airtable
  15) cloud            - aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
