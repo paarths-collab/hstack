@@ -1,0 +1,42 @@
+name: Validate skills
+
+on:
+  push:
+    paths:
+      - "skills/**"
+      - "VERSIONS.txt"
+      - "scripts/validate-skills.sh"
+      - ".github/workflows/validate-skills.yml"
+  pull_request:
+    paths:
+      - "skills/**"
+      - "VERSIONS.txt"
+      - "scripts/validate-skills.sh"
+      - ".github/workflows/validate-skills.yml"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: SKILL.md template + pin drift
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history for --changed mode to diff against main.
+          fetch-depth: 0
+
+      - name: Run validator
+        run: bash scripts/validate-skills.sh
+
+      - name: Emit machine-readable report (best-effort)
+        if: always()
+        run: bash scripts/validate-skills.sh --json --quiet > validate-skills.json || true
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validate-skills-report
+          path: validate-skills.json
+          if-no-files-found: ignore
+          retention-days: 14

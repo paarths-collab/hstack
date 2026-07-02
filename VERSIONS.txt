@@ -1,0 +1,64 @@
+# hstack — pinned versions (single source of truth)
+#
+# Every skill sources this file, either by grepping directly at deploy time
+# or by copy-pasting the pin at edit time. Bumping a version here + running
+# scripts/bump-versions.sh (a future utility) is a single-edit upgrade.
+#
+# Format: KEY=value, one per line. Blank lines and lines starting with `#`
+# are ignored. Values are pure strings — no shell expansion. Keep them
+# quotable-free (no `$`, `` ` ``, backslashes).
+#
+# When you bump a pin here, also:
+#   1. Update the relevant SKILL.md files (grep for the old pin).
+#   2. Add a CHANGELOG.md entry under "Changed".
+#   3. Run scripts/validate-skills.sh — the validator asserts the pin is
+#      referenced consistently and that no skill has drifted onto a
+#      different version.
+
+# --- Hermes runtime ---
+# Pinned to a known-good release. Bump only after the golden-path nightly
+# on the target version has stayed green for 7+ consecutive days.
+HERMES_VERSION=0.15.2
+HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/main/install.sh
+
+# --- MCP servers we spawn as stdio commands ---
+# Format: <NAME>_MCP_PKG=<npm-or-pypi-package>@<pinned-version>
+# Bumping npm packages: run `npm view <pkg> versions --json` and pick the
+# latest patch on the same minor.
+
+BRAVE_SEARCH_MCP_PKG=@brave/brave-search-mcp-server@1
+NOTION_MCP_PKG=@notionhq/notion-mcp-server@1
+STRIPE_MCP_PKG=@stripe/mcp@0.9
+GITHUB_MCP_PKG=@modelcontextprotocol/server-github@2025.10.30
+LINEAR_MCP_PKG=@linear-oauth/mcp@0.3
+
+# uvx-run Python MCP servers
+OBSIDIAN_MCP_PKG=mcp-obsidian==1.4.0
+POSTGRES_MCP_PKG=postgres-mcp==0.5.0
+REDIS_MCP_PKG=mcp-redis==0.2.0
+QDRANT_MCP_PKG=mcp-server-qdrant==0.6.0
+E2B_MCP_PKG=e2b-code-interpreter==1.5.0
+SENTRY_MCP_PKG=sentry-mcp-server==0.4.0
+
+# --- SDKs Hermes calls out to (for skills that talk to first-party SDKs) ---
+OPENAI_SDK_VER=1.55.0
+ANTHROPIC_SDK_VER=0.60.0
+STRIPE_SDK_VER=12.4.0
+
+# --- CI tool pins ---
+SHELLCHECK_MIN_VER=0.9.0
+SHFMT_MIN_VER=3.8.0
+GITLEAKS_MIN_VER=8.20.0
+
+# --- Vault / storage defaults ---
+# Not credentials — sane defaults skills reference when the user doesn't override.
+DEFAULT_VAULT_PATH=/opt/data/vault
+DEFAULT_BACKUP_DIR=~/hermes-backups
+DEFAULT_BACKUP_RETAIN_DAYS=14
+
+# --- Skill authoring targets ---
+# Enforced by scripts/validate-skills.sh. Bumping these is a policy change,
+# not a mechanical one — retrofit existing skills first, then bump.
+SKILL_MIN_LINE_COUNT=200
+SKILL_MAX_LINE_COUNT=900
+SKILL_MIN_PITFALLS=6
