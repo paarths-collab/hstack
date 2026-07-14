@@ -29,7 +29,7 @@
   <g class="mono" font-size="14">
     <text x="280" y="40" class="ink">HSTACK</text>
     <text x="800" y="40" class="muted" text-anchor="middle">// PROD LAYER FOR HERMES AGENT</text>
-    <text x="1560" y="40" class="ink" text-anchor="end">OPEN SOURCE · MIT · v0.15.2</text>
+    <text x="1560" y="40" class="ink" text-anchor="end">OPEN SOURCE · APACHE 2.0 · v0.15.2</text>
   </g>
 
   <!-- registration crosshairs (corners) -->
@@ -62,7 +62,7 @@
 
   <!-- subhead + tagline -->
   <text x="100" y="416" class="body ink" font-size="24" font-weight="500">The production layer for Hermes Agent.</text>
-  <text x="100" y="448" class="body muted" font-size="20" font-weight="500">Self-hosted. Open source. MIT.</text>
+  <text x="100" y="448" class="body muted" font-size="20" font-weight="500">Self-hosted. Open source. Apache 2.0.</text>
 
   <!-- electric blue /hermes-deploy command — brutalist offset shadow -->
   <rect x="108" y="490" width="700" height="110" fill="#0B0B10"/>

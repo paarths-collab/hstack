@@ -15,7 +15,7 @@ source. Per-IDE `setup-*` scripts symlink or convert them into the format each a
 | Gemini CLI           | `~/.gemini/context/hstack/`| `.md` context files |
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
-The catalog: **73 skills** (16 hermes-* core + 5 platform-* + 68 integration-* connectors),
+The catalog: **94 skills** (15 hermes-* core + 8 platform-* + 71 integration-* connectors),
 targeting **8 messaging platforms**, pinning Hermes **v0.15.2**.
 
 ## Universal installer (`install.sh` / `install.ps1`)
@@ -66,7 +66,7 @@ metrics/                 — clone traffic tracking (update-clone-traffic.mjs + 
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
 ```
 
-## Integration tier catalog (68 connectors, 20 tiers)
+## Integration tier catalog (71 connectors, 20 tiers)
 
 Do not re-implement anything Hermes already does natively. `/hermes-model` covers
 chat completion for OpenAI / Anthropic / Groq / Mistral / etc. — do **not** ship an

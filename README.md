@@ -1,10 +1,12 @@
 # hstack
 
-One command deploys your own self-hosted Hermes AI Agent, then wires it into any of 72 external services on request. Works from every major AI coding agent.
+**I never open a chat with my AI. Every morning, it opens one with me.**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-22c55e)](LICENSE)
-![Skills 95](https://img.shields.io/badge/skills-95-f59e0b)
-![Integrations 72](https://img.shields.io/badge/integrations-72-2dd4bf)
+One command deploys a self-hosted Hermes AI Agent on a $5 VPS — with a name, a memory in plain files, a home channel it messages you on first, and 71 external services it can wire itself into on request. Works from every major AI coding agent. No hstack account, no server in the middle: delete hstack tomorrow and your agent keeps running.
+
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
+![Skills 94](https://img.shields.io/badge/skills-94-f59e0b)
+![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
 
@@ -17,7 +19,7 @@ One command deploys your own self-hosted Hermes AI Agent, then wires it into any
 hstack is a portable skill catalog for AI coding agents. You install it once, and your agent — Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — gains the ability to:
 
 1. **Deploy a self-hosted Hermes Agent** on your VPS with one command.
-2. **Wire external services** into it on request (Notion, Stripe, Postgres, Pinecone, Twilio, and 67 more).
+2. **Wire external services** into it on request (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more).
 
 Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime, no daemon — just Markdown instructions that AI agents execute.
 
@@ -88,7 +90,7 @@ bash install.sh --help                        # full flag reference
 | `/hermes-fix` | Diagnose and repair common failures. |
 | `/hermes-backup` | Back up config, secrets, memory, sessions. |
 
-## Integrations (72)
+## Integrations (71)
 
 Every skill probes the vendor's API with your credentials before writing anything, writes secrets to `~/.hermes/.env` with `chmod 600`, registers an MCP server or documents the REST surface, reloads the gateway, and rolls back cleanly on any failure.
 
@@ -168,6 +170,6 @@ The value here is the accumulated knowledge of what breaks and what works. **New
 
 ## License
 
-[MIT](LICENSE). Built by **Paarth**, in collaboration with **[Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack)**.
+[Apache 2.0](LICENSE). Built by **Paarth**, in collaboration with **[Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack)**.
 
 <sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research, Hostinger, or any of the integrated vendors.</sub>

@@ -193,11 +193,11 @@ if ($All) {
 } elseif ($Pick -or ([Environment]::UserInteractive -and $Host.UI.RawUI)) {
     Write-Host @"
 
-hstack currently has 68 integrations across 20 tiers.
+hstack currently has 71 integrations across 20 tiers.
 Core skills (/hermes-deploy, all platforms) are ALWAYS installed.
 
 Available integration tiers:
-  all              - everything (68 integrations)
+  all              - everything (71 integrations)
   memory           - mem0, supermemory
   database         - supabase, postgres, neon, redis
   vector           - pinecone, qdrant

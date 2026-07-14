@@ -252,12 +252,12 @@ elif [ "$PICK_MODE" = "1" ] || [ -t 0 ]; then
   # Interactive picker — only if TTY is present
   cat <<EOF
 
-hstack currently has 68 integrations across 20 tiers.
+hstack currently has 71 integrations across 20 tiers.
 Core skills (/hermes-deploy, all platforms) are ALWAYS installed.
 
 Available integration tiers:
 
-  1) all              - everything (68 integrations)
+  1) all              - everything (71 integrations)
   2) memory           - mem0, supermemory
   3) database         - supabase, postgres, neon, redis
   4) vector           - pinecone, qdrant

@@ -1,0 +1,40 @@
+name: Count check
+
+# The catalog counts in README badges MUST match what's actually on disk.
+# Three different skill counts were once live simultaneously (README 95,
+# CLAUDE.md 73, installer picker 68 — reality was 94). Never again.
+
+on:
+  push:
+    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1"]
+  pull_request:
+    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1"]
+
+jobs:
+  counts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Badge counts match the skills/ directory
+        run: |
+          set -euo pipefail
+          actual_skills=$(ls -d skills/*/SKILL.md | wc -l)
+          actual_integrations=$(ls -d skills/integration-*/SKILL.md | wc -l)
+          actual_platforms=$(ls -d skills/platform-*/SKILL.md | wc -l)
+
+          badge_skills=$(grep -oE 'skills-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
+          badge_integrations=$(grep -oE 'integrations-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
+          badge_platforms=$(grep -oE 'platforms-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
+
+          fail=0
+          [ "$actual_skills" = "$badge_skills" ] || { echo "::error::README skills badge says $badge_skills, actual is $actual_skills"; fail=1; }
+          [ "$actual_integrations" = "$badge_integrations" ] || { echo "::error::README integrations badge says $badge_integrations, actual is $actual_integrations"; fail=1; }
+          [ "$actual_platforms" = "$badge_platforms" ] || { echo "::error::README platforms badge says $badge_platforms, actual is $actual_platforms"; fail=1; }
+
+          # CLAUDE.md and both installer pickers must agree too
+          grep -q "${actual_skills} skills" CLAUDE.md || { echo "::error::CLAUDE.md does not state '${actual_skills} skills'"; fail=1; }
+          grep -q "${actual_integrations} integrations" install.sh || { echo "::error::install.sh picker does not state '${actual_integrations} integrations'"; fail=1; }
+          grep -q "${actual_integrations} integrations" install.ps1 || { echo "::error::install.ps1 picker does not state '${actual_integrations} integrations'"; fail=1; }
+
+          [ "$fail" = "0" ] && echo "All counts consistent: $actual_skills skills, $actual_integrations integrations, $actual_platforms platforms."
+          exit "$fail"

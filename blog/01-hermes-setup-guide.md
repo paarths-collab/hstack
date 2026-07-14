@@ -621,7 +621,7 @@ If you'd rather skip the manual work, **hstack** turns Claude Code into the engi
 
 ---
 
-**About the author:** [Paarth](https://github.com/paarths-collab) builds hstack, an open-source toolkit for deploying self-hosted Hermes agents, and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en). hstack is independent open-source software (MIT); Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are fully supported.
+**About the author:** [Paarth](https://github.com/paarths-collab) builds hstack, an open-source toolkit for deploying self-hosted Hermes agents, and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en). hstack is independent open-source software (Apache 2.0); Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are fully supported.
 
 <script type="application/ld+json">
 {

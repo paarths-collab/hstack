@@ -12,7 +12,13 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+### Changed
+- **License: MIT → Apache 2.0.** Adds an explicit patent grant — the right fit for infrastructure companies may run in production. `NOTICE` file added; README badge, banner SVG, and blog license mentions updated. (References to *other* projects' licenses — Hermes Agent's MIT under Nous Research — are unchanged.)
+- **README hero rewritten around the product's actual magic moment** (the agent's home channel messages you first) instead of catalog size. Counts corrected to reality everywhere: **94 skills = 15 hermes-* + 8 platform-* + 71 integration-***. Previously README said 95/72, CLAUDE.md said 73/68, and both installers' pickers said 68 — three different numbers for the same catalog.
+- **Clone-traffic bot commits moved off `main`** to the `metrics-data` branch, so the visible commit history reflects human work instead of daily `[skip ci]` noise.
+
 ### Added
+- `.github/workflows/count-check.yml` — CI guard that fails the build if the README badge counts drift from `ls skills/*/SKILL.md | wc -l` reality again.
 - `SECURITY.md` — coordinated vulnerability disclosure policy, six-adversary threat model (curious passer-by / malicious contributor / compromised AI agent / compromised VPS / malicious vendor / compromised messaging platform), secret rotation playbook, four-phase incident response playbook.
 - `CONTRIBUTING.md` — full SSH-first skill authoring manual with per-step commentary, review checklist, two-approver rule for installer / workflow / security-doc changes.
 - `VERSIONS.txt` — single source of truth for pinned versions (Hermes runtime, MCP packages, SDK versions, CI tool minimums, skill length policy). Referenced by `scripts/validate-skills.sh`.
