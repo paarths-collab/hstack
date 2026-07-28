@@ -1,6 +1,6 @@
 # hstack — self-hosted Hermes setup skills
 
-hstack is a catalog of **94 skill files**. Each one is a recipe you (the AI coding agent)
+hstack is a catalog of **95 skill files**. Each one is a recipe you (the AI coding agent)
 read and execute on the user's own server over SSH, so their self-hosted Hermes agent ends
 up correctly set up.
 

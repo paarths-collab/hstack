@@ -46,7 +46,7 @@ LOCAL_RUN=0
 
 # Tier → integration mapping (edit as new tiers land)
 declare -A TIERS
-TIERS[core]="hermes-backup hermes-cron hermes-deploy hermes-fix hermes-home hermes-install hermes-integrate hermes-mcp-add hermes-memory hermes-model hermes-restart hermes-skills hermes-soul hermes-status hermes-update"
+TIERS[core]="setup-ssh-keys hermes-backup hermes-cron hermes-deploy hermes-fix hermes-home hermes-install hermes-integrate hermes-mcp-add hermes-memory hermes-model hermes-restart hermes-skills hermes-soul hermes-status hermes-update"
 TIERS[platforms]="platform-discord platform-google-chat platform-mattermost platform-signal platform-slack platform-teams platform-telegram platform-whatsapp"
 TIERS[memory]="integration-mem0 integration-supermemory"
 TIERS[database]="integration-supabase integration-postgres integration-neon integration-redis"

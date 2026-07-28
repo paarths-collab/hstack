@@ -24,7 +24,7 @@
   "interface": {
     "displayName": "hstack",
     "shortDescription": "Set up and operate a self-hosted Hermes agent from your coding agent",
-    "longDescription": "hstack gives your AI coding agent 94 recipes for standing up a self-hosted Hermes agent on your own server: one-command deploy, 71 hardened service integrations, 8 messaging platforms, scheduled tasks, backups, and failure diagnosis. Every skill is SSH-first, verifies credentials against the live vendor API before writing anything, and rolls back cleanly on failure.",
+    "longDescription": "hstack gives your AI coding agent 95 recipes for standing up a self-hosted Hermes agent on your own server: one-command deploy, 71 hardened service integrations, 8 messaging platforms, scheduled tasks, backups, and failure diagnosis. Every skill is SSH-first, verifies credentials against the live vendor API before writing anything, and rolls back cleanly on failure.",
     "developerName": "Paarth",
     "category": "Coding",
     "capabilities": [

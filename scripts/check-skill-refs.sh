@@ -10,8 +10,18 @@
 # in a hand-off step keeps working only as long as that directory exists.
 #
 # Scans every tracked Markdown file for hstack skill references matching
-#   /hermes-<x>  /platform-<x>  /integration-<x>
+#   /hermes-<x>  /platform-<x>  /integration-<x>  /setup-<x>
 # and asserts skills/<name>/SKILL.md exists.
+#
+# The `setup` prefix was added after this script shipped WITHOUT it and therefore
+# reported a clean run on a tree where all 94 skills aborted into `/setup-ssh-keys`,
+# a skill that did not exist. The guard written to catch exactly that bug missed the
+# largest instance of it because the prefix list was hardcoded to three names.
+#
+# Before adding a fourth prefix, note why this is an allowlist and not a broad
+# `/[a-z-]+` match: integration skills document vendor REST surfaces, so a general
+# pattern matches `/customers`, `/chat`, `/invoices`, `/databases` and hundreds more.
+# Widen deliberately, one prefix at a time.
 #
 # Exit codes:
 #   0  every referenced skill exists
@@ -63,8 +73,8 @@ MISSING=0
 TOTAL_REFS=0
 
 for doc in "${DOCS[@]}"; do
-  # Pull /hermes-x, /platform-x, /integration-x. Require a non-path character
-  # before the slash so `skills/hermes-cron/SKILL.md` does not match, and
+  # Pull /hermes-x, /platform-x, /integration-x, /setup-x. Require a non-path
+  # character before the slash so `skills/hermes-cron/SKILL.md` does not match, and
   # exclude `~` so the `~/hermes-backups` directory is not read as a skill ref.
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
@@ -72,8 +82,8 @@ for doc in "${DOCS[@]}"; do
     TOTAL_REFS=$((TOTAL_REFS + 1))
     SEEN_IN[$ref]="${SEEN_IN[$ref]:-} $doc"
   done < <(
-    grep -oE '(^|[^a-zA-Z0-9._/~-])/(hermes|platform|integration)-[a-z0-9-]+' "$doc" 2>/dev/null \
-      | grep -oE '(hermes|platform|integration)-[a-z0-9-]+' \
+    grep -oE '(^|[^a-zA-Z0-9._/~-])/(hermes|platform|integration|setup)-[a-z0-9-]+' "$doc" 2>/dev/null \
+      | grep -oE '(hermes|platform|integration|setup)-[a-z0-9-]+' \
       | sed 's/-$//' \
       | sort -u
   )

@@ -21,14 +21,14 @@ Keep the live-agent illustration. Update the label stack to:
 
 - `$ hermes gateway status`
 - `# hermes v0.15.2 — running`
-- `# skills:  94  (15 hermes-* / 8 platform-* / 71 integration-*)`
+- `# skills:  95  (15 hermes-* / 1 setup-* / 8 platform-* / 71 integration-*)`
 - `# platforms: 8  (telegram, discord, whatsapp, slack, mattermost, teams, matrix, signal)`
 - `# IDE targets: 6  (claude code, codex, cursor, gemini cli, openclaw, hermes)`
 
 ### Bottom caption strip
 Replace whatever the current subtitle says with:
 
-> FIG.01 · PREMISE — one command wires 94 skills into every AI coding agent on the box.
+> FIG.01 · PREMISE — one command wires 95 skills into every AI coding agent on the box.
 > Self-hosted Hermes v0.15.2. No SaaS in the hot path.
 
 ### Numbers to *remove*
@@ -99,7 +99,7 @@ update the copy on each step.
 | FORMS             | 3     | typeform · calendly · airtable              |
 | SEARCH            | 2     | brave-search · exa                          |
 
-**Total to feature prominently:** `94 SKILLS · 71 INTEGRATIONS · 20 TIERS`
+**Total to feature prominently:** `95 SKILLS · 71 INTEGRATIONS · 20 TIERS`
 
 ### Bottom caption strip
 > FIG.03 · COMMAND LIBRARY — pick a tier at install time, or `--pick` and grab the ones you need.
@@ -135,7 +135,7 @@ update the copy on each step.
 
 ## Old numbers to purge everywhere
 
-- ❌ `19 commands` → ✅ `94 skills`
+- ❌ `19 commands` → ✅ `95 skills`
 - ❌ `4+ chat platforms` → ✅ `8 messaging platforms`
 - ❌ `Claude Code` (singular) → ✅ `6 AI coding agents`
 - ❌ any mention of "50 integrations" → ✅ `71 integrations`

@@ -2,10 +2,10 @@
 
 **Skill files that let your AI coding agent set up self-hosted Hermes for you.**
 
-Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) reads it and does the actual work on your server — updating the Docker config, wiring in connectors, configuring platforms, verifying credentials — so Hermes ends up correctly set up. Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skill files are just recipes your AI coding agent follows on your own server.
+Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) reads it and does the actual work on your server over SSH — writing credentials to a `chmod 600` env file, registering MCP servers, configuring platforms, verifying every credential against the live vendor API before it writes anything — so Hermes ends up correctly set up. Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skill files are just recipes your AI coding agent follows on your own server.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
-![Skills 94](https://img.shields.io/badge/skills-94-f59e0b)
+![Skills 95](https://img.shields.io/badge/skills-95-f59e0b)
 ![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
@@ -18,8 +18,8 @@ Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex
 
 Each skill file is a setup superpower your AI coding agent gains. Install hstack once, then in any of your AI coding agents you can:
 
-1. **Deploy a fresh Hermes** to your server with one command — Docker up, config written, gateway running, verified.
-2. **Add external services** — 71 integrations (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more). Your agent updates the Docker/env config, tests the credential against the real vendor API, then reloads Hermes cleanly.
+1. **Deploy a fresh Hermes** to your server with one command — installed and version-pinned, config written, gateway running, verified.
+2. **Add external services** — 71 integrations (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more). Your agent writes the credential to a locked-down env file, tests it against the real vendor API, registers the MCP server, then reloads Hermes cleanly.
 3. **Wire messaging channels** — 8 platforms (Telegram, Slack, Discord, WhatsApp, ...) so Hermes can reach out to you first.
 4. **Keep the setup healthy** — status checks, safe restarts, backups, failure diagnosis when something breaks.
 
@@ -93,7 +93,7 @@ Describe the outcome. Your AI coding agent reads its installed skill catalog, ma
 
 ### Option B — Invoke the skill directly
 
-If you know exactly which skill you want, invoke it explicitly. Same 94 skills, six invocation flavors:
+If you know exactly which skill you want, invoke it explicitly. Same 95 skills, six invocation flavors:
 
 | Agent | Invoke like this |
 |---|---|

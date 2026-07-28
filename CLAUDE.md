@@ -15,7 +15,7 @@ source. Per-IDE `setup-*` scripts symlink or convert them into the format each a
 | Gemini CLI           | `~/.gemini/context/hstack/`| `.md` context files |
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
-The catalog: **94 skills** (15 hermes-* core + 8 platform-* + 71 integration-* connectors),
+The catalog: **95 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors),
 targeting **8 messaging platforms**, pinning Hermes **v0.15.2**.
 
 ## Universal installer (`install.sh` / `install.ps1`)
@@ -75,8 +75,14 @@ as an explicit refusal (DALL-E, Whisper, embeddings, Batch API only).
 
 Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 
-- **core** — hermes-* deploy/ops (16)
-- **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, matrix, signal
+This list is generated from `install.sh` and must stay identical to it. It once drifted
+badly enough to advertise three integrations that do not exist (`confluence`,
+`s3-compatible`, `matrix`) while omitting nine that do. `scripts/check-skill-refs.sh`
+cannot catch that class of error, because these are bare names, not `/slash-refs`. If you
+edit a tier, edit `install.sh` first and mirror it here.
+
+- **core** — hermes-* deploy/ops (15) + setup-ssh-keys (1)
+- **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal
 - **memory** — mem0, supermemory (pick one; wiring both duplicates recall context)
 - **database** — supabase, postgres, neon, redis
 - **vector** — pinecone, qdrant
@@ -85,18 +91,18 @@ Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 - **rag** — firecrawl (RAG feeder)
 - **code** — e2b (code sandbox)
 - **ai-tools** — openai-tools (image/audio/embeddings/batch), elevenlabs (TTS), replicate
-- **storage** — r2, s3-compatible
-- **crm** — hubspot, salesforce, pipedrive, zoho
-- **docs** — notion, confluence, google-workspace, microsoft-365, obsidian
+- **storage** — r2
+- **crm** — hubspot, salesforce, pipedrive, zoho-crm
+- **docs** — notion, google-workspace, microsoft-365, obsidian
 - **dev** — github, gitlab, bitbucket
-- **pm** — linear, asana, clickup, jira, monday, trello
-- **cloud** — aws, gcp, azure, cloudflare, digitalocean, hetzner, netlify, render
+- **pm** — jira, linear, asana, clickup, monday, trello, airtable
+- **cloud** — aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
 - **payments** — stripe, paypal, razorpay
-- **commerce** — shopify, woocommerce
-- **email** — sendgrid, mailchimp, postmark, brevo
-- **support** — intercom, zendesk, freshdesk, sendbird
-- **forms** — typeform, calendly, airtable
-- **search** — brave-search, exa
+- **commerce** — shopify, woocommerce, webflow, wordpress
+- **email** — mailchimp, brevo, sendgrid, postmark
+- **support** — twilio, sendbird, intercom, zendesk, freshdesk
+- **forms** — typeform, tally, calendly, zoom
+- **search** — brave-search, tavily, exa
 
 ## Every integration skill guarantees the same shape
 
