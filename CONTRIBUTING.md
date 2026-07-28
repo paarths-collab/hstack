@@ -12,7 +12,6 @@ This guide covers:
 - [Authoring a platform skill — the extra bar](#authoring-a-platform-skill--the-extra-bar)
 - [Editing an existing skill](#editing-an-existing-skill)
 - [Contributing to TROUBLESHOOTING.md](#contributing-to-troubleshootingmd)
-- [Contributing to the blog](#contributing-to-the-blog)
 - [Review checklist](#review-checklist)
 - [Governance](#governance)
 
@@ -27,7 +26,6 @@ In rough priority order:
 3. **A new `/platform-<name>`** for a messaging surface we don't yet cover (matrix, teams-bot-only, discord-forum-only, etc.).
 4. **A hardening PR** on an existing skill — pitfalls table row we forgot, an idempotency bug, a rollback path that leaves detritus.
 5. **A validator or CI improvement** — new structural rule enforced in [`scripts/validate-skills.sh`](scripts/validate-skills.sh), a new golden-path test.
-6. **A blog post** for [`blog/`](blog/) — either a beginner deploy walkthrough or a deep dive on a Hermes failure mode. Follow existing posts as templates.
 
 We politely decline:
 
@@ -424,15 +422,6 @@ Rules:
 
 Rows arrive out of order and get reorganized periodically by a maintainer. Don't worry about placement.
 
-## Contributing to the blog
-
-The blog under `blog/` is not a marketing surface — it's teaching material we point new operators at from README, and it's SEO-indexable long-tail search coverage for people hitting failures. Two post types:
-
-- **Walkthroughs** — end-to-end setup on a specific host / for a specific outcome (see `blog/01-hermes-setup-guide.md`).
-- **Deep dives** — one failure mode, one fix, the reproduction steps, and the rationale.
-
-Blog posts include a `.schema.json` sibling with JSON-LD Article schema. If you're not comfortable authoring the schema, open a PR with just the markdown and a maintainer will add the schema.
-
 ## Review checklist
 
 What a reviewer looks for, in the order they look for it:
@@ -458,7 +447,6 @@ Reviewers try to give first feedback within 3 business days. Complex PRs (instal
 hstack is currently maintained by:
 
 - **Paarth** — repo owner, final approver on installer + template changes.
-- **Digital Crew Technology maintainers** — approvers on integration and platform skills.
 
 Two-approver rule for anything touching:
 

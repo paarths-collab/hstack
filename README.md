@@ -10,7 +10,7 @@ Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
 
-> Built by Paarth · in collaboration with Digital Crew Technology.
+> Built by Paarth.
 
 ---
 
@@ -222,6 +222,6 @@ The value here is the accumulated knowledge of what breaks and what works. **New
 
 ## License
 
-[Apache 2.0](LICENSE). Built by **Paarth**, in collaboration with **Digital Crew Technology**.
+[Apache 2.0](LICENSE). Built by **Paarth**.
 
 <sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research, Hostinger, or any of the integrated vendors.</sub>
