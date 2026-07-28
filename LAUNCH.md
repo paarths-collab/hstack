@@ -17,8 +17,11 @@ v1 was reviewed via /autoplan (2026-07-14); v2 adds the four fixes from /office-
 ## The hook (verified, survived adversarial review)
 
 > **I never open a chat with my AI. Every morning, it opens one with me.**
-> One command puts a self-hosted agent on your own server. It gets a name, a memory,
-> a home channel — and it messages you first.
+> hstack is a catalog of "skill files" — superpowers a self-hosted Hermes
+> agent can call on. This one is called "home channel + cron": Hermes gets a
+> name, a memory, and a chat channel it messages you on, first thing each
+> morning. One command in your AI coding agent puts the whole thing on your
+> own server.
 
 Anchors (verbatim on disk):
 - `skills/hermes-home/SKILL.md:14` — "Without it, cron fires into the void."

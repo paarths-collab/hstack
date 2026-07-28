@@ -1,8 +1,8 @@
 # hstack
 
-**A skill catalog for operating and auditing self-hosted Hermes agents.**
+**Superpowers for your self-hosted Hermes agent.**
 
-hstack is a portable Markdown-based skill catalog that any AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) can execute. Skills are SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skills are just instructions your agent follows on your own server.
+hstack is a catalog of skill files — Markdown-formatted instructions your AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) can execute — that give a self-hosted Hermes agent new powers. Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skill files are just instructions your agent follows on your own server.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
 ![Skills 94](https://img.shields.io/badge/skills-94-f59e0b)
@@ -16,13 +16,14 @@ hstack is a portable Markdown-based skill catalog that any AI coding agent (Clau
 
 ## What it is
 
-You install hstack once. Your agent — Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — gains a catalog of hardened skills for the full Hermes agent lifecycle:
+Each skill file is a superpower your Hermes agent can call on. Install hstack once and Hermes gains the ability to:
 
-1. **Deploy** a self-hosted Hermes agent with one command.
-2. **Wire external services** into it on request (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more).
-3. **Operate and audit** the running agent — health status, config verification, safe restarts, backups, failure diagnosis.
+1. **Deploy itself** to your server with one command.
+2. **Wire in external services** on request — 71 integrations from Notion to Stripe to Pinecone to Twilio.
+3. **Reach out to you** on Telegram / Discord / Slack / WhatsApp / etc. — home channel + cron-driven briefings so it messages you first, not the other way around.
+4. **Take care of itself** — health status, safe restarts, backups, failure diagnosis, config verification.
 
-Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime — just Markdown instructions your agent executes on your own server.
+Every skill file is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime — just Markdown instructions your AI coding agent executes on your own server.
 
 ## Quick start
 
