@@ -99,7 +99,6 @@ Per-IDE distributors: `setup` (Claude Code), `setup-codex`, `setup-cursor` (`.md
 - `templates/SKILL.template.md` — the canonical skeleton every new integration copies.
 - `blog/01-hermes-setup-guide.md` — beginner setup walkthrough.
 - `blog/deploy-ai-agent-one-command-hstack.md` — one-command deploy narrative.
-- `agents/max.md` — Digital Crew's Max sales-force plugin, wired via `/hermes-mcp-add`.
 - `docs/image-content-brief.md` — content brief for future banner refreshes.
 
 ### Fixed

@@ -359,7 +359,7 @@ foreach ($k in $Ides.Keys) { Write-Host "  - $k" }
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host ""
-Write-Host "  1. Deploy Hermes to a VPS (~30 min):"
+Write-Host "  1. Deploy Hermes to your own server (~30 min):"
 Write-Host "     Open any of your IDEs and run:  /hermes-deploy"
 Write-Host ""
 Write-Host "  2. After deploy, wire integrations one at a time:"

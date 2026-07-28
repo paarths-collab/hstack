@@ -556,7 +556,6 @@ Alongside the core setup flow, we're preparing a set of optional specialist agen
 
 - **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
 - **Claire (Market Mastermind)** — researches markets, competitors, and target accounts, then delivers actionable briefs.
-- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings. Max is already live at [max.digitalcrew.tech](https://max.digitalcrew.tech/).
 - **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
 - **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email, social, and site.
 - **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.

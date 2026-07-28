@@ -445,7 +445,7 @@ done
 log ""
 log "Next steps:"
 log ""
-log "  1. Deploy Hermes to a VPS (~30 min):"
+log "  1. Deploy Hermes to your own server (~30 min):"
 log "     Open any of your IDEs and run:  ${BOLD}/hermes-deploy${RESET}"
 log ""
 log "  2. After deploy, wire integrations one at a time:"

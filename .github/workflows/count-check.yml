@@ -6,9 +6,9 @@ name: Count check
 
 on:
   push:
-    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1"]
+    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1", "docs/image-content-brief.md"]
   pull_request:
-    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1"]
+    paths: ["skills/**", "README.md", "CLAUDE.md", "install.sh", "install.ps1", "docs/image-content-brief.md"]
 
 jobs:
   counts:
@@ -35,6 +35,13 @@ jobs:
           grep -q "${actual_skills} skills" CLAUDE.md || { echo "::error::CLAUDE.md does not state '${actual_skills} skills'"; fail=1; }
           grep -q "${actual_integrations} integrations" install.sh || { echo "::error::install.sh picker does not state '${actual_integrations} integrations'"; fail=1; }
           grep -q "${actual_integrations} integrations" install.ps1 || { echo "::error::install.ps1 picker does not state '${actual_integrations} integrations'"; fail=1; }
+
+          # docs/image-content-brief.md (banner copy) must not drift
+          if [ -f docs/image-content-brief.md ]; then
+            grep -q "${actual_skills} SKILLS" docs/image-content-brief.md || { echo "::error::docs/image-content-brief.md 'Total to feature prominently' does not state '${actual_skills} SKILLS'"; fail=1; }
+            grep -q "${actual_integrations} INTEGRATIONS" docs/image-content-brief.md || { echo "::error::docs/image-content-brief.md does not state '${actual_integrations} INTEGRATIONS'"; fail=1; }
+            grep -q "${actual_integrations}-integration" docs/image-content-brief.md || { echo "::error::docs/image-content-brief.md preface does not state '${actual_integrations}-integration'"; fail=1; }
+          fi
 
           [ "$fail" = "0" ] && echo "All counts consistent: $actual_skills skills, $actual_integrations integrations, $actual_platforms platforms."
           exit "$fail"

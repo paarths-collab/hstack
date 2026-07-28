@@ -1,8 +1,8 @@
 # hstack
 
-**I never open a chat with my AI. Every morning, it opens one with me.**
+**A skill catalog for operating and auditing self-hosted Hermes agents.**
 
-One command deploys a self-hosted Hermes AI Agent on a $5 VPS — with a name, a memory in plain files, a home channel it messages you on first, and 71 external services it can wire itself into on request. Works from every major AI coding agent. No hstack account, no server in the middle: delete hstack tomorrow and your agent keeps running.
+hstack is a portable Markdown-based skill catalog that any AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) can execute. Skills are SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skills are just instructions your agent follows on your own server.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
 ![Skills 94](https://img.shields.io/badge/skills-94-f59e0b)
@@ -10,18 +10,19 @@ One command deploys a self-hosted Hermes AI Agent on a $5 VPS — with a name, a
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
 
-> Built by Paarth · in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack).
+> Built by Paarth · in collaboration with Digital Crew Technology.
 
 ---
 
 ## What it is
 
-hstack is a portable skill catalog for AI coding agents. You install it once, and your agent — Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — gains the ability to:
+You install hstack once. Your agent — Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — gains a catalog of hardened skills for the full Hermes agent lifecycle:
 
-1. **Deploy a self-hosted Hermes Agent** on your VPS with one command.
+1. **Deploy** a self-hosted Hermes agent with one command.
 2. **Wire external services** into it on request (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more).
+3. **Operate and audit** the running agent — health status, config verification, safe restarts, backups, failure diagnosis.
 
-Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime, no daemon — just Markdown instructions that AI agents execute.
+Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime — just Markdown instructions your agent executes on your own server.
 
 ## Quick start
 
@@ -53,6 +54,21 @@ bash install.sh --ide=claude,codex            # only wire specific agents
 bash install.sh --all                         # everything, non-interactive
 bash install.sh --help                        # full flag reference
 ```
+
+## How you actually use it
+
+One catalog, one installer, six agents. The skill names are the same everywhere — only the invocation style differs by agent:
+
+| Agent | Invoke like this | Autocomplete |
+|---|---|---|
+| **Claude Code** | `/hermes-deploy` · `/integration-notion` | Slash-autocompletes all 94 skills |
+| **Codex** | `/hermes-deploy` · `/integration-notion` | Slash, same shape |
+| **Cursor** | `@hermes-deploy` in composer (or "Manual" mode toggle) | Exposed as Agent Requested rules |
+| **Gemini CLI** | `@hermes-deploy` (context reference) | @-autocompletes |
+| **OpenClaw** | `/hermes-deploy` · `/integration-notion` | Verbatim Claude Code format |
+| **Hermes itself** | "Deploy Hermes" · "Connect Notion" | Natural language — Hermes reads the skill and self-executes |
+
+The magical moment: type `/integration-` (or `@integration-`) in your agent, watch 71 hardened installers autocomplete. Pick one — it wires that service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
 
 ## Commands
 
@@ -151,7 +167,7 @@ Full catalogue: [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md).
 - Allowlists enforced. Every platform skill (WhatsApp, Slack, Signal, Teams, Google Chat) refuses to start with an empty allowlist.
 - Secrets in `~/.hermes/.env` with `chmod 600`, referenced by env-var indirection from `config.yaml`. Never in chat or logs.
 - Live credential verification against the vendor API happens **before** any write. Bad key → clean abort, no half-written state.
-- SSH-first: every action is a reviewable command run on the user's VPS, not a hidden daemon.
+- SSH-first: every action is a reviewable command run on the user's own server, not a hidden daemon operated by hstack.
 
 ## How it works
 
@@ -170,6 +186,6 @@ The value here is the accumulated knowledge of what breaks and what works. **New
 
 ## License
 
-[Apache 2.0](LICENSE). Built by **Paarth**, in collaboration with **[Digital Crew Technology](https://www.digitalcrew.tech/en?utm_source=github&utm_medium=repo&utm_campaign=hstack)**.
+[Apache 2.0](LICENSE). Built by **Paarth**, in collaboration with **Digital Crew Technology**.
 
 <sub>hstack is independent open-source software. Hermes Agent is a project of Nous Research. Not affiliated with or endorsed by Nous Research, Hostinger, or any of the integrated vendors.</sub>
