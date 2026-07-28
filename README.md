@@ -13,7 +13,7 @@ Claude Code — or Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — SSH
 Your server. Your data. No hstack service in the middle, no daemon we operate, no runtime to install.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
-![Skills 95](https://img.shields.io/badge/skills-95-f59e0b)
+![Superpowers 95](https://img.shields.io/badge/superpowers-95-f59e0b)
 ![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
@@ -56,7 +56,7 @@ gemini extensions install https://github.com/paarths-collab/hstack
 **Codex and Cursor:** search `hstack` in the plugin marketplace.
 
 **Hermes itself, OpenClaw, or every agent on the box at once** — these have no plugin
-registry, so install the skills directly:
+registry, so install the superpowers directly:
 
 ```bash
 # macOS / Linux / Git Bash
@@ -73,7 +73,7 @@ Then open your agent and run:
 /hermes-deploy             # if you installed via script
 ```
 
-Plugin skills are always namespaced (`/hstack:<skill>`); script-installed skills are bare.
+Plugin superpowers are always namespaced (`/hstack:<name>`); script-installed ones are bare.
 Both forms work, and installing both ways is safe — they coexist rather than collide.
 
 It handles install → model → platform → memory → personality → autostart → verify. Stops only for things a machine can't do (bot tokens, WhatsApp QR, the first "hello").
@@ -95,7 +95,7 @@ Two ways, both work in every AI coding agent hstack installs into:
 
 ### Option A — Just say what you want
 
-Describe the outcome. Your AI coding agent reads its installed skill catalog, matches your intent, and runs the right skills in order — no slash-command memorization required:
+Describe the outcome. Your AI coding agent reads its installed superpower catalog, matches your intent, and runs the right ones in order — no slash-command memorization required:
 
 - *"Integrate Notion, HubSpot, and Salesforce"* → agent runs `/integration-notion`, then `/integration-hubspot`, then `/integration-salesforce`, one after another.
 - *"Deploy Hermes to my server and wire Telegram"* → agent runs `/hermes-deploy`, then `/platform-telegram`.
@@ -132,7 +132,7 @@ The magical moment either way: type `/hstack:integration-` in your agent and 71 
 |---|---|
 | `/hermes-install` | Install Hermes (local or over SSH), pinned + PATH-safe. |
 | `/hermes-model` | Configure provider + main/aux models. Covers OpenAI, Anthropic, OpenRouter, Google, Groq, Mistral, Together, Cohere. |
-| `/hermes-skills` | Install a curated starter skill pack. |
+| `/hermes-skills` | Install a curated starter pack of Hermes's own skills (distinct from hstack superpowers). |
 | `/hermes-memory` | Built-in or an external memory provider. |
 | `/hermes-soul` | Give the agent a name + personality (`SOUL.md`). |
 | `/hermes-home` | Set the home channel for cron + notifications. |
@@ -203,14 +203,14 @@ Every failure mode below is a real, logged trap that hstack pre-solves so you do
 - **Stale PID after crash → systemd restart loop** ([#13655](https://github.com/NousResearch/hermes-agent/issues/13655)) → PID validity check + auto-clear.
 - **No built-in backup** ([#12238](https://github.com/NousResearch/hermes-agent/issues/12238)) → `/hermes-backup`.
 - **Auxiliary-capability drop** (aux model swapped without its key silently kills vision / web / compression) → capability-aware wiring, `auto` defaults, warnings.
-- **Vendor-specific integration traps** (Zendesk `/token` email suffix, Sendbird `Api-Token` header, Notion OAuth-only hosted MCP, R2 `region=auto`, Datadog wrong-site 403) — encoded in each skill's Pitfalls table.
+- **Vendor-specific integration traps** (Zendesk `/token` email suffix, Sendbird `Api-Token` header, Notion OAuth-only hosted MCP, R2 `region=auto`, Datadog wrong-site 403) — encoded in each superpower's Pitfalls table.
 
 Full catalogue: [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md).
 
 ## Security defaults
 
 - Localhost binding everywhere. Network exposure is an explicit, warned opt-in.
-- Allowlists enforced. Every platform skill (WhatsApp, Slack, Signal, Teams, Google Chat) refuses to start with an empty allowlist.
+- Allowlists enforced. Every platform superpower (WhatsApp, Slack, Signal, Teams, Google Chat) refuses to start with an empty allowlist.
 - Secrets in `~/.hermes/.env` with `chmod 600`, referenced by env-var indirection from `config.yaml`. Never in chat or logs.
 - Live credential verification against the vendor API happens **before** any write. Bad key → clean abort, no half-written state.
 - SSH-first: every action is a reviewable command run on the user's own server, not a hidden daemon operated by hstack.
