@@ -17,11 +17,12 @@ v1 was reviewed via /autoplan (2026-07-14); v2 adds the four fixes from /office-
 ## The hook (verified, survived adversarial review)
 
 > **I never open a chat with my AI. Every morning, it opens one with me.**
-> hstack is a catalog of "skill files" — superpowers a self-hosted Hermes
-> agent can call on. This one is called "home channel + cron": Hermes gets a
-> name, a memory, and a chat channel it messages you on, first thing each
-> morning. One command in your AI coding agent puts the whole thing on your
-> own server.
+> hstack is a catalog of skill files — recipes your AI coding agent (Claude
+> Code, Cursor, Codex, etc.) reads and executes to set up self-hosted Hermes
+> for you. This particular result used two of them: /hermes-home wired a chat
+> channel; /hermes-cron scheduled a morning briefing. Your IDE does the Docker
+> work, you just say what you want. Hermes ends up running on your own server,
+> messaging you first.
 
 Anchors (verbatim on disk):
 - `skills/hermes-home/SKILL.md:14` — "Without it, cron fires into the void."
