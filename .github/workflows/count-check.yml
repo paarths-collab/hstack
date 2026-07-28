@@ -22,7 +22,9 @@ jobs:
           actual_integrations=$(ls -d skills/integration-*/SKILL.md | wc -l)
           actual_platforms=$(ls -d skills/platform-*/SKILL.md | wc -l)
 
-          badge_skills=$(grep -oE 'skills-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
+          # README badge label is "superpowers-N" (renamed from "skills-N"). The
+          # alternation keeps this guard working if either label is in use.
+          badge_skills=$(grep -oE '(superpowers|skills)-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
           badge_integrations=$(grep -oE 'integrations-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
           badge_platforms=$(grep -oE 'platforms-[0-9]+' README.md | head -1 | grep -oE '[0-9]+')
 

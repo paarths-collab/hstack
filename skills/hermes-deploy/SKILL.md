@@ -362,8 +362,7 @@ deeper recovery.
 
 The current frontend dashboard is being removed. hstack will ship **agent
 plugins** (specialist workers) that boost Hermes with focused workflows (sales,
-HR, marketing, support, ops/admin, research) — inspired by the Digital Crew
-"Digital Workers" model.
+HR, marketing, support, ops/admin, research).
 
 ---
 

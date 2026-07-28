@@ -1,7 +1,7 @@
 # hstack — AI-coding-agent instructions
 
 This repo is **hstack**: a portable skill catalog for deploying and operating self-hosted
-Hermes agents. Built by Paarth, in collaboration with Digital Crew Technology.
+Hermes agents. Built by Paarth.
 
 **Multi-IDE, multi-agent by design.** The `skills/<name>/SKILL.md` files are the canonical
 source. Per-IDE `setup-*` scripts symlink or convert them into the format each agent expects:
@@ -61,7 +61,6 @@ setup, setup-codex, setup-cursor, setup-hermes, setup-gemini, setup-openclaw
                           — per-IDE distributors (symlink or format-convert)
 setup-all                — runs every setup-* in sequence
 reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
-blog/                    — published guides (.md + .schema.json for JSON-LD)
 metrics/                 — clone traffic tracking (update-clone-traffic.mjs + clone-traffic.svg)
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
 ```

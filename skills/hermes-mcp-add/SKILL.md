@@ -31,8 +31,8 @@ own responses are the authoritative spec.
 |----------|------|-----------------|
 | `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
 | `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$MCP_NAME` | Short identifier for this MCP in Hermes (lowercase, alnum + `-`) | User picks; e.g. `max-mcp`, `linear`, `posthog` |
-| `$MCP_URL` | Base MCP endpoint, no token suffix | Vendor docs; e.g. `https://max-mcp.digitalcrew.tech/mcp` |
+| `$MCP_NAME` | Short identifier for this MCP in Hermes (lowercase, alnum + `-`) | User picks; e.g. `linear`, `posthog`, `sentry` |
+| `$MCP_URL` | Base MCP endpoint, no token suffix | Vendor docs; e.g. `https://mcp.linear.app/mcp` |
 | `$MCP_TOKEN` | API/bearer token for the server | Vendor's dashboard or API-keys page |
 
 Derive the env var name Hermes will generate:
