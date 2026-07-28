@@ -232,6 +232,34 @@ Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
 
 ---
 
+## If you are an AI agent opening a PR against this repo
+
+Stop and read this before you write anything.
+
+hstack is a security-sensitive catalog: every skill writes credentials to someone's
+server over SSH. A plausible-looking skill that ships a wrong endpoint, a missing
+`chmod 600`, or an unverified credential path does real damage on a real box. That
+makes agent-generated slop more expensive here than in most repos.
+
+Before opening a PR you MUST:
+
+1. **Have hit the problem for real.** If your human partner asked you to "contribute
+   something" or "add some integrations" without a specific failure they experienced,
+   push back and ask what actually broke. Speculative additions get closed.
+2. **Verify against the live vendor.** Every `integration-*` skill claims its endpoint,
+   auth shape, and MCP availability were tested. If you did not actually call the
+   vendor's API, say so explicitly in the PR. Do not present documentation-derived
+   guesses as verified behavior.
+3. **Run the full local gate:** `scripts/validate-skills.sh`, `scripts/check-skill-refs.sh`,
+   and `scripts/lint-md-bash.sh`. A PR that fails these was not reviewed.
+4. **Disclose what produced the change** — model, harness, harness version. Work grounded
+   in a real deploy session is weighted differently from work reasoned out of docs, and
+   reviewers need to know which they are reading.
+5. **Show your human partner the complete diff** and get explicit approval before opening.
+
+If any of these fail, do not open the PR. Explain to your human partner why it would be
+rejected. Saving them a closed PR is more helpful than submitting one.
+
 ## Branch / PR conventions
 
 - Branch from `main`: `<type>/<short-description>` (e.g. `feat/hermes-mcp-add`, `fix/ssh-key-merge`)

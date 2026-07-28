@@ -31,8 +31,9 @@ Sources:
   `xi-api-key: <key>` header.
 
 **Why this matters:** ElevenLabs unlocks voice-out for the messaging platforms Hermes
-already supports (Telegram, WhatsApp, Signal, Discord). Combined with `/integration-deepgram`
-(voice-in), Hermes becomes a full-duplex voice bot on any platform that supports audio.
+already supports (Telegram, WhatsApp, Signal, Discord). Paired with a speech-to-text
+vendor for voice-in, Hermes becomes a full-duplex voice bot on any platform that
+supports audio. hstack ships no STT skill today, so that half is manual wiring.
 
 **Voice-clone consent gate:** cloning a real person's voice without consent is legally and
 ethically dangerous. This skill refuses `CLONE_ENABLED=1` unless `OWNS_VOICE_ACKNOWLEDGED=1`
@@ -363,7 +364,7 @@ rollback() {
 - [ ] Path A: logs show `registered N tool(s) for 'elevenlabs'` within 30s
 - [ ] Smoke test: TTS on ~17-char sample from VPS returned 200 (~17 characters consumed)
 - [ ] User informed of character quota trap (monthly reset on billing anniversary)
-- [ ] User told: pair with `/integration-deepgram` or `/integration-assemblyai` for voice-in
+- [ ] User told: voice-in needs a separate STT vendor (Deepgram, AssemblyAI); hstack ships no STT skill
 - [ ] Rollback function defined; key revocation + voice-delete instructions included
 
 See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, xi-api-key

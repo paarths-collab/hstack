@@ -41,7 +41,7 @@ The first tagged release. Reflects roughly two months of building the SSH-first 
 
 ### Added — 95 hardened skills
 
-**16 hermes-* core** — `/hermes-backup`, `/hermes-cron`, `/hermes-deploy`, `/hermes-fix`, `/hermes-home`, `/hermes-install`, `/hermes-integrate`, `/hermes-mcp-add`, `/hermes-memory`, `/hermes-model`, `/hermes-provision`, `/hermes-restart`, `/hermes-skills`, `/hermes-soul`, `/hermes-status`, `/hermes-update`.
+**15 hermes-* core** — `/hermes-backup`, `/hermes-cron`, `/hermes-deploy`, `/hermes-fix`, `/hermes-home`, `/hermes-install`, `/hermes-integrate`, `/hermes-mcp-add`, `/hermes-memory`, `/hermes-model`, `/hermes-restart`, `/hermes-skills`, `/hermes-soul`, `/hermes-status`, `/hermes-update`.
 
 **8 platform-*** — `/platform-discord`, `/platform-google-chat`, `/platform-mattermost`, `/platform-signal`, `/platform-slack`, `/platform-teams`, `/platform-telegram`, `/platform-whatsapp`.
 
