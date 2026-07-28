@@ -1,8 +1,16 @@
-# hstack
+# hstack — superpowers for self-hosted AI agents
 
-**Skill files that let your AI coding agent set up self-hosted Hermes for you.**
+**95 superpowers that let your AI coding agent deploy and run a self-hosted Hermes agent on your own server.**
 
-Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself) reads it and does the actual work on your server over SSH — writing credentials to a `chmod 600` env file, registering MCP servers, configuring platforms, verifying every credential against the live vendor API before it writes anything — so Hermes ends up correctly set up. Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No hstack server in the middle, no daemon operated by hstack, no runtime to install: the skill files are just recipes your AI coding agent follows on your own server.
+Self-hosting an AI agent normally costs you a weekend: SSH keys, a gateway that won't re-read your env vars, MCP endpoints that silently reject the token format you just pasted. hstack hands that entire job to the coding agent you already use.
+
+Install it once, then say what you want:
+
+> *"Deploy Hermes to my server and connect Notion, GitLab and Telegram."*
+
+Claude Code — or Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — SSHes into your box, spins up an MCP sidecar container where the vendor needs one, injects the credentials, connects the networks, and tests every key against the live vendor API **before** it writes anything. A working Hermes agent in under an hour instead of a weekend.
+
+Your server. Your data. No hstack service in the middle, no daemon we operate, no runtime to install.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
 ![Skills 95](https://img.shields.io/badge/skills-95-f59e0b)
@@ -14,16 +22,18 @@ Each hstack skill is a recipe. Your favorite AI coding agent (Claude Code, Codex
 
 ---
 
-## What it is
+## What a superpower is
 
-Each skill file is a setup superpower your AI coding agent gains. Install hstack once, then in any of your AI coding agents you can:
+A superpower is one Markdown file — a procedure your AI coding agent reads and executes on your server. There is nothing to run and nothing to trust: you can read every one of them before it touches your box.
 
-1. **Deploy a fresh Hermes** to your server with one command — installed and version-pinned, config written, gateway running, verified.
-2. **Add external services** — 71 integrations (Notion, Stripe, Postgres, Pinecone, Twilio, and 66 more). Your agent writes the credential to a locked-down env file, tests it against the real vendor API, registers the MCP server, then reloads Hermes cleanly.
-3. **Wire messaging channels** — 8 platforms (Telegram, Slack, Discord, WhatsApp, ...) so Hermes can reach out to you first.
-4. **Keep the setup healthy** — status checks, safe restarts, backups, failure diagnosis when something breaks.
+Install hstack once and your coding agent gains all 95:
 
-Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No new runtime — just Markdown recipes your AI coding agent executes on your own server.
+1. **Deploy a self-hosted AI agent** — Hermes installed and version-pinned, config written, gateway running, verified. One command.
+2. **Connect 71 services** — Notion, Stripe, Postgres, Supabase, Pinecone, GitHub, Twilio, Salesforce and 63 more. Your agent writes the credential to a locked-down env file, tests it against the real vendor API, registers the MCP server, then reloads Hermes cleanly.
+3. **Wire 8 messaging platforms** — Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat, Mattermost. So your agent messages you first instead of waiting to be asked.
+4. **Keep it alive** — health checks, safe restarts, backups, and failure diagnosis for the traps that actually bite (gateway OOM, provider 429s, stale PIDs).
+
+Every superpower is SSH-first, idempotent, dry-run-previewable, and rollback-safe.
 
 ## Quick start
 
@@ -91,9 +101,9 @@ Describe the outcome. Your AI coding agent reads its installed skill catalog, ma
 - *"Deploy Hermes to my server and wire Telegram"* → agent runs `/hermes-deploy`, then `/platform-telegram`.
 - *"Something's wrong with the gateway"* → agent runs `/hermes-status`, reads the output, then runs `/hermes-fix` on what it found.
 
-### Option B — Invoke the skill directly
+### Option B — Invoke the superpower directly
 
-If you know exactly which skill you want, invoke it explicitly. Same 95 skills, six invocation flavors:
+If you know exactly which one you want, invoke it explicitly. Same 95 superpowers, six invocation flavors:
 
 | Agent | Invoke like this |
 |---|---|
@@ -142,9 +152,9 @@ The magical moment either way: type `/hstack:integration-` in your agent and 71 
 | `/hermes-fix` | Diagnose and repair common failures. |
 | `/hermes-backup` | Back up config, secrets, memory, sessions. |
 
-## Integrations (71)
+## Integrations — 71 services your AI agent can reach
 
-Every skill probes the vendor's API with your credentials before writing anything, writes secrets to `~/.hermes/.env` with `chmod 600`, registers an MCP server or documents the REST surface, reloads the gateway, and rolls back cleanly on any failure.
+Every superpower probes the vendor's API with your credentials before writing anything, writes secrets to `~/.hermes/.env` with `chmod 600`, registers an MCP server or documents the REST surface, reloads the gateway, and rolls back cleanly on any failure.
 
 **AI-agent-native**
 
@@ -183,7 +193,7 @@ Every skill probes the vendor's API with your credentials before writing anythin
 
 Each skill lives at `skills/integration-<name>/SKILL.md`.
 
-## Reliability
+## Reliability — Hermes failure modes, pre-solved
 
 Every failure mode below is a real, logged trap that hstack pre-solves so you don't hit it:
 
