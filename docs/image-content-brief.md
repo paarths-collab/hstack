@@ -1,7 +1,7 @@
 # Banner image content brief — FIG.01 / PREMISE and FIG.02–04
 
 This is the copy-and-numbers spec for updating the two engineering-blueprint banner images
-after the 68-integration / 6-IDE expansion. Aesthetic stays the same (electric-blue on
+after the 71-integration / 6-IDE expansion. Aesthetic stays the same (electric-blue on
 off-white grid, mono type, blueprint dimensions and callouts). Only the *content* changes.
 
 ## FIG.01 / PREMISE — "empty server → live AI agent"
@@ -21,14 +21,14 @@ Keep the live-agent illustration. Update the label stack to:
 
 - `$ hermes gateway status`
 - `# hermes v0.15.2 — running`
-- `# skills:  73  (16 hermes-* / 5 platform-* / 68 integration-*)`
+- `# skills:  95  (15 hermes-* / 1 setup-* / 8 platform-* / 71 integration-*)`
 - `# platforms: 8  (telegram, discord, whatsapp, slack, mattermost, teams, matrix, signal)`
 - `# IDE targets: 6  (claude code, codex, cursor, gemini cli, openclaw, hermes)`
 
 ### Bottom caption strip
 Replace whatever the current subtitle says with:
 
-> FIG.01 · PREMISE — one command wires 73 skills into every AI coding agent on the box.
+> FIG.01 · PREMISE — one command wires 95 skills into every AI coding agent on the box.
 > Self-hosted Hermes v0.15.2. No SaaS in the hot path.
 
 ### Numbers to *remove*
@@ -64,7 +64,7 @@ update the copy on each step.
 
 ### Bottom caption strip
 > FIG.02 · SEQUENCE — discover → wire → run.
-> Same procedure across all 6 agents. Same procedure across all 68 integrations.
+> Same procedure across all 6 agents. Same procedure across all 71 integrations.
 
 ---
 
@@ -76,7 +76,7 @@ update the copy on each step.
 
 | Tier              | Count | Examples                                    |
 |-------------------|-------|---------------------------------------------|
-| CORE              | 16    | deploy · install · model · memory · skills · mcp-add · status · restart · update · fix · backup · cron · home · soul · integrate · warden |
+| CORE              | 15    | deploy · install · model · memory · skills · mcp-add · status · restart · update · fix · backup · cron · home · soul · integrate |
 | PLATFORMS         | 8     | telegram · discord · whatsapp · slack · mattermost · teams · matrix · signal |
 | MEMORY            | 2     | mem0 · supermemory                          |
 | DATABASE          | 4     | supabase · postgres · neon · redis          |
@@ -99,7 +99,7 @@ update the copy on each step.
 | FORMS             | 3     | typeform · calendly · airtable              |
 | SEARCH            | 2     | brave-search · exa                          |
 
-**Total to feature prominently:** `73 SKILLS · 68 INTEGRATIONS · 20 TIERS`
+**Total to feature prominently:** `95 SKILLS · 71 INTEGRATIONS · 20 TIERS`
 
 ### Bottom caption strip
 > FIG.03 · COMMAND LIBRARY — pick a tier at install time, or `--pick` and grab the ones you need.
@@ -135,7 +135,7 @@ update the copy on each step.
 
 ## Old numbers to purge everywhere
 
-- ❌ `19 commands` → ✅ `73 skills`
+- ❌ `19 commands` → ✅ `95 skills`
 - ❌ `4+ chat platforms` → ✅ `8 messaging platforms`
 - ❌ `Claude Code` (singular) → ✅ `6 AI coding agents`
-- ❌ any mention of "50 integrations" → ✅ `68 integrations`
+- ❌ any mention of "50 integrations" → ✅ `71 integrations`

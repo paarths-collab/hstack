@@ -1,0 +1,24 @@
+name: Skill references
+
+# Docs must not advertise skills that do not ship.
+#
+# CHANGELOG.md listed `/hermes-provision` as part of the "16 hermes-* core"
+# catalog. It was never committed. `integration-elevenlabs` told users to pair
+# with `/integration-deepgram` and `/integration-assemblyai`, neither of which
+# exists. Same class of bug as badge-count drift, different surface.
+
+on:
+  push:
+    paths: ["**/*.md", "scripts/check-skill-refs.sh", ".github/workflows/skill-refs.yml"]
+  pull_request:
+    paths: ["**/*.md", "scripts/check-skill-refs.sh", ".github/workflows/skill-refs.yml"]
+  workflow_dispatch:
+
+jobs:
+  refs:
+    name: Every referenced skill exists on disk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check skill references
+        run: bash scripts/check-skill-refs.sh

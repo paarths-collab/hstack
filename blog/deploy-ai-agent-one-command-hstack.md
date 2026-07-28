@@ -493,7 +493,7 @@ Run `/hermes-status` to see what is wrong, or `/hermes-fix` to diagnose and repa
 
 ### Is hstack affiliated with Nous Research or Hostinger?
 
-No. hstack is independent, open-source (MIT) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported.
+No. hstack is independent, open-source (Apache 2.0) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported.
 
 ### Can I run more than one agent?
 
@@ -525,7 +525,7 @@ Yes. The skills are just files — delete the `~/.claude/skills/hstack` folder a
 
 ### Does hstack cost anything?
 
-No. hstack itself is free and MIT-licensed. Your only costs are the VPS and the model API fees, the same costs you would have setting Hermes up manually. hstack does not add a fee, a subscription, or a markup.
+No. hstack itself is free and Apache-2.0-licensed. Your only costs are the VPS and the model API fees, the same costs you would have setting Hermes up manually. hstack does not add a fee, a subscription, or a markup.
 
 ### Can I customize what the deploy sets up?
 
@@ -563,7 +563,7 @@ To get there:
 3. Answer the five prompts (token, key, name, platform, first "hello").
 4. Say hello to your new agent.
 
-The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](https://github.com/paarths-collab/hstack)**. Prefer to understand each step first? Read the companion [beginner's setup guide](01-hermes-setup-guide.md).
+The repo is open-source and Apache-2.0-licensed: **[github.com/paarths-collab/hstack](https://github.com/paarths-collab/hstack)**. Prefer to understand each step first? Read the companion [beginner's setup guide](01-hermes-setup-guide.md).
 
 [INTERNAL-LINK: next logical step for readers → 01-hermes-setup-guide.md]
 
@@ -606,7 +606,7 @@ The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](h
       "name": "Is hstack affiliated with Nous Research or Hostinger?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "No. hstack is independent, open-source (MIT) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported."
+        "text": "No. hstack is independent, open-source (Apache 2.0) software. Hermes Agent is a project of Nous Research; Hostinger is one deploy option, and other VPS providers are fully supported."
       }
     },
     {
@@ -614,7 +614,7 @@ The repo is open-source and MIT-licensed: **[github.com/paarths-collab/hstack](h
       "name": "Does hstack cost anything?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "No. hstack itself is free and MIT-licensed. Your only costs are the VPS and the model API fees, the same costs you would have setting Hermes up manually. hstack does not add a fee, a subscription, or a markup."
+        "text": "No. hstack itself is free and Apache-2.0-licensed. Your only costs are the VPS and the model API fees, the same costs you would have setting Hermes up manually. hstack does not add a fee, a subscription, or a markup."
       }
     }
   ]

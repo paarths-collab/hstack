@@ -556,7 +556,6 @@ Alongside the core setup flow, we're preparing a set of optional specialist agen
 
 - **Sophie (HR Business Partner)** — runs first-round interviews, screens candidates, and shortlists the strongest ones.
 - **Claire (Market Mastermind)** — researches markets, competitors, and target accounts, then delivers actionable briefs.
-- **Max (Outbound Sales Force)** — qualifies leads, sends personalized outreach, and books meetings. Max is already live at [max.digitalcrew.tech](https://max.digitalcrew.tech/).
 - **Camille (Customer Support Champion)** — handles tier-1 support, monitors customer health, and flags churn risk.
 - **Kate (Marketing Maestro)** — plans campaigns, writes copy, and ships content across email, social, and site.
 - **André (Finance & Admin)** — handles invoicing, reporting, and recurring admin.
@@ -621,7 +620,7 @@ If you'd rather skip the manual work, **hstack** turns Claude Code into the engi
 
 ---
 
-**About the author:** [Paarth](https://github.com/paarths-collab) builds hstack, an open-source toolkit for deploying self-hosted Hermes agents, and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en). hstack is independent open-source software (MIT); Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are fully supported.
+**About the author:** [Paarth](https://github.com/paarths-collab) builds hstack, an open-source toolkit for deploying self-hosted Hermes agents, and wrote this guide after deploying Hermes from scratch and cataloguing every failure along the way. Written in collaboration with [Digital Crew Technology](https://www.digitalcrew.tech/en). hstack is independent open-source software (Apache 2.0); Hermes Agent is a project of Nous Research. Hostinger and other VPS providers are fully supported.
 
 <script type="application/ld+json">
 {

@@ -44,7 +44,7 @@ if ($env:HSTACK_BRANCH) { $Branch = $env:HSTACK_BRANCH }
 
 # Tier → integration mapping
 $Tiers = @{
-    core         = @('hermes-backup','hermes-cron','hermes-deploy','hermes-fix','hermes-home','hermes-install','hermes-integrate','hermes-mcp-add','hermes-memory','hermes-model','hermes-restart','hermes-skills','hermes-soul','hermes-status','hermes-update')
+    core         = @('setup-ssh-keys','hermes-backup','hermes-cron','hermes-deploy','hermes-fix','hermes-home','hermes-install','hermes-integrate','hermes-mcp-add','hermes-memory','hermes-model','hermes-restart','hermes-skills','hermes-soul','hermes-status','hermes-update')
     platforms    = @('platform-discord','platform-google-chat','platform-mattermost','platform-signal','platform-slack','platform-teams','platform-telegram','platform-whatsapp')
     memory       = @('integration-mem0','integration-supermemory')
     database     = @('integration-supabase','integration-postgres','integration-neon','integration-redis')
@@ -193,11 +193,11 @@ if ($All) {
 } elseif ($Pick -or ([Environment]::UserInteractive -and $Host.UI.RawUI)) {
     Write-Host @"
 
-hstack currently has 68 integrations across 20 tiers.
+hstack currently has 71 integrations across 20 tiers.
 Core skills (/hermes-deploy, all platforms) are ALWAYS installed.
 
 Available integration tiers:
-  all              - everything (68 integrations)
+  all              - everything (71 integrations)
   memory           - mem0, supermemory
   database         - supabase, postgres, neon, redis
   vector           - pinecone, qdrant
@@ -359,7 +359,7 @@ foreach ($k in $Ides.Keys) { Write-Host "  - $k" }
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host ""
-Write-Host "  1. Deploy Hermes to a VPS (~30 min):"
+Write-Host "  1. Deploy Hermes to your own server (~30 min):"
 Write-Host "     Open any of your IDEs and run:  /hermes-deploy"
 Write-Host ""
 Write-Host "  2. After deploy, wire integrations one at a time:"

@@ -20,9 +20,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      # Metrics commits live on the metrics-data branch, NOT main — a daily
+      # bot commit on main buries human work and makes the repo look
+      # machine-run. The branch is created from main on first run.
+      - name: Switch to metrics-data branch
+        run: |
+          git config user.name "hstack-metrics[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout metrics-data 2>/dev/null || git checkout -b metrics-data
       - name: Fetch + append clone traffic
         env:
           TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
@@ -30,8 +40,6 @@ jobs:
         run: node metrics/update-clone-traffic.mjs
       - name: Commit if changed
         run: |
-          git config user.name "hstack-metrics[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add metrics/clone-traffic.json metrics/clone-traffic.svg
           git diff --staged --quiet || git commit -m "chore(metrics): update clone traffic [skip ci]"
-          git push
+          git push origin metrics-data

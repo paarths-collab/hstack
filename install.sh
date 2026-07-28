@@ -46,7 +46,7 @@ LOCAL_RUN=0
 
 # Tier → integration mapping (edit as new tiers land)
 declare -A TIERS
-TIERS[core]="hermes-backup hermes-cron hermes-deploy hermes-fix hermes-home hermes-install hermes-integrate hermes-mcp-add hermes-memory hermes-model hermes-restart hermes-skills hermes-soul hermes-status hermes-update"
+TIERS[core]="setup-ssh-keys hermes-backup hermes-cron hermes-deploy hermes-fix hermes-home hermes-install hermes-integrate hermes-mcp-add hermes-memory hermes-model hermes-restart hermes-skills hermes-soul hermes-status hermes-update"
 TIERS[platforms]="platform-discord platform-google-chat platform-mattermost platform-signal platform-slack platform-teams platform-telegram platform-whatsapp"
 TIERS[memory]="integration-mem0 integration-supermemory"
 TIERS[database]="integration-supabase integration-postgres integration-neon integration-redis"
@@ -252,12 +252,12 @@ elif [ "$PICK_MODE" = "1" ] || [ -t 0 ]; then
   # Interactive picker — only if TTY is present
   cat <<EOF
 
-hstack currently has 68 integrations across 20 tiers.
+hstack currently has 71 integrations across 20 tiers.
 Core skills (/hermes-deploy, all platforms) are ALWAYS installed.
 
 Available integration tiers:
 
-  1) all              - everything (68 integrations)
+  1) all              - everything (71 integrations)
   2) memory           - mem0, supermemory
   3) database         - supabase, postgres, neon, redis
   4) vector           - pinecone, qdrant
@@ -445,7 +445,7 @@ done
 log ""
 log "Next steps:"
 log ""
-log "  1. Deploy Hermes to a VPS (~30 min):"
+log "  1. Deploy Hermes to your own server (~30 min):"
 log "     Open any of your IDEs and run:  ${BOLD}/hermes-deploy${RESET}"
 log ""
 log "  2. After deploy, wire integrations one at a time:"

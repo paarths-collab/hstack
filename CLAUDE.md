@@ -15,7 +15,7 @@ source. Per-IDE `setup-*` scripts symlink or convert them into the format each a
 | Gemini CLI           | `~/.gemini/context/hstack/`| `.md` context files |
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
-The catalog: **73 skills** (16 hermes-* core + 5 platform-* + 68 integration-* connectors),
+The catalog: **95 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors),
 targeting **8 messaging platforms**, pinning Hermes **v0.15.2**.
 
 ## Universal installer (`install.sh` / `install.ps1`)
@@ -66,7 +66,7 @@ metrics/                 — clone traffic tracking (update-clone-traffic.mjs + 
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
 ```
 
-## Integration tier catalog (68 connectors, 20 tiers)
+## Integration tier catalog (71 connectors, 20 tiers)
 
 Do not re-implement anything Hermes already does natively. `/hermes-model` covers
 chat completion for OpenAI / Anthropic / Groq / Mistral / etc. — do **not** ship an
@@ -75,8 +75,14 @@ as an explicit refusal (DALL-E, Whisper, embeddings, Batch API only).
 
 Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 
-- **core** — hermes-* deploy/ops (16)
-- **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, matrix, signal
+This list is generated from `install.sh` and must stay identical to it. It once drifted
+badly enough to advertise three integrations that do not exist (`confluence`,
+`s3-compatible`, `matrix`) while omitting nine that do. `scripts/check-skill-refs.sh`
+cannot catch that class of error, because these are bare names, not `/slash-refs`. If you
+edit a tier, edit `install.sh` first and mirror it here.
+
+- **core** — hermes-* deploy/ops (15) + setup-ssh-keys (1)
+- **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal
 - **memory** — mem0, supermemory (pick one; wiring both duplicates recall context)
 - **database** — supabase, postgres, neon, redis
 - **vector** — pinecone, qdrant
@@ -85,18 +91,18 @@ Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
 - **rag** — firecrawl (RAG feeder)
 - **code** — e2b (code sandbox)
 - **ai-tools** — openai-tools (image/audio/embeddings/batch), elevenlabs (TTS), replicate
-- **storage** — r2, s3-compatible
-- **crm** — hubspot, salesforce, pipedrive, zoho
-- **docs** — notion, confluence, google-workspace, microsoft-365, obsidian
+- **storage** — r2
+- **crm** — hubspot, salesforce, pipedrive, zoho-crm
+- **docs** — notion, google-workspace, microsoft-365, obsidian
 - **dev** — github, gitlab, bitbucket
-- **pm** — linear, asana, clickup, jira, monday, trello
-- **cloud** — aws, gcp, azure, cloudflare, digitalocean, hetzner, netlify, render
+- **pm** — jira, linear, asana, clickup, monday, trello, airtable
+- **cloud** — aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
 - **payments** — stripe, paypal, razorpay
-- **commerce** — shopify, woocommerce
-- **email** — sendgrid, mailchimp, postmark, brevo
-- **support** — intercom, zendesk, freshdesk, sendbird
-- **forms** — typeform, calendly, airtable
-- **search** — brave-search, exa
+- **commerce** — shopify, woocommerce, webflow, wordpress
+- **email** — mailchimp, brevo, sendgrid, postmark
+- **support** — twilio, sendbird, intercom, zendesk, freshdesk
+- **forms** — typeform, tally, calendly, zoom
+- **search** — brave-search, tavily, exa
 
 ## Every integration skill guarantees the same shape
 
@@ -231,6 +237,34 @@ Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
 6. **Two `.env` files** — compose `.env` (container-level) vs `/opt/data/.env` (Hermes runtime). MCP secrets go in the Hermes one.
 
 ---
+
+## If you are an AI agent opening a PR against this repo
+
+Stop and read this before you write anything.
+
+hstack is a security-sensitive catalog: every skill writes credentials to someone's
+server over SSH. A plausible-looking skill that ships a wrong endpoint, a missing
+`chmod 600`, or an unverified credential path does real damage on a real box. That
+makes agent-generated slop more expensive here than in most repos.
+
+Before opening a PR you MUST:
+
+1. **Have hit the problem for real.** If your human partner asked you to "contribute
+   something" or "add some integrations" without a specific failure they experienced,
+   push back and ask what actually broke. Speculative additions get closed.
+2. **Verify against the live vendor.** Every `integration-*` skill claims its endpoint,
+   auth shape, and MCP availability were tested. If you did not actually call the
+   vendor's API, say so explicitly in the PR. Do not present documentation-derived
+   guesses as verified behavior.
+3. **Run the full local gate:** `scripts/validate-skills.sh`, `scripts/check-skill-refs.sh`,
+   and `scripts/lint-md-bash.sh`. A PR that fails these was not reviewed.
+4. **Disclose what produced the change** — model, harness, harness version. Work grounded
+   in a real deploy session is weighted differently from work reasoned out of docs, and
+   reviewers need to know which they are reading.
+5. **Show your human partner the complete diff** and get explicit approval before opening.
+
+If any of these fail, do not open the PR. Explain to your human partner why it would be
+rejected. Saving them a closed PR is more helpful than submitting one.
 
 ## Branch / PR conventions
 
