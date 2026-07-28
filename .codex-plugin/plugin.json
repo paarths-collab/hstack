@@ -1,0 +1,46 @@
+{
+  "name": "hstack",
+  "version": "0.2.0",
+  "description": "Skill files that let your AI coding agent set up self-hosted Hermes for you: deploy, wire 71 integrations, connect 8 messaging platforms, and keep it healthy.",
+  "author": {
+    "name": "Paarth",
+    "url": "https://github.com/paarths-collab"
+  },
+  "homepage": "https://github.com/paarths-collab/hstack",
+  "repository": "https://github.com/paarths-collab/hstack",
+  "license": "Apache-2.0",
+  "keywords": [
+    "hermes",
+    "self-hosted",
+    "ai-agent",
+    "deployment",
+    "integrations",
+    "mcp",
+    "devops",
+    "ssh",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "hstack",
+    "shortDescription": "Set up and operate a self-hosted Hermes agent from your coding agent",
+    "longDescription": "hstack gives your AI coding agent 94 recipes for standing up a self-hosted Hermes agent on your own server: one-command deploy, 71 hardened service integrations, 8 messaging platforms, scheduled tasks, backups, and failure diagnosis. Every skill is SSH-first, verifies credentials against the live vendor API before writing anything, and rolls back cleanly on failure.",
+    "developerName": "Paarth",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Deploy Hermes to my server and wire up Telegram.",
+      "Integrate Notion, HubSpot, and Salesforce into my Hermes agent.",
+      "Something's wrong with my Hermes gateway."
+    ],
+    "websiteURL": "https://github.com/paarths-collab/hstack",
+    "privacyPolicyURL": "https://github.com/paarths-collab/hstack/blob/main/SECURITY.md",
+    "termsOfServiceURL": "https://github.com/paarths-collab/hstack/blob/main/LICENSE",
+    "brandColor": "#9D6BFF",
+    "screenshots": []
+  }
+}

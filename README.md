@@ -27,7 +27,26 @@ Every skill is SSH-first, idempotent, dry-run-previewable, and rollback-safe. No
 
 ## Quick start
 
-Install the skills into every AI agent detected on your machine:
+**Claude Code** — install as a plugin:
+
+```bash
+/plugin marketplace add paarths-collab/hstack
+```
+
+```bash
+/plugin install hstack@hstack
+```
+
+**Gemini CLI:**
+
+```bash
+gemini extensions install https://github.com/paarths-collab/hstack
+```
+
+**Codex and Cursor:** search `hstack` in the plugin marketplace.
+
+**Hermes itself, OpenClaw, or every agent on the box at once** — these have no plugin
+registry, so install the skills directly:
 
 ```bash
 # macOS / Linux / Git Bash
@@ -40,8 +59,12 @@ iwr -useb https://raw.githubusercontent.com/paarths-collab/hstack/main/install.p
 Then open your agent and run:
 
 ```
-/hermes-deploy
+/hstack:hermes-deploy      # if you installed the plugin
+/hermes-deploy             # if you installed via script
 ```
+
+Plugin skills are always namespaced (`/hstack:<skill>`); script-installed skills are bare.
+Both forms work, and installing both ways is safe — they coexist rather than collide.
 
 It handles install → model → platform → memory → personality → autostart → verify. Stops only for things a machine can't do (bot tokens, WhatsApp QR, the first "hello").
 
@@ -74,14 +97,14 @@ If you know exactly which skill you want, invoke it explicitly. Same 94 skills, 
 
 | Agent | Invoke like this |
 |---|---|
-| **Claude Code** | `/hermes-deploy` · `/integration-notion` (slash-autocompletes) |
+| **Claude Code** | `/hstack:hermes-deploy` · `/hstack:integration-notion` (plugin, slash-autocompletes) — or bare `/hermes-deploy` if script-installed |
 | **Codex** | `/hermes-deploy` · `/integration-notion` (slash) |
 | **Cursor** | `@hermes-deploy` in composer, or "Manual" mode toggle (rules exposed as Agent Requested) |
 | **Gemini CLI** | `@hermes-deploy` context reference (@-autocompletes) |
 | **OpenClaw** | `/hermes-deploy` · `/integration-notion` (verbatim Claude Code format) |
 | **Hermes itself** | *"Deploy Hermes"* · *"Connect Notion"* (natural language — Hermes reads and self-executes) |
 
-The magical moment either way: type `/integration-` in your agent and 71 hardened installers autocomplete, or just say "integrate Notion" and your agent grabs the right one. It wires the service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
+The magical moment either way: type `/hstack:integration-` in your agent and 71 hardened installers autocomplete, or just say "integrate Notion" and your agent grabs the right one. It wires the service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
 
 ## Commands
 
