@@ -58,18 +58,30 @@ bash install.sh --help                        # full flag reference
 
 ## How you actually use it
 
-One catalog, one installer, six agents. The skill names are the same everywhere — only the invocation style differs by agent:
+Two ways, both work in every AI coding agent hstack installs into:
 
-| Agent | Invoke like this | Autocomplete |
-|---|---|---|
-| **Claude Code** | `/hermes-deploy` · `/integration-notion` | Slash-autocompletes all 94 skills |
-| **Codex** | `/hermes-deploy` · `/integration-notion` | Slash, same shape |
-| **Cursor** | `@hermes-deploy` in composer (or "Manual" mode toggle) | Exposed as Agent Requested rules |
-| **Gemini CLI** | `@hermes-deploy` (context reference) | @-autocompletes |
-| **OpenClaw** | `/hermes-deploy` · `/integration-notion` | Verbatim Claude Code format |
-| **Hermes itself** | "Deploy Hermes" · "Connect Notion" | Natural language — Hermes reads the skill and self-executes |
+### Option A — Just say what you want
 
-The magical moment: type `/integration-` (or `@integration-`) in your agent, watch 71 hardened installers autocomplete. Pick one — it wires that service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
+Describe the outcome. Your AI coding agent reads its installed skill catalog, matches your intent, and runs the right skills in order — no slash-command memorization required:
+
+- *"Integrate Notion, HubSpot, and Salesforce"* → agent runs `/integration-notion`, then `/integration-hubspot`, then `/integration-salesforce`, one after another.
+- *"Deploy Hermes to my server and wire Telegram"* → agent runs `/hermes-deploy`, then `/platform-telegram`.
+- *"Something's wrong with the gateway"* → agent runs `/hermes-status`, reads the output, then runs `/hermes-fix` on what it found.
+
+### Option B — Invoke the skill directly
+
+If you know exactly which skill you want, invoke it explicitly. Same 94 skills, six invocation flavors:
+
+| Agent | Invoke like this |
+|---|---|
+| **Claude Code** | `/hermes-deploy` · `/integration-notion` (slash-autocompletes) |
+| **Codex** | `/hermes-deploy` · `/integration-notion` (slash) |
+| **Cursor** | `@hermes-deploy` in composer, or "Manual" mode toggle (rules exposed as Agent Requested) |
+| **Gemini CLI** | `@hermes-deploy` context reference (@-autocompletes) |
+| **OpenClaw** | `/hermes-deploy` · `/integration-notion` (verbatim Claude Code format) |
+| **Hermes itself** | *"Deploy Hermes"* · *"Connect Notion"* (natural language — Hermes reads and self-executes) |
+
+The magical moment either way: type `/integration-` in your agent and 71 hardened installers autocomplete, or just say "integrate Notion" and your agent grabs the right one. It wires the service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
 
 ## Commands
 
