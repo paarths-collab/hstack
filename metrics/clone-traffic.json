@@ -1,11 +1,11 @@
 {
   "repo": "paarths-collab/hstack",
   "note": "Daily GitHub clone traffic, persisted past GitHub's 14-day window. Populated by .github/workflows/clone-traffic.yml. 'unique_cloners_approx' sums per-day unique cloners — the headline 'how many people ran the install command' proxy.",
-  "updated": "2026-07-29T09:08:25.642Z",
+  "updated": "2026-07-30T08:49:43.725Z",
   "totals": {
-    "days": 71,
-    "clones": 2553,
-    "unique_cloners_approx": 851
+    "days": 72,
+    "clones": 2558,
+    "unique_cloners_approx": 855
   },
   "days": {
     "2026-05-19": {
@@ -291,6 +291,10 @@
     "2026-07-28": {
       "count": 35,
       "uniques": 5
+    },
+    "2026-07-29": {
+      "count": 5,
+      "uniques": 4
     }
   }
 }
