@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "name": "founder-radar",
+  "description": "A daily operating picture of revenue, product usage, errors, deployments, and important work.",
+  "source_blueprints": [
+    "saas-founder"
+  ],
+  "runtime": {
+    "agent": "hermes",
+    "installation": "existing_agent"
+  },
+  "delivery": {
+    "mode": "platforms",
+    "channels": [
+      "telegram"
+    ]
+  },
+  "integrations": [
+    { "id": "stripe", "skill": "integration-stripe", "access": "read_only" },
+    { "id": "posthog", "skill": "integration-posthog", "access": "read_only" },
+    { "id": "sentry", "skill": "integration-sentry", "access": "read_only" },
+    { "id": "github", "skill": "integration-github", "access": "read_only" }
+  ],
+  "automations": [
+    { "id": "morning-briefing", "enabled": true, "cadence": "Weekdays, chosen time" },
+    { "id": "critical-error-alerts", "enabled": true, "cadence": "Periodic polling" },
+    { "id": "weekly-founder-review", "enabled": true, "cadence": "Weekly" }
+  ],
+  "behaviors": {
+    "long_term_memory": false,
+    "automatic_backups": false
+  },
+  "policies": {
+    "external_messages": "approval_required",
+    "destructive_actions": "approval_required",
+    "safe_operations": "approval_required"
+  },
+  "credential_requirements": [
+    { "service": "Telegram", "credential": "Bot token", "recommended_scope": "Platform setup collects this later" },
+    { "service": "Stripe", "credential": "Restricted API key", "recommended_scope": "Restricted read-only" },
+    { "service": "PostHog", "credential": "Personal API key", "recommended_scope": "Project read-only" },
+    { "service": "Sentry", "credential": "Auth token", "recommended_scope": "Project read-only" },
+    { "service": "GitHub", "credential": "Fine-grained token", "recommended_scope": "Contents + pull-request read" }
+  ],
+  "resolved_skills": [
+    "platform-telegram",
+    "integration-stripe",
+    "integration-posthog",
+    "integration-sentry",
+    "integration-github",
+    "hermes-home",
+    "hermes-cron"
+  ]
+}

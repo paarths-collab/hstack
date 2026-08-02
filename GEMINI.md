@@ -1,6 +1,6 @@
-# hstack — self-hosted Hermes setup skills
+# hstack — self-hosted Hermes and Agent Blueprint skills
 
-hstack is a catalog of **95 skill files**. Each one is a recipe you (the AI coding agent)
+hstack is a catalog of **97 skill files**. Each one is a recipe you (the AI coding agent)
 read and execute on the user's own server over SSH, so their self-hosted Hermes agent ends
 up correctly set up.
 
@@ -23,9 +23,15 @@ each file encodes vendor-specific traps that are not inferable.
 | "is it healthy?", "something's wrong" | `skills/hermes-status/SKILL.md`, then `skills/hermes-fix/SKILL.md` |
 | "back it up", "update it", "restart it" | `skills/hermes-backup`, `hermes-update`, `hermes-restart` |
 | "wire an MCP server" | `skills/hermes-mcp-add/SKILL.md` |
+| "design a custom SaaS Founder agent" | `skills/blueprint-saas-founder/SKILL.md` |
+| "apply an approved Hermes blueprint" | `skills/blueprint-install/SKILL.md` |
 
-Full index: `ls skills/`. Families are `hermes-*` (15 core), `platform-*` (8), and
-`integration-*` (71).
+Full index: `ls skills/`. Families are `hermes-*` (15 core), `setup-*` (1 prerequisite),
+`platform-*` (8), `integration-*` (71), and `blueprint-*` (2 composition skills).
+
+Hermes is the only installable Blueprint target in schema v1. OpenClaw may host the hstack
+skills that configure Hermes; it is not substituted into the Hermes plan. QM receives a
+zero-secret intent export until hstack ships a dedicated QM adapter.
 
 ## Rules that apply to every skill
 

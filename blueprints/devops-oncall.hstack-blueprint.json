@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "name": "on-call-watch",
+  "description": "A read-first on-call operating view for incidents, deployments, and infrastructure health.",
+  "source_blueprints": ["devops-oncall"],
+  "runtime": { "agent": "hermes", "installation": "existing_agent" },
+  "delivery": { "mode": "platforms", "channels": ["slack"] },
+  "integrations": [
+    { "id": "sentry", "skill": "integration-sentry", "access": "read_only" },
+    { "id": "datadog", "skill": "integration-datadog", "access": "read_only" },
+    { "id": "github", "skill": "integration-github", "access": "read_only" },
+    { "id": "vercel", "skill": "integration-vercel", "access": "read_only" }
+  ],
+  "automations": [
+    { "id": "incident-alerts", "enabled": true, "cadence": "Periodic polling" },
+    { "id": "deployment-summary", "enabled": true, "cadence": "Daily check" },
+    { "id": "daily-health-check", "enabled": true, "cadence": "Daily" }
+  ],
+  "behaviors": { "long_term_memory": false, "automatic_backups": false },
+  "policies": { "external_messages": "approval_required", "destructive_actions": "approval_required", "safe_operations": "approval_required" },
+  "credential_requirements": [
+    { "service": "Slack", "credential": "Bot + app tokens", "recommended_scope": "Platform setup collects this later" },
+    { "service": "Sentry", "credential": "Auth token", "recommended_scope": "Project read-only" },
+    { "service": "Datadog", "credential": "API + application keys", "recommended_scope": "Read-only" },
+    { "service": "GitHub", "credential": "Fine-grained token", "recommended_scope": "Contents + pull-request read" },
+    { "service": "Vercel", "credential": "Access token", "recommended_scope": "Project read-only" }
+  ],
+  "resolved_skills": ["platform-slack", "integration-sentry", "integration-datadog", "integration-github", "integration-vercel", "hermes-home", "hermes-cron"]
+}

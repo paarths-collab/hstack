@@ -44,7 +44,7 @@ if ($env:HSTACK_BRANCH) { $Branch = $env:HSTACK_BRANCH }
 
 # Tier → integration mapping
 $Tiers = @{
-    core         = @('setup-ssh-keys','hermes-backup','hermes-cron','hermes-deploy','hermes-fix','hermes-home','hermes-install','hermes-integrate','hermes-mcp-add','hermes-memory','hermes-model','hermes-restart','hermes-skills','hermes-soul','hermes-status','hermes-update')
+    core         = @('blueprint-install','blueprint-saas-founder','setup-ssh-keys','hermes-backup','hermes-cron','hermes-deploy','hermes-fix','hermes-home','hermes-install','hermes-integrate','hermes-mcp-add','hermes-memory','hermes-model','hermes-restart','hermes-skills','hermes-soul','hermes-status','hermes-update')
     platforms    = @('platform-discord','platform-google-chat','platform-mattermost','platform-signal','platform-slack','platform-teams','platform-telegram','platform-whatsapp')
     memory       = @('integration-mem0','integration-supermemory')
     database     = @('integration-supabase','integration-postgres','integration-neon','integration-redis')

@@ -1,6 +1,6 @@
 {
   "name": "hstack",
-  "description": "Setup automation for self-hosted Hermes agents: deploy, integrate, and operate from any AI coding agent.",
+  "description": "Setup automation and reviewable Agent Blueprints for self-hosted Hermes agents from any AI coding agent.",
   "owner": {
     "name": "Paarth",
     "url": "https://github.com/paarths-collab"
@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "hstack",
-      "description": "Skill files that let your AI coding agent set up self-hosted Hermes for you: deploy, wire 71 integrations, connect 8 messaging platforms, and keep it healthy.",
-      "version": "0.2.0",
+      "description": "Skill files that let your AI coding agent deploy self-hosted Hermes, connect 71 integrations and 8 messaging platforms, and compose reviewable Agent Blueprints.",
+      "version": "0.3.0",
       "source": "./",
       "author": {
         "name": "Paarth",
@@ -27,7 +27,8 @@
         "mcp",
         "devops",
         "ssh",
-        "automation"
+        "automation",
+        "blueprints"
       ]
     }
   ]
