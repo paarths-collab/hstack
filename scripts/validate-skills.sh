@@ -56,7 +56,7 @@ fi
 version_pin() {
   local key="$1"
   local val
-  val=$(grep -E "^${key}=" VERSIONS.txt | head -1 | cut -d= -f2- || true)
+  val=$(grep -E "^${key}=" VERSIONS.txt | head -1 | cut -d= -f2- | tr -d '\r' || true)
   if [ -z "$val" ]; then
     echo "ERROR: VERSIONS.txt missing key '$key'." >&2
     exit 2

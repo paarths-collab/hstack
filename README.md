@@ -1,6 +1,6 @@
 # hstack — superpowers for self-hosted AI agents
 
-**95 superpowers that let your AI coding agent deploy and run a self-hosted Hermes agent on your own server.**
+**97 superpowers that let your AI coding agent deploy and run a self-hosted Hermes agent on your own server.**
 
 Self-hosting an AI agent normally costs you a weekend: SSH keys, a gateway that won't re-read your env vars, MCP endpoints that silently reject the token format you just pasted. hstack hands that entire job to the coding agent you already use.
 
@@ -13,7 +13,7 @@ Claude Code — or Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — SSH
 Your server. Your data. No hstack service in the middle, no daemon we operate, no runtime to install.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
-![Superpowers 95](https://img.shields.io/badge/superpowers-95-f59e0b)
+![Superpowers 97](https://img.shields.io/badge/superpowers-97-f59e0b)
 ![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
 ![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
@@ -26,7 +26,7 @@ Your server. Your data. No hstack service in the middle, no daemon we operate, n
 
 A superpower is one Markdown file — a procedure your AI coding agent reads and executes on your server. There is nothing to run and nothing to trust: you can read every one of them before it touches your box.
 
-Install hstack once and your coding agent gains all 95:
+Install hstack once and your coding agent gains all 97:
 
 1. **Deploy a self-hosted AI agent** — Hermes installed and version-pinned, config written, gateway running, verified. One command.
 2. **Connect 71 services** — Notion, Stripe, Postgres, Supabase, Pinecone, GitHub, Twilio, Salesforce and 63 more. Your agent writes the credential to a locked-down env file, tests it against the real vendor API, registers the MCP server, then reloads Hermes cleanly.
@@ -103,7 +103,7 @@ Describe the outcome. Your AI coding agent reads its installed superpower catalo
 
 ### Option B — Invoke the superpower directly
 
-If you know exactly which one you want, invoke it explicitly. Same 95 superpowers, six invocation flavors:
+If you know exactly which one you want, invoke it explicitly. Same 97 superpowers, six invocation flavors:
 
 | Agent | Invoke like this |
 |---|---|
@@ -111,7 +111,7 @@ If you know exactly which one you want, invoke it explicitly. Same 95 superpower
 | **Codex** | `/hermes-deploy` · `/integration-notion` (slash) |
 | **Cursor** | `@hermes-deploy` in composer, or "Manual" mode toggle (rules exposed as Agent Requested) |
 | **Gemini CLI** | `@hermes-deploy` context reference (@-autocompletes) |
-| **OpenClaw** | `/hermes-deploy` · `/integration-notion` (verbatim Claude Code format) |
+| **OpenClaw** | `/hermes-deploy` · `/integration-notion` (invokes hstack skills against a Hermes target) |
 | **Hermes itself** | *"Deploy Hermes"* · *"Connect Notion"* (natural language — Hermes reads and self-executes) |
 
 The magical moment either way: type `/hstack:integration-` in your agent and 71 hardened installers autocomplete, or just say "integrate Notion" and your agent grabs the right one. It wires the service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
@@ -125,6 +125,28 @@ The magical moment either way: type `/hstack:integration-` in your agent and 71 
 | `/hermes-deploy` | Full end-to-end deploy. Most people only run this. |
 | `/hermes-integrate` | Wire many integrations at once via a picker. |
 | `/hermes-mcp-add` | The generic MCP-wiring primitive. |
+
+### Agent Blueprints
+
+Build a custom agent from a reviewed outcome, not a hard-coded “agent type.” The
+Agent Blueprints ship three editable starting points—SaaS Founder, Personal Chief
+of Staff, and DevOps On-Call—and every channel, integration, automation,
+memory, and backup remains optional.
+
+| Command | What it does |
+|---|---|
+| `/blueprint-saas-founder` | Asks one focused batch of questions, proposes a minimal read-only founder stack, and prepares a reviewable plan. |
+| `/blueprint-install --plan <file>.hstack-blueprint.json` | Validates JSON, re-derives the safe allowlisted skill order, previews access and credentials-to-prepare, then invokes selected specialist skills in series. |
+
+The current runtime routes are intentionally explicit:
+
+- **Hermes** is the supported installable target for blueprint schema v1.
+- **OpenClaw** is a supported hstack execution host: it can invoke hstack skills
+  against Hermes, but hstack does not treat it as a Hermes-compatible target.
+- **QM** currently receives a zero-secret `hstack-agent-intent.v1` export from
+  the Builder. Use QM’s own deployment repository and generated deployment
+  skill to map native scopes, connectors, credentials, and verification; hstack
+  does not remap Hermes integrations into QM.
 
 ### Setup
 

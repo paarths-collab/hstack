@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "chief-of-staff",
+  "description": "A review-first assistant for agendas, meeting context, and follow-up reminders.",
+  "source_blueprints": ["chief-of-staff"],
+  "runtime": { "agent": "hermes", "installation": "existing_agent" },
+  "delivery": { "mode": "platforms", "channels": ["telegram"] },
+  "integrations": [
+    { "id": "google-workspace", "skill": "integration-google-workspace", "access": "read_only" },
+    { "id": "notion", "skill": "integration-notion", "access": "read_only" },
+    { "id": "calendly", "skill": "integration-calendly", "access": "read_only" },
+    { "id": "linear", "skill": "integration-linear", "access": "read_only" }
+  ],
+  "automations": [
+    { "id": "daily-agenda", "enabled": true, "cadence": "Weekdays, chosen time" },
+    { "id": "meeting-preparation", "enabled": true, "cadence": "Before meetings" }
+  ],
+  "behaviors": { "long_term_memory": false, "automatic_backups": false },
+  "policies": { "external_messages": "approval_required", "destructive_actions": "approval_required", "safe_operations": "approval_required" },
+  "credential_requirements": [
+    { "service": "Telegram", "credential": "Bot token", "recommended_scope": "Platform setup collects this later" },
+    { "service": "Google Workspace", "credential": "OAuth connection", "recommended_scope": "Least-privilege read scopes" },
+    { "service": "Notion", "credential": "Notion integration / OAuth", "recommended_scope": "Shared pages only" },
+    { "service": "Calendly", "credential": "Personal access token", "recommended_scope": "Scheduling read-only" },
+    { "service": "Linear", "credential": "Personal API key", "recommended_scope": "Team read-only" }
+  ],
+  "resolved_skills": ["platform-telegram", "integration-google-workspace", "integration-notion", "integration-calendly", "integration-linear", "hermes-home", "hermes-cron"]
+}

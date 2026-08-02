@@ -15,7 +15,7 @@ source. Per-IDE `setup-*` scripts symlink or convert them into the format each a
 | Gemini CLI           | `~/.gemini/context/hstack/`| `.md` context files |
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
-The catalog: **95 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors),
+The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
 targeting **8 messaging platforms**, pinning Hermes **v0.15.2**.
 
 ## Universal installer (`install.sh` / `install.ps1`)

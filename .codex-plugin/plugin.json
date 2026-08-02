@@ -1,7 +1,7 @@
 {
   "name": "hstack",
-  "version": "0.2.0",
-  "description": "Skill files that let your AI coding agent set up self-hosted Hermes for you: deploy, wire 71 integrations, connect 8 messaging platforms, and keep it healthy.",
+  "version": "0.3.0",
+  "description": "Skill files that let your AI coding agent deploy self-hosted Hermes, connect 71 integrations and 8 messaging platforms, and compose reviewable Agent Blueprints.",
   "author": {
     "name": "Paarth",
     "url": "https://github.com/paarths-collab"
@@ -18,13 +18,14 @@
     "mcp",
     "devops",
     "ssh",
-    "automation"
+    "automation",
+    "blueprints"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "hstack",
-    "shortDescription": "Set up and operate a self-hosted Hermes agent from your coding agent",
-    "longDescription": "hstack gives your AI coding agent 95 recipes for standing up a self-hosted Hermes agent on your own server: one-command deploy, 71 hardened service integrations, 8 messaging platforms, scheduled tasks, backups, and failure diagnosis. Every skill is SSH-first, verifies credentials against the live vendor API before writing anything, and rolls back cleanly on failure.",
+    "shortDescription": "Deploy Hermes and compose safe Agent Blueprints from your coding agent",
+    "longDescription": "hstack gives your AI coding agent 97 recipes for standing up a self-hosted Hermes agent on your own server: one-command deploy, 71 hardened service integrations, 8 messaging platforms, Agent Blueprint composition, scheduled tasks, backups, and failure diagnosis. Every skill is SSH-first, verifies credentials against the live vendor API before writing anything, and rolls back cleanly on failure.",
     "developerName": "Paarth",
     "category": "Coding",
     "capabilities": [
@@ -35,7 +36,8 @@
     "defaultPrompt": [
       "Deploy Hermes to my server and wire up Telegram.",
       "Integrate Notion, HubSpot, and Salesforce into my Hermes agent.",
-      "Something's wrong with my Hermes gateway."
+      "Something's wrong with my Hermes gateway.",
+      "Design a reviewable SaaS Founder agent blueprint."
     ],
     "websiteURL": "https://github.com/paarths-collab/hstack",
     "privacyPolicyURL": "https://github.com/paarths-collab/hstack/blob/main/SECURITY.md",
