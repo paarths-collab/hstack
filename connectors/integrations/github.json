@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "github",
+  "name": "GitHub",
+  "summary": "Read the repository activity you choose for a recipe.",
+  "category": "engineering",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-github",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "GitHub connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to only the repositories you select.",
+    "customer_action": "In your own setup, connect GitHub and choose only the repositories this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose only the GitHub repositories that matter for this recipe.",
+    "steps": [
+      "Pick the GitHub organization and repositories you want summarized.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review the first test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief summarizes only the repositories you selected and cannot change them.",
+    "steps": [
+      "Confirm the selected repositories appear in the plan.",
+      "Run one approved test brief.",
+      "Confirm no repository changes were made."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the GitHub connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's GitHub connection in your own runtime.",
+      "Leave unrelated recipes and GitHub connections unchanged."
+    ]
+  }
+}

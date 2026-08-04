@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "telegram",
+  "name": "Telegram",
+  "summary": "Deliver an approved recipe result to the Telegram chat you choose.",
+  "category": "delivery",
+  "role": "delivery",
+  "capabilities": ["delivery"],
+  "skill": "platform-telegram",
+  "optional": true,
+  "access": "delivery",
+  "approval_required": true,
+  "permission": {
+    "default": "approval_required",
+    "external_messages": "approval_required",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Telegram delivery approved in your own Hermes setup",
+    "recommended_scope": "Deliver only to the Telegram chat you select, after your approval.",
+    "customer_action": "In your own setup, connect Telegram, choose the destination chat, and approve the first test delivery."
+  },
+  "customer_setup": {
+    "summary": "Choose one Telegram chat where you want to receive this recipe's result.",
+    "steps": [
+      "Pick the Telegram chat that should receive the result.",
+      "Connect Telegram inside your own Hermes setup and review the destination.",
+      "Approve one test delivery before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "One approved test result reaches only the Telegram chat you selected.",
+    "steps": [
+      "Confirm the selected Telegram chat appears in the plan.",
+      "Approve and send one test result.",
+      "Confirm it did not reach any other chat."
+    ]
+  },
+  "rollback": {
+    "scope": "Only Telegram delivery for this selected recipe.",
+    "steps": [
+      "Pause this recipe's delivery schedule.",
+      "Remove only this recipe's Telegram destination in your own runtime.",
+      "Leave unrelated recipes and Telegram destinations unchanged."
+    ]
+  }
+}

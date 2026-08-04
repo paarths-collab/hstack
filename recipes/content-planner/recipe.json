@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-recipe",
+  "id": "content-planner",
+  "name": "Content Planner",
+  "summary": "A proposed content brief based on selected ideas and product work.",
+  "outcome": "Turn selected notes and updates into reviewable content ideas; never publish automatically.",
+  "status": {
+    "level": "labs",
+    "evidence": "Concept metadata only. No live runtime or customer validation is claimed."
+  },
+  "availability": {
+    "preview_available": true,
+    "live_deployment": "not_available_yet"
+  },
+  "connector_options": {
+    "sources": { "selection": "optional_individual", "ids": ["notion", "github", "linear", "posthog"] },
+    "deliveries": { "selection": "optional_individual", "ids": ["slack", "telegram", "discord"] }
+  },
+  "permissions": { "default": "read_only", "drafts": "approval_required", "actions": "not_available" },
+  "customer_setup": "Preview the outcome and optional app choices. Connection and deployment guidance will appear only when this recipe is validated.",
+  "verification": "Not available until a live deployment path is validated.",
+  "rollback": "Not applicable because live deployment is not available."
+}

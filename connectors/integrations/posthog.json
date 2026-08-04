@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "posthog",
+  "name": "PostHog",
+  "summary": "Read the product analytics signals you choose for a recipe.",
+  "category": "product",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-posthog",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "PostHog connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to the product analytics you choose to summarize.",
+    "customer_action": "In your own setup, connect PostHog with read-only access and choose the project signals this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose the product signals you want explained in plain language.",
+    "steps": [
+      "Pick the PostHog project and analytics signals that matter.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review one test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief reports only the selected PostHog signals and cannot alter analytics settings or data.",
+    "steps": [
+      "Confirm the selected product signals appear in the plan.",
+      "Run one approved test brief.",
+      "Confirm no PostHog settings or data were changed."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the PostHog connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's PostHog connection in your own runtime.",
+      "Leave unrelated recipes and PostHog connections unchanged."
+    ]
+  }
+}

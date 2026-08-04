@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "stripe",
+  "name": "Stripe",
+  "summary": "Read the billing and subscription signals you choose for a recipe.",
+  "category": "business",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-stripe",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Stripe connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to the billing information you choose to summarize.",
+    "customer_action": "In your own setup, connect Stripe with read-only access and confirm which billing signals this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose the Stripe business signals you want included; this connector cannot edit billing data.",
+    "steps": [
+      "Decide which billing and subscription signals are useful for this recipe.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review one test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief summarizes the selected Stripe signals without creating, changing, or refunding anything.",
+    "steps": [
+      "Confirm the selected billing signals appear in the plan.",
+      "Run one approved test brief.",
+      "Confirm no Stripe records were changed."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the Stripe connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's Stripe connection in your own runtime.",
+      "Leave unrelated recipes and Stripe connections unchanged."
+    ]
+  }
+}

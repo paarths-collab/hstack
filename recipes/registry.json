@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-registry",
+  "description": "Manifest for a Composer to load recipe and connector metadata without hard-coding choices.",
+  "recipes": [
+    {
+      "id": "founder-brief",
+      "path": "founder-brief/recipe.json",
+      "status": "contract_tested"
+    },
+    {
+      "id": "devops-oncall",
+      "path": "devops-oncall/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "chief-of-staff",
+      "path": "chief-of-staff/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "research-scout",
+      "path": "research-scout/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "customer-pulse",
+      "path": "customer-pulse/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "sales-copilot",
+      "path": "sales-copilot/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "content-planner",
+      "path": "content-planner/recipe.json",
+      "status": "labs"
+    },
+    {
+      "id": "startup-operator",
+      "path": "startup-operator/recipe.json",
+      "status": "labs"
+    }
+  ],
+  "connectors": {
+    "sources": [
+      { "id": "github", "path": "../connectors/integrations/github.json" },
+      { "id": "stripe", "path": "../connectors/integrations/stripe.json" },
+      { "id": "posthog", "path": "../connectors/integrations/posthog.json" },
+      { "id": "sentry", "path": "../connectors/integrations/sentry.json" },
+      { "id": "notion", "path": "../connectors/integrations/notion.json" },
+      { "id": "linear", "path": "../connectors/integrations/linear.json" }
+    ],
+    "deliveries": [
+      { "id": "telegram", "path": "../connectors/platforms/telegram.json" },
+      { "id": "slack", "path": "../connectors/platforms/slack.json" },
+      { "id": "discord", "path": "../connectors/platforms/discord.json" }
+    ]
+  },
+  "capability_rules": {
+    "preview": {
+      "minimum_sources": 0,
+      "minimum_deliveries": 0
+    },
+    "live_deployment": {
+      "minimum_sources": 1,
+      "minimum_deliveries": 1,
+      "message": "Choose one source and one delivery destination before creating a live deployment plan."
+    }
+  }
+}

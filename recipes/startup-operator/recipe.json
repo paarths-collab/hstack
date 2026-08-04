@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-recipe",
+  "id": "startup-operator",
+  "name": "Startup Operator",
+  "summary": "A proposed cross-functional operating brief for a small company.",
+  "outcome": "Review the selected business, product, and execution signals in one place.",
+  "status": {
+    "level": "labs",
+    "evidence": "Concept metadata only. No live runtime or customer validation is claimed."
+  },
+  "availability": {
+    "preview_available": true,
+    "live_deployment": "not_available_yet"
+  },
+  "connector_options": {
+    "sources": { "selection": "optional_individual", "ids": ["github", "stripe", "posthog", "sentry", "notion", "linear"] },
+    "deliveries": { "selection": "optional_individual", "ids": ["telegram", "slack", "discord"] }
+  },
+  "permissions": { "default": "read_only", "drafts": "approval_required", "actions": "not_available" },
+  "customer_setup": "Preview the outcome and optional app choices. Connection and deployment guidance will appear only when this recipe is validated.",
+  "verification": "Not available until a live deployment path is validated.",
+  "rollback": "Not applicable because live deployment is not available."
+}

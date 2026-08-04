@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "notion",
+  "name": "Notion",
+  "summary": "Read the workspace pages and databases you choose for a recipe.",
+  "category": "knowledge",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-notion",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Notion connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to only the pages and databases you select.",
+    "customer_action": "In your own setup, connect Notion with read-only access and share only the pages and databases this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose only the Notion pages and databases that should inform this recipe.",
+    "steps": [
+      "Select the workspace pages and databases you want summarized.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review one test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief summarizes only the selected Notion content and cannot edit, create, or share pages.",
+    "steps": [
+      "Confirm the selected Notion content appears in the plan.",
+      "Run one approved test brief.",
+      "Confirm no Notion page or database was changed."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the Notion connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's Notion connection in your own runtime.",
+      "Leave unrelated recipes and Notion connections unchanged."
+    ]
+  }
+}
