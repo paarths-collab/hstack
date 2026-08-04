@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-recipe",
+  "id": "founder-brief",
+  "name": "Founder Brief",
+  "summary": "A calm daily picture of the signals a founder chooses to watch.",
+  "outcome": "Receive one read-only summary of selected business and product signals at a chosen time.",
+  "status": {
+    "level": "contract_tested",
+    "evidence": "Every listed connector maps to an existing hstack skill. This is not yet a customer-pilot or paid-use claim."
+  },
+  "deployment": {
+    "runtime": "hermes",
+    "runtime_status": "contract_tested",
+    "source_blueprint": "blueprints/saas-founder.hstack-blueprint.json",
+    "preview_available": true,
+    "live_deployment_rule": "Select at least one source and at least one delivery destination."
+  },
+  "connector_rules": {
+    "sources": {
+      "selection": "optional_individual",
+      "ids": [
+        "github",
+        "stripe",
+        "posthog",
+        "sentry",
+        "notion",
+        "linear"
+      ],
+      "minimum_for_preview": 0,
+      "minimum_for_live_deployment": 1
+    },
+    "deliveries": {
+      "selection": "optional_individual",
+      "ids": [
+        "telegram",
+        "slack",
+        "discord"
+      ],
+      "minimum_for_preview": 0,
+      "minimum_for_live_deployment": 1
+    },
+    "invalid_live_deployment_message": "Choose one place to read from and one place to receive the brief before continuing."
+  },
+  "defaults": {
+    "cadence": "daily at a customer-chosen time",
+    "permission_mode": "read_only",
+    "preview_mode": "show the proposed brief structure without connecting an app"
+  },
+  "permissions": {
+    "read": "read_only",
+    "draft": "approval_required",
+    "actions": "not_available"
+  },
+  "skills": {
+    "always": [
+      "hermes-home",
+      "hermes-cron"
+    ],
+    "by_connector": {
+      "github": "integration-github",
+      "stripe": "integration-stripe",
+      "posthog": "integration-posthog",
+      "sentry": "integration-sentry",
+      "notion": "integration-notion",
+      "linear": "integration-linear",
+      "telegram": "platform-telegram",
+      "slack": "platform-slack",
+      "discord": "platform-discord"
+    }
+  },
+  "customer_setup": {
+    "summary": "Pick only the apps that matter, authorize read-only access in your own deployment, then choose where the brief should arrive.",
+    "secret_handling": "Keep all credentials in the customer-owned runtime. Agent Recipes never asks for secret values."
+  },
+  "verification": {
+    "preview": "Confirm that the selected sources and destination appear in the plain-language plan.",
+    "live_deployment": "Send one test brief to the selected destination and confirm that it contains only the selected source summaries."
+  },
+  "rollback": {
+    "scope": "selected recipe and selected connectors only",
+    "steps": [
+      "Pause the Founder Brief schedule.",
+      "Disconnect any selected source or delivery connector individually.",
+      "Keep unrelated recipes and connectors unchanged."
+    ]
+  }
+}

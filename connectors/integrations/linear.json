@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "linear",
+  "name": "Linear",
+  "summary": "Read the project and issue signals you choose for a recipe.",
+  "category": "product",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-linear",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Linear connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to the Linear teams and projects you choose to summarize.",
+    "customer_action": "In your own setup, connect Linear with read-only access and choose the teams or projects this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose the Linear work you want this recipe to summarize without changing it.",
+    "steps": [
+      "Pick the Linear teams or projects that matter.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review one test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief summarizes only the selected Linear work and cannot create, edit, or close issues.",
+    "steps": [
+      "Confirm the selected Linear teams or projects appear in the plan.",
+      "Run one approved test brief.",
+      "Confirm no Linear issue was changed."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the Linear connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's Linear connection in your own runtime.",
+      "Leave unrelated recipes and Linear connections unchanged."
+    ]
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "sentry",
+  "name": "Sentry",
+  "summary": "Read the error and reliability signals you choose for a recipe.",
+  "category": "engineering",
+  "role": "source",
+  "capabilities": ["source"],
+  "skill": "integration-sentry",
+  "optional": true,
+  "access": "read_only",
+  "permission": {
+    "default": "read_only",
+    "external_messages": "not_available",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Sentry connection approved in your own Hermes setup",
+    "recommended_scope": "Read-only access to the Sentry projects and issues you choose to summarize.",
+    "customer_action": "In your own setup, connect Sentry with read-only access and choose the projects this recipe may read."
+  },
+  "customer_setup": {
+    "summary": "Choose the Sentry projects whose reliability signals you want in the recipe.",
+    "steps": [
+      "Pick the Sentry projects and issue signals that matter.",
+      "Approve read-only access inside your own Hermes setup.",
+      "Review one test summary before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "A test brief reports only the selected Sentry signals and cannot resolve, mute, or edit any issue.",
+    "steps": [
+      "Confirm the selected Sentry projects appear in the plan.",
+      "Run one approved test brief.",
+      "Confirm no Sentry issue was changed."
+    ]
+  },
+  "rollback": {
+    "scope": "Only the Sentry connection for this selected recipe.",
+    "steps": [
+      "Pause this recipe before changing its connection.",
+      "Remove only this recipe's Sentry connection in your own runtime.",
+      "Leave unrelated recipes and Sentry connections unchanged."
+    ]
+  }
+}

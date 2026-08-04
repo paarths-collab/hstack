@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-connector",
+  "id": "discord",
+  "name": "Discord",
+  "summary": "Deliver an approved recipe result to the Discord channel you choose.",
+  "category": "delivery",
+  "role": "delivery",
+  "capabilities": ["delivery"],
+  "skill": "platform-discord",
+  "optional": true,
+  "access": "delivery",
+  "approval_required": true,
+  "permission": {
+    "default": "approval_required",
+    "external_messages": "approval_required",
+    "writes": "not_available"
+  },
+  "status": "contract_tested",
+  "runtime": {
+    "supported": ["hermes"],
+    "status": "contract_tested"
+  },
+  "supported_recipes": ["founder-brief"],
+  "setup": {
+    "credential_label": "Discord delivery approved in your own Hermes setup",
+    "recommended_scope": "Deliver only to the Discord channel you select, after your approval.",
+    "customer_action": "In your own setup, connect Discord, choose the destination channel, and approve the first test delivery."
+  },
+  "customer_setup": {
+    "summary": "Choose one Discord channel where you want to receive this recipe's result.",
+    "steps": [
+      "Pick the Discord channel that should receive the result.",
+      "Connect Discord inside your own Hermes setup and review the destination.",
+      "Approve one test delivery before enabling a schedule."
+    ],
+    "secret_handling": "Agent Recipes never asks for, displays, stores, or logs connection secrets. Complete authorization only in your customer-owned runtime."
+  },
+  "verification": {
+    "success_looks_like": "One approved test result reaches only the Discord channel you selected.",
+    "steps": [
+      "Confirm the selected Discord channel appears in the plan.",
+      "Approve and send one test result.",
+      "Confirm it did not reach any other channel."
+    ]
+  },
+  "rollback": {
+    "scope": "Only Discord delivery for this selected recipe.",
+    "steps": [
+      "Pause this recipe's delivery schedule.",
+      "Remove only this recipe's Discord destination in your own runtime.",
+      "Leave unrelated recipes and Discord destinations unchanged."
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "agent-recipes-recipe",
+  "id": "sales-copilot",
+  "name": "Sales Copilot",
+  "summary": "A proposed account-context and follow-up drafting assistant.",
+  "outcome": "Review selected account and work signals, then prepare drafts for a human to approve.",
+  "status": {
+    "level": "labs",
+    "evidence": "Concept metadata only. No live runtime or customer validation is claimed."
+  },
+  "availability": {
+    "preview_available": true,
+    "live_deployment": "not_available_yet"
+  },
+  "connector_options": {
+    "sources": { "selection": "optional_individual", "ids": ["stripe", "notion", "linear", "github"] },
+    "deliveries": { "selection": "optional_individual", "ids": ["slack", "telegram", "discord"] }
+  },
+  "permissions": { "default": "read_only", "drafts": "approval_required", "actions": "not_available" },
+  "customer_setup": "Preview the outcome and optional app choices. Connection and deployment guidance will appear only when this recipe is validated.",
+  "verification": "Not available until a live deployment path is validated.",
+  "rollback": "Not applicable because live deployment is not available."
+}
