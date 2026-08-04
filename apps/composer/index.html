@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Agent Recipes helps curious teams compose a safe, read-only Founder Brief without exposing credentials."
+    />
+    <title>Agent Recipes — Founder Brief</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#builder">Skip to the recipe builder</a>
+
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="Agent Recipes home">
+        <span class="brand-mark" aria-hidden="true">AR</span>
+        <span>Agent Recipes</span>
+      </a>
+      <p class="header-note">A practical recipe for your first useful agent.</p>
+      <span class="version-stamp">Founder Brief / 01</span>
+    </header>
+
+    <main id="top" class="page-shell">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-kicker"><span aria-hidden="true">✦</span> The calm way to start</div>
+        <h1 id="page-title">Build a daily brief<br /><em>you can understand.</em></h1>
+        <p class="hero-copy">
+          Choose the tools you already use. We turn your choices into a reviewable,
+          read-only agent plan—without asking for passwords or API keys here.
+        </p>
+        <div class="promise-row" aria-label="Safety promises">
+          <span>Read-only first</span>
+          <span>Nothing connects yet</span>
+          <span>You stay in control</span>
+        </div>
+      </section>
+
+      <div class="workspace">
+        <form id="builder" class="builder-sheet" novalidate aria-describedby="builder-help">
+          <div class="sheet-heading">
+            <div>
+              <p class="eyebrow">Your recipe</p>
+              <h2>Founder Brief</h2>
+              <p id="builder-help">Pick only what is useful. Every app below is optional.</p>
+            </div>
+            <span id="readiness-badge" class="readiness-badge is-preview">Preview ready</span>
+          </div>
+
+          <section class="recipe-purpose" aria-labelledby="purpose-title">
+            <span class="step-number" aria-hidden="true">01</span>
+            <div>
+              <h3 id="purpose-title">What it will do</h3>
+              <p>
+                Collect the highlights you choose and prepare a short founder-friendly brief.
+                It starts in read-only mode, so it never changes your tools on its own.
+              </p>
+            </div>
+          </section>
+
+          <fieldset class="choice-section">
+            <legend>
+              <span class="step-number" aria-hidden="true">02</span>
+              <span>
+                <strong>Choose information sources</strong>
+                <small>Optional. Pick one or several—or make a preview with none.</small>
+              </span>
+            </legend>
+            <div id="source-options" class="choice-grid" aria-label="Optional information sources"></div>
+          </fieldset>
+
+          <fieldset class="choice-section delivery-section">
+            <legend>
+              <span class="step-number" aria-hidden="true">03</span>
+              <span>
+                <strong>Choose where the brief arrives</strong>
+                <small>Optional for preview. Choose a destination when you are ready to deploy.</small>
+              </span>
+            </legend>
+            <div id="delivery-options" class="choice-grid delivery-grid" aria-label="Optional delivery destinations"></div>
+          </fieldset>
+
+          <fieldset id="cadence-fieldset" class="choice-section cadence-section" disabled>
+            <legend>
+              <span class="step-number" aria-hidden="true">04</span>
+              <span>
+                <strong>Choose a rhythm</strong>
+                <small id="cadence-help">Choose a delivery destination to set a schedule.</small>
+              </span>
+            </legend>
+            <div class="cadence-control">
+              <label for="cadence">Send the brief</label>
+              <select id="cadence" name="cadence" disabled aria-describedby="cadence-help">
+                <option value="manual">Only when I ask</option>
+                <option value="weekdays">Every weekday morning</option>
+                <option value="weekly">Once a week</option>
+              </select>
+            </div>
+          </fieldset>
+
+          <fieldset class="choice-section installation-section">
+            <legend>
+              <span class="step-number" aria-hidden="true">05</span>
+              <span>
+                <strong>How should setup begin?</strong>
+                <small>You can change this later. It only affects the handoff plan.</small>
+              </span>
+            </legend>
+            <div class="radio-options">
+              <label class="radio-card">
+                <input type="radio" name="installation" value="existing_agent" checked />
+                <span>
+                  <strong>I already have an agent</strong>
+                  <small>Use my existing Hermes agent when I run the setup plan.</small>
+                </span>
+              </label>
+              <label class="radio-card">
+                <input type="radio" name="installation" value="deploy_if_missing" />
+                <span>
+                  <strong>Help me set one up</strong>
+                  <small>Include a plain-language deployment checklist in my handoff.</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <section class="safety-note" aria-label="Your privacy">
+            <span class="safety-symbol" aria-hidden="true">⌁</span>
+            <p><strong>Your access stays yours.</strong> This builder never asks for, saves, or displays passwords, API keys, or SSH credentials.</p>
+          </section>
+
+          <div class="action-bar">
+            <button id="preview-button" class="button button-primary" type="button">
+              Preview my plan
+            </button>
+            <button id="download-button" class="button button-secondary" type="button" disabled aria-describedby="deploy-help">
+              Download recipe
+            </button>
+            <button id="copy-button" class="button button-quiet" type="button" disabled aria-describedby="deploy-help">
+              Copy setup prompt
+            </button>
+          </div>
+          <p id="deploy-help" class="action-help" aria-live="polite">
+            Add at least one source and one destination to unlock a deployment plan.
+          </p>
+        </form>
+
+        <aside id="plan-panel" class="plan-sheet" aria-labelledby="plan-title" aria-live="polite">
+          <div class="plan-heading">
+            <div>
+              <p class="eyebrow">Plan review</p>
+              <h2 id="plan-title">A safe first step</h2>
+            </div>
+            <span id="plan-state" class="plan-state">Preview</span>
+          </div>
+
+          <div id="plan-overview" class="plan-overview">
+            <p class="plan-lede">Choose your sources and destination, then preview the exact plan before anything is set up.</p>
+          </div>
+
+          <section class="review-section" aria-labelledby="review-title">
+            <h3 id="review-title">Plain-English review</h3>
+            <ul id="review-list" class="review-list">
+              <li>It will only read the information sources you choose.</li>
+              <li>Nothing is connected, sent, or changed while you preview.</li>
+              <li>You will review access in your own environment before any live setup.</li>
+            </ul>
+          </section>
+
+          <section class="review-section compact-review" aria-labelledby="verify-title">
+            <h3 id="verify-title">How you will know it works</h3>
+            <ul id="verification-list" class="review-list">
+              <li>Run one test brief and check that the summary arrives where you chose.</li>
+            </ul>
+          </section>
+
+          <section class="review-section compact-review" aria-labelledby="pause-title">
+            <h3 id="pause-title">How to pause or remove it</h3>
+            <ul id="rollback-list" class="review-list">
+              <li>Disable the recipe in your agent, then remove any access you no longer want it to have.</li>
+            </ul>
+          </section>
+
+          <details class="technical-details">
+            <summary>Technical details for someone helping me</summary>
+            <p>Generated setup details appear here only after you preview. They never include secrets.</p>
+            <pre id="technical-output" tabindex="0">No technical plan has been generated yet.</pre>
+          </details>
+        </aside>
+      </div>
+
+      <section id="recipe-menu" class="recipe-menu" aria-labelledby="recipe-menu-title">
+        <div>
+          <p class="eyebrow">The cookbook</p>
+          <h2 id="recipe-menu-title">More recipes are being tested carefully.</h2>
+        </div>
+        <p>Only recipes with an honest status belong here. Founder Brief is the first complete path.</p>
+        <div id="recipe-statuses" class="recipe-statuses" aria-label="Other recipe statuses"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
