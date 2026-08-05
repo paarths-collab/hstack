@@ -1,11 +1,11 @@
 {
   "repo": "paarths-collab/agent-recipes",
   "note": "Daily GitHub clone traffic, persisted past GitHub's 14-day window. Populated by .github/workflows/clone-traffic.yml. 'unique_cloners_approx' sums per-day unique cloners — the headline 'how many people ran the install command' proxy.",
-  "updated": "2026-08-04T09:07:12.508Z",
+  "updated": "2026-08-05T09:05:07.591Z",
   "totals": {
-    "days": 77,
-    "clones": 2597,
-    "unique_cloners_approx": 872
+    "days": 78,
+    "clones": 2634,
+    "unique_cloners_approx": 891
   },
   "days": {
     "2026-05-19": {
@@ -315,6 +315,10 @@
     "2026-08-03": {
       "count": 5,
       "uniques": 5
+    },
+    "2026-08-04": {
+      "count": 37,
+      "uniques": 19
     }
   }
 }
