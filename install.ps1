@@ -39,7 +39,7 @@ if ($Help) {
 $ErrorActionPreference = "Stop"
 
 $RepoUrl     = if ($env:HSTACK_REPO_URL)     { $env:HSTACK_REPO_URL }     else { "https://github.com/paarths-collab/hstack.git" }
-$InstallDir  = if ($env:HSTACK_INSTALL_DIR)  { $env:HSTACK_INSTALL_DIR }  else { "$HOME\.hstack" }
+$InstallDir  = if ($env:HSTACK_INSTALL_DIR)  { $env:HSTACK_INSTALL_DIR }  else { (Join-Path $HOME ".hstack") }
 if ($env:HSTACK_BRANCH) { $Branch = $env:HSTACK_BRANCH }
 
 # Tier → integration mapping
@@ -76,6 +76,579 @@ function Write-WarnX { param($m) Write-Host "! $m" -ForegroundColor Yellow }
 function Write-Die   { param($m) Write-Host "✗ $m" -ForegroundColor Red; exit 1 }
 function Write-Head  { param($m) Write-Host ""; Write-Host $m -ForegroundColor White }
 
+# >>> hstack-ownership (this block is identical in install.ps1 and setup.ps1, and mirrors the
+# >>> bash block in install.sh / setup*; it is duplicated because install.ps1 may be run via iex)
+#
+# Rule: hstack replaces only what hstack itself installed. Anything else found at a
+# destination (a user's own skill dir, rule file or foreign link) is moved aside to
+# "<dst>.hstack-backup-<yyyyMMddHHmmss>" (-N on collision) and never deleted.
+#   owned link : target resolves inside a hstack skills tree ($script:HstackRoots) or any
+#                hstack checkout (symlinks and junctions both count); a dangling link whose
+#                target path ends in /skills/<same name> counts too
+#   owned dir  : identical to the source being installed (the .hstack-managed marker is
+#                ignored), or an unedited copy hstack made earlier (the marker records a
+#                digest of what was installed). A user-edited marked copy is NOT owned.
+#   owned file : its single "<!-- hstack-managed sig=sha256:... -->" line matches a digest of
+#                the rest of the file (unedited), or the rest equals what hstack would write
+#                now. A user-edited marked file is NOT owned, and a look-alike marker line the
+#                user typed is just content. Unmarked files only count when identical to
+#                an older installer's output.
+# Skill-directory backups go to a sibling dir outside the scan path:
+#   <skills-parent>\.hstack-backups\<stamp>[-N]\<name>
+# File backups stay adjacent: <file>.hstack-backup-<stamp>[-N]. The warning prints the path.
+# Safety: a destination that resolves into the hstack source tree (or whose parent does) is
+# never cleared or written: the install is refused for it with a warning.
+# If moving an entry aside fails (backup dir unwritable, path occupied, ...) the entry is
+# left exactly as it was, NOTHING is written over it, and the run exits non-zero
+# ($script:HstackFailures).
+# The caller sets $script:HstackRoots (absolute skills dirs) and $script:HstackSourceTree
+# (absolute checkout root) before installing.
+
+$HstackMarker = '.hstack-managed'
+$HstackStamp = if ($env:HS_STAMP) { $env:HS_STAMP } else { Get-Date -Format 'yyyyMMddHHmmss' }
+$script:HstackRoots = @()
+$script:HstackSourceTree = ''
+
+function Get-HstackItem {
+    param([string]$Path)
+    return (Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue)
+}
+
+# Absolute path relative to the current location (call BEFORE any Set-Location).
+function Resolve-HstackAbs {
+    param([string]$Path)
+    if (-not $Path) { return $Path }
+    if (-not [IO.Path]::IsPathRooted($Path)) { $Path = Join-Path (Get-Location).ProviderPath $Path }
+    return [IO.Path]::GetFullPath($Path)
+}
+
+function Test-HstackExists {
+    param([string]$Path)
+    if ($null -ne (Get-HstackItem $Path)) { return $true }
+    return ([IO.File]::Exists($Path) -or [IO.Directory]::Exists($Path))
+}
+
+function Test-HstackLink {
+    param([string]$Path)
+    $item = Get-HstackItem $Path
+    if ($null -eq $item) { return $false }
+    return (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+}
+
+# One hop of a link: absolute target path, or $null.
+function Get-HstackLinkTarget {
+    param([string]$Path)
+    $item = Get-HstackItem $Path
+    if ($null -eq $item) { return $null }
+    $t = $item.Target
+    if ($t -is [array]) { $t = $t[0] }
+    if (-not $t) { return $null }
+    $t = [string]$t
+    if ($t.StartsWith('\??\')) { $t = $t.Substring(4) }
+    if (-not [IO.Path]::IsPathRooted($t)) { $t = Join-Path (Split-Path -Parent $Path) $t }
+    return [IO.Path]::GetFullPath($t)
+}
+
+# Follow a link chain to its final path (bounded).
+function Resolve-HstackLink {
+    param([string]$Path)
+    $p = $Path
+    $n = 0
+    while ((Test-HstackLink $p) -and $n -lt 20) {
+        $t = Get-HstackLinkTarget $p
+        if (-not $t) { break }
+        $p = $t
+        $n++
+    }
+    return [IO.Path]::GetFullPath($p)
+}
+
+function Split-HstackPath {
+    param([string]$Path)
+    $seps = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    return @($Path.Split($seps) | Where-Object { $_ })
+}
+
+# Physical path: every symlinked/junctioned component (not just the last) is resolved.
+function Resolve-HstackPhysical {
+    param([string]$Path)
+    $full = [IO.Path]::GetFullPath($Path)
+    $cur = [IO.Path]::GetPathRoot($full)
+    $queue = New-Object System.Collections.Generic.List[string]
+    foreach ($c in (Split-HstackPath $full.Substring($cur.Length))) { $queue.Add($c) }
+    $i = 0
+    $hops = 0
+    while ($i -lt $queue.Count) {
+        $cand = Join-Path $cur $queue[$i]
+        $t = $null
+        if ($hops -lt 40 -and (Test-HstackLink $cand)) { $t = Get-HstackLinkTarget $cand }
+        if ($t) {
+            $hops++
+            $troot = [IO.Path]::GetPathRoot($t)
+            $next = New-Object System.Collections.Generic.List[string]
+            foreach ($c in (Split-HstackPath $t.Substring($troot.Length))) { $next.Add($c) }
+            for ($j = $i + 1; $j -lt $queue.Count; $j++) { $next.Add($queue[$j]) }
+            $queue = $next
+            $cur = $troot
+            $i = 0
+        } else {
+            $cur = $cand
+            $i++
+        }
+    }
+    return $cur
+}
+
+function Test-HstackSameOrUnder {
+    param([string]$Path, [string]$Root)
+    $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $r = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $p = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    if ($p.Equals($r, $cmp)) { return $true }
+    return $p.StartsWith($r + [IO.Path]::DirectorySeparatorChar, $cmp)
+}
+
+# True when $Dst is, or sits inside, the hstack source tree once symlinks/junctions in its
+# parent chain are resolved. Such a destination must never be cleared or written.
+function Test-HstackDstInSource {
+    param([string]$Dst)
+    $parentPhys = Resolve-HstackPhysical (Split-Path -Parent $Dst)
+    $dstPhys = Join-Path $parentPhys (Split-Path -Leaf $Dst)
+    foreach ($r in (@($script:HstackSourceTree) + @($script:HstackRoots))) {
+        if (-not $r) { continue }
+        if (Test-HstackSameOrUnder $dstPhys (Resolve-HstackPhysical $r)) { return $true }
+    }
+    return $false
+}
+
+# Warn once and return $false when the whole target dir resolves into the source tree.
+function Test-HstackTargetOk {
+    param([string]$Target)
+    if (Test-HstackDstInSource (Join-Path $Target '_')) {
+        Write-Warning "Refusing to install into ${Target}: it resolves into the hstack source tree. Nothing was changed there."
+        return $false
+    }
+    return $true
+}
+
+function Test-HstackUnder {
+    param([string]$Path, [string]$Root)
+    $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $r = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+    $p = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    return $p.StartsWith($r + [IO.Path]::DirectorySeparatorChar, $cmp)
+}
+
+function Test-HstackOurLink {
+    param([string]$Path)
+    $t = Resolve-HstackLink $Path
+    foreach ($root in $script:HstackRoots) {
+        if ($root -and (Test-HstackUnder $t $root)) { return $true }
+    }
+    if (-not ([IO.File]::Exists($t) -or [IO.Directory]::Exists($t))) {
+        # dangling: it was ours if it ends in /skills/<this name> (or /skills/<name>/SKILL.md for a .md link)
+        $cmp = if ([IO.Path]::DirectorySeparatorChar -eq '\') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+        $norm = $t.Replace('\', '/')
+        $leaf = Split-Path -Leaf $Path
+        if ($norm.EndsWith('/skills/' + $leaf, $cmp)) { return $true }
+        if ($leaf.EndsWith('.md') -and $norm.EndsWith('/skills/' + $leaf.Substring(0, $leaf.Length - 3) + '/SKILL.md', $cmp)) { return $true }
+        return $false
+    }
+    if ($t.EndsWith('SKILL.md')) { $t = Split-Path -Parent $t }
+    $top = Split-Path -Parent (Split-Path -Parent $t)
+    if (-not $top) { return $false }
+    return ([IO.File]::Exists((Join-Path $top 'install.sh')) -and [IO.File]::Exists((Join-Path $top 'setup-all')) -and [IO.File]::Exists((Join-Path $t 'SKILL.md')))
+}
+
+# Directory signature: one line per entry, sorted ordinally. Files carry their SHA-256,
+# empty directories and links are listed too (links with their link text, never followed).
+# Only the top-level .hstack-managed marker is excluded.
+function Add-HstackTreeEntries {
+    param([string]$Root, [string]$Rel, $Out)
+    $dirPath = $Root
+    if ($Rel) { $dirPath = Join-Path $Root $Rel }
+    $di = New-Object System.IO.DirectoryInfo($dirPath)
+    foreach ($e in $di.EnumerateFileSystemInfos()) {
+        $r = $e.Name
+        if ($Rel) { $r = $Rel + '/' + $e.Name }
+        $isDir = (($e.Attributes -band [IO.FileAttributes]::Directory) -ne 0)
+        if ((-not $Rel) -and (-not $isDir) -and ($e.Name -ceq $HstackMarker)) { continue }
+        if (($e.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            $item = Get-HstackItem $e.FullName
+            $t = ''
+            if ($null -ne $item -and $item.Target) { $t = (@($item.Target) -join '|') }
+            $Out.Add("L $r -> $t")
+        } elseif ($isDir) {
+            $Out.Add("D $r")
+            Add-HstackTreeEntries $Root $r $Out
+        } else {
+            $Out.Add("F $r " + (Get-HstackBytesSig ([IO.File]::ReadAllBytes($e.FullName))))
+        }
+    }
+}
+
+function Get-HstackTreeDigest {
+    param([string]$Path)
+    $out = New-Object System.Collections.Generic.List[string]
+    Add-HstackTreeEntries ([IO.Path]::GetFullPath($Path)) "" $out
+    $arr = $out.ToArray()
+    [Array]::Sort($arr, [StringComparer]::Ordinal)
+    return ($arr -join "`n")
+}
+
+# "sha256:<lowercase hex>" of bytes (the same spelling the bash installer uses).
+function Get-HstackBytesSig {
+    param([byte[]]$Bytes)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { return ('sha256:' + ([BitConverter]::ToString($sha.ComputeHash($Bytes)).Replace('-', '').ToLowerInvariant())) }
+    finally { $sha.Dispose() }
+}
+
+function Get-HstackTextHash {
+    param([string]$Text)
+    return (Get-HstackBytesSig ([Text.Encoding]::UTF8.GetBytes($Text)))
+}
+
+# Marker for a copied skill dir; records a digest of the content hstack installed so an
+# unedited older copy is still recognised after the source moves on.
+function Write-HstackMarker {
+    param([string]$Dir)
+    [IO.File]::WriteAllText((Join-Path $Dir $HstackMarker), (Get-HstackTextHash (Get-HstackTreeDigest $Dir)))
+}
+
+# Generated-file marker: "<!-- hstack-managed sig=sha256:<hex of the rest of the file> -->".
+# Only ONE line of exactly this shape is ever recognised; a user's own
+# "<!-- hstack-managed my note -->" line is ordinary content and counts as an edit.
+$HstackLatin1 = [Text.Encoding]::GetEncoding(28591)
+$HstackMarkerRx = '^<!-- hstack-managed sig=(sha256:[0-9a-f]{64}) -->$'
+
+function Get-HstackMarkerLine {
+    param([string]$PlainLatin1)
+    return ('<!-- hstack-managed sig=' + (Get-HstackBytesSig ($HstackLatin1.GetBytes($PlainLatin1))) + ' -->')
+}
+
+# Split a file's Latin-1 view into the recorded sig and the text without that one marker line.
+function Split-HstackMarker {
+    param([string]$Latin1Text)
+    $lines = $Latin1Text.Split([char]10)
+    for ($i = 0; $i -lt $lines.Length; $i++) {
+        if ($lines[$i] -cmatch $HstackMarkerRx) {
+            $rest = New-Object System.Collections.Generic.List[string]
+            for ($j = 0; $j -lt $lines.Length; $j++) { if ($j -ne $i) { $rest.Add($lines[$j]) } }
+            return @{ Sig = $Matches[1]; Rest = ($rest.ToArray() -join "`n") }
+        }
+    }
+    return $null
+}
+
+# Text with BOM stripped, LF line endings, trailing space trimmed: only used to recognise
+# UNMARKED pre-marker copies written by older installers (which could carry BOM/CRLF).
+function ConvertTo-HstackNormalText {
+    param([string]$Text)
+    return (($Text.TrimStart([char]0xFEFF) -replace "`r`n", "`n").TrimEnd())
+}
+
+# Is $Dst something hstack installed AND still unmodified? $RefDir / $RefFile / $RefText
+# describe what hstack would install there. A marker alone never makes an entry owned.
+function Test-HstackOwned {
+    param([string]$Dst, [string]$RefDir = '', [string]$RefFile = '', [string[]]$RefText = @())
+    if (Test-HstackLink $Dst) { return (Test-HstackOurLink $Dst) }
+    if ([IO.Directory]::Exists($Dst)) {
+        $dstDigest = Get-HstackTreeDigest $Dst
+        if ($RefDir -and [IO.Directory]::Exists($RefDir) -and ((Get-HstackTreeDigest $RefDir) -ceq $dstDigest)) { return $true }
+        $mk = Join-Path $Dst $HstackMarker
+        if ([IO.File]::Exists($mk)) {
+            $rec = [IO.File]::ReadAllText($mk).Trim()
+            if ($rec -match '^sha256:[0-9a-fA-F]{64}$') { return ($rec -ieq (Get-HstackTextHash $dstDigest)) }
+        }
+        return $false
+    }
+    if ([IO.File]::Exists($Dst)) {
+        try { $latin = $HstackLatin1.GetString([IO.File]::ReadAllBytes($Dst)) } catch { return $false }
+        # what hstack would write now, as Latin-1 views of the exact bytes
+        $refs = New-Object System.Collections.Generic.List[string]
+        if ($RefFile -and [IO.File]::Exists($RefFile)) {
+            $rf = $HstackLatin1.GetString([IO.File]::ReadAllBytes($RefFile))
+            $refs.Add($rf)
+            $refs.Add($rf + "`n")
+        }
+        foreach ($t in @($RefText)) { if ($t) { $refs.Add($HstackLatin1.GetString([Text.Encoding]::UTF8.GetBytes($t))) } }
+        $split = Split-HstackMarker $latin
+        if ($null -ne $split) {
+            # marked: unedited when the rest still hashes to the recorded sig, or equals the current source
+            if ((Get-HstackBytesSig ($HstackLatin1.GetBytes($split.Rest))) -ceq $split.Sig) { return $true }
+            foreach ($rf in $refs) { if ($split.Rest -ceq $rf) { return $true } }
+            return $false
+        }
+        # unmarked: only an older installer's untouched copy (BOM / CRLF / trailing space tolerated)
+        $have = ConvertTo-HstackNormalText $latin
+        foreach ($rf in $refs) { if ($have -ceq (ConvertTo-HstackNormalText $rf)) { return $true } }
+        return $false
+    }
+    return $false
+}
+
+# Remove an hstack-owned entry. Links are unlinked only; their target is never touched.
+function Remove-HstackEntry {
+    param([string]$Path)
+    if (Test-HstackLink $Path) {
+        $item = Get-HstackItem $Path
+        if ($item.PSIsContainer) { [IO.Directory]::Delete($Path) } else { [IO.File]::Delete($Path) }
+    } else {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+    }
+}
+
+# Failures make the whole run exit non-zero; the affected entry is always left untouched.
+$script:HstackFailures = 0
+$script:HstackLastBackup = $null
+function Add-HstackFailure { $script:HstackFailures++ }
+
+# An unused "<path>.hstack-backup-<stamp>[-n]" name (files: stays next to the original).
+function Get-HstackBackupPath {
+    param([string]$Path)
+    $bak = "$Path.hstack-backup-$HstackStamp"
+    $n = 1
+    while (Test-HstackExists $bak) { $bak = "$Path.hstack-backup-$HstackStamp-$n"; $n++ }
+    return $bak
+}
+
+# Skill-dir backup: <skills-parent>\.hstack-backups\<stamp>[-N]\<name>, outside the scan path.
+function Get-HstackDirBackupPath {
+    param([string]$Dst)
+    $name = Split-Path -Leaf $Dst
+    $skillsDir = Split-Path -Parent $Dst
+    $base = Join-Path (Split-Path -Parent $skillsDir) '.hstack-backups'
+    $n = 0
+    while ($true) {
+        $d = if ($n -eq 0) { $HstackStamp } else { "$HstackStamp-$n" }
+        $cand = Join-Path (Join-Path $base $d) $name
+        if (-not (Test-HstackExists $cand)) { return $cand }
+        $n++
+    }
+}
+
+# Free $Dst for a fresh install: remove it if hstack owns it, otherwise move it aside.
+# Returns 'new', 'replaced', 'backed-up', 'refused' (resolves into the source tree) or
+# 'failed' (the move-aside did not verifiably happen: the entry is left exactly as it was).
+# Callers must NOT write to $Dst unless the result is 'new', 'replaced' or 'backed-up'.
+function Clear-HstackDst {
+    param([string]$Dst, [string]$RefDir = '', [string]$RefFile = '', [string[]]$RefText = @(), [switch]$BackupOutside)
+    $script:HstackLastBackup = $null
+    if (Test-HstackDstInSource $Dst) {
+        Write-Warning "Refusing to touch ${Dst}: it resolves into the hstack source tree. Nothing was changed there."
+        Add-HstackFailure
+        return 'refused'
+    }
+    if (-not (Test-HstackExists $Dst)) { return 'new' }
+    $owned = $false
+    try { $owned = Test-HstackOwned $Dst $RefDir $RefFile $RefText } catch { $owned = $false }
+    if ($owned) {
+        try { Remove-HstackEntry $Dst }
+        catch {
+            Write-Warning "Could not replace ${Dst}: $($_.Exception.Message). Left untouched."
+            Add-HstackFailure
+            return 'failed'
+        }
+        if (Test-HstackExists $Dst) {
+            Write-Warning "Could not replace $Dst (it is still there). Left untouched."
+            Add-HstackFailure
+            return 'failed'
+        }
+        return 'replaced'
+    }
+    $bak = $null
+    try {
+        if ($BackupOutside) { $bak = Get-HstackDirBackupPath $Dst } else { $bak = Get-HstackBackupPath $Dst }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $bak) -ErrorAction Stop | Out-Null
+        Move-Item -LiteralPath $Dst -Destination $bak -ErrorAction Stop
+    } catch {
+        Write-Warning "Could not move $Dst aside to a backup ($($_.Exception.Message)). Left untouched, NOT installed over."
+        Add-HstackFailure
+        return 'failed'
+    }
+    if ((Test-HstackExists $Dst) -or (-not (Test-HstackExists $bak))) {
+        Write-Warning "Backup of $Dst could not be verified (backup path: $bak). Not installed over it."
+        Add-HstackFailure
+        return 'failed'
+    }
+    $script:HstackLastBackup = $bak
+    Write-Warning "$Dst is not managed by hstack (or was edited) - moved to $bak (nothing deleted)"
+    return 'backed-up'
+}
+
+# Put the entry Clear-HstackDst moved aside back where it was (after a failed install step).
+function Restore-HstackBackup {
+    param([string]$Dst)
+    $bak = $script:HstackLastBackup
+    if ($bak -and (Test-HstackExists $bak) -and (-not (Test-HstackExists $Dst))) {
+        try {
+            Move-Item -LiteralPath $bak -Destination $Dst -ErrorAction Stop
+            Write-Warning "Restored $Dst from $bak."
+        } catch {
+            Write-Warning "Could not restore $Dst; your original is safe at $bak."
+        }
+    }
+}
+
+# --- file writes: never truncate in place --------------------------------------------
+# New bytes always go to a temp file in the SAME directory first, are verified, and only
+# then swapped in (rename / File.Replace). A failed step leaves the original byte-identical
+# and removes only the temp stub; backups are never deleted.
+function Write-HstackTempFile {
+    param([string]$Tmp, [byte[]]$Bytes)
+    [IO.File]::WriteAllBytes($Tmp, $Bytes)
+}
+
+function Invoke-HstackReplaceFile {
+    param([string]$Tmp, [string]$Path)
+    [IO.File]::Replace($Tmp, $Path, [NullString]::Value)
+}
+
+function New-HstackTempPath {
+    param([string]$Near)
+    return (Join-Path (Split-Path -Parent $Near) ('.hstack-write-' + [guid]::NewGuid().ToString('N')))
+}
+
+# Replace the content of an EXISTING user file atomically (a symlinked file is written
+# through to its target, the link stays a link). Returns $null on success, else the error text;
+# on error the file is byte-identical to before (restored from a verified read if needed).
+function Write-HstackUserFile {
+    param([string]$Path, [byte[]]$Bytes)
+    $real = $Path
+    if (Test-HstackLink $Path) { $real = Resolve-HstackLink $Path }
+    $before = [IO.File]::ReadAllBytes($real)
+    $tmp = New-HstackTempPath $real
+    $err = $null
+    try {
+        Write-HstackTempFile $tmp $Bytes
+        if ((Get-HstackBytesSig ([IO.File]::ReadAllBytes($tmp))) -cne (Get-HstackBytesSig $Bytes)) { throw 'temp file did not verify' }
+        # keep the permission bits of the file being replaced (POSIX; Replace keeps Windows attributes)
+        $realItem = Get-Item -LiteralPath $real -Force
+        if ($realItem.PSObject.Properties['UnixFileMode']) { (Get-Item -LiteralPath $tmp -Force).UnixFileMode = $realItem.UnixFileMode }
+        Invoke-HstackReplaceFile $tmp $real
+        if ((Get-HstackBytesSig ([IO.File]::ReadAllBytes($real))) -cne (Get-HstackBytesSig $Bytes)) { throw 'the file did not verify after the swap' }
+    } catch {
+        $err = $_.Exception.Message
+    }
+    try { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { Write-Verbose "temp cleanup: $($_.Exception.Message)" }
+    if ($err) {
+        $now = $null
+        try { $now = [IO.File]::ReadAllBytes($real) } catch { Write-Verbose "re-read: $($_.Exception.Message)" }
+        if ($null -eq $now -or (Get-HstackBytesSig $now) -cne (Get-HstackBytesSig $before)) {
+            try { [IO.File]::WriteAllBytes($real, $before) } catch { $err += ' (and the original could not be put back by this step)' }
+        }
+    }
+    return $err
+}
+
+# Write a generated file onto a destination that Clear-HstackDst already freed. Refuses to
+# write if anything (or any link) is still there. The bytes go through a temp file, so a
+# failure leaves no partial file at $Dst; if the user's original was moved aside it is KEPT
+# at its backup path and also copied back to $Dst.
+function Write-HstackFileSafe {
+    param([string]$Dst, [byte[]]$Bytes)
+    if (Test-HstackExists $Dst) {
+        Write-Warning "$Dst is still occupied; not writing over it."
+        Add-HstackFailure
+        return $false
+    }
+    $tmp = New-HstackTempPath $Dst
+    try {
+        Write-HstackTempFile $tmp $Bytes
+        if ((Get-HstackBytesSig ([IO.File]::ReadAllBytes($tmp))) -cne (Get-HstackBytesSig $Bytes)) { throw 'temp file did not verify' }
+        Move-Item -LiteralPath $tmp -Destination $Dst -ErrorAction Stop
+    } catch {
+        $msg = $_.Exception.Message
+        try { if ([IO.File]::Exists($tmp)) { [IO.File]::Delete($tmp) } } catch { Write-Verbose "temp cleanup: $($_.Exception.Message)" }
+        $bak = $script:HstackLastBackup
+        if ($bak -and (Test-HstackExists $bak)) {
+            $note = "Your original is kept at $bak"
+            if (-not (Test-HstackExists $Dst)) {
+                try { Copy-Item -LiteralPath $bak -Destination $Dst -ErrorAction Stop; $note += ' and was copied back' }
+                catch { $note += ' (copying it back failed)' }
+            }
+            Write-Warning "Could not write ${Dst}: $msg. $note."
+        } else {
+            Write-Warning "Could not write ${Dst}: $msg."
+        }
+        Add-HstackFailure
+        return $false
+    }
+    return $true
+}
+
+# Skill directory: marked copy, staged OUTSIDE the scanned skills dir
+# (<skills-parent>\.hstack-staging\<name>), then swapped in. A failed copy never leaves a
+# partial skill in the scan path; a failed swap restores whatever was moved aside.
+# Returns 'new', 'replaced', 'backed-up', 'refused' or 'failed'.
+function Install-HstackDir {
+    param([string]$Src, [string]$Dst)
+    if (Test-HstackDstInSource $Dst) {
+        Write-Warning "Refusing to install ${Dst}: it resolves into the hstack source tree. Nothing was changed there."
+        Add-HstackFailure
+        return 'refused'
+    }
+    $stageRoot = Join-Path (Split-Path -Parent (Split-Path -Parent $Dst)) '.hstack-staging'
+    $stage = Join-Path $stageRoot (Split-Path -Leaf $Dst)
+    $script:HstackLastBackup = $null
+    try {
+        try {
+            if (Test-HstackExists $stage) { Remove-HstackEntry $stage }
+            New-Item -ItemType Directory -Force -Path $stageRoot -ErrorAction Stop | Out-Null
+            Copy-Item -LiteralPath $Src -Destination $stage -Recurse -ErrorAction Stop
+            Write-HstackMarker $stage
+        } catch {
+            Write-Warning "Could not stage $Dst ($($_.Exception.Message)). Left untouched."
+            Add-HstackFailure
+            return 'failed'
+        }
+        $result = Clear-HstackDst $Dst $Src -BackupOutside
+        if (($result -eq 'refused') -or ($result -eq 'failed')) { return $result }
+        if (Test-HstackExists $Dst) {
+            Write-Warning "$Dst is still occupied; not installing over it."
+            Add-HstackFailure
+            return 'failed'
+        }
+        try { Move-Item -LiteralPath $stage -Destination $Dst -ErrorAction Stop }
+        catch {
+            Write-Warning "Could not move the new copy into $Dst ($($_.Exception.Message))."
+            Add-HstackFailure
+            Restore-HstackBackup $Dst
+            return 'failed'
+        }
+        return $result
+    } finally {
+        try { if (Test-HstackExists $stage) { Remove-HstackEntry $stage } } catch { Write-Verbose "stage cleanup: $($_.Exception.Message)" }
+        try {
+            if ([IO.Directory]::Exists($stageRoot) -and ($null -eq (Get-ChildItem -LiteralPath $stageRoot -Force | Select-Object -First 1))) {
+                Remove-Item -LiteralPath $stageRoot -Force
+            }
+        } catch { Write-Verbose "stage cleanup: $($_.Exception.Message)" }
+    }
+}
+# <<< hstack-ownership
+
+# Resolve every path override to an absolute path NOW, before any Set-Location, so a
+# relative override can never end up pointing into the checkout.
+$InstallDir = Resolve-HstackAbs $InstallDir
+$EnvInstallDir = Resolve-HstackAbs $env:HSTACK_INSTALL_DIR
+function Get-TargetDir {
+    param([string]$Override, [string[]]$DefaultParts)
+    if ($Override) { return (Resolve-HstackAbs $Override) }
+    $p = $HOME
+    foreach ($part in $DefaultParts) { $p = Join-Path $p $part }
+    return (Resolve-HstackAbs $p)
+}
+$TargetDirs = @{
+    claude   = Get-TargetDir $env:CLAUDE_SKILLS_DIR @('.claude', 'skills')
+    codex    = Get-TargetDir $env:CODEX_SKILLS_DIR @('.agents', 'skills')
+    cursor   = Get-TargetDir $env:CURSOR_RULES_DIR @('.cursor', 'rules')
+    hermes   = Get-TargetDir $env:HERMES_SKILLS_DIR @('.hermes', 'skills')
+    gemini   = Get-TargetDir $env:GEMINI_CONTEXT_DIR @('.gemini', 'context', 'hstack')
+    openclaw = Get-TargetDir $env:OPENCLAW_SKILLS_DIR @('.openclaw', 'skills')
+}
+
 # ---------------------------------------------------------------------------
 # Step 1: clone / update
 # ---------------------------------------------------------------------------
@@ -88,7 +661,7 @@ if ($Local) {
         Write-Die "git is required. Install git and re-run."
     }
     Write-Head "==> Fetching hstack"
-    if (Test-Path "$InstallDir\.git") {
+    if (Test-Path (Join-Path $InstallDir ".git")) {
         Write-Info "Updating existing checkout at $InstallDir"
         Push-Location $InstallDir
         try {
@@ -109,7 +682,13 @@ if ($Local) {
 }
 
 Set-Location $InstallDir
-if (-not (Test-Path "$InstallDir\skills")) { Write-Die "$InstallDir\skills not found — checkout is broken." }
+if (-not (Test-Path (Join-Path $InstallDir "skills"))) { Write-Die "$InstallDir\skills not found — checkout is broken." }
+$SourceRoot = (Get-Location).ProviderPath
+# Skills trees whose links count as "ours": the one being installed, the default
+# ~\.hstack checkout, and a custom HSTACK_INSTALL_DIR.
+$script:HstackRoots = @((Join-Path $SourceRoot "skills"), (Join-Path (Join-Path $HOME ".hstack") "skills"))
+if ($EnvInstallDir) { $script:HstackRoots += (Join-Path $EnvInstallDir "skills") }
+$script:HstackSourceTree = $SourceRoot
 
 # ---------------------------------------------------------------------------
 # Step 2: detect IDEs
@@ -118,12 +697,12 @@ if (-not (Test-Path "$InstallDir\skills")) { Write-Die "$InstallDir\skills not f
 Write-Head "==> Detecting IDEs / agents"
 
 $Ides = @{}
-if (Test-Path "$HOME\.claude")    { $Ides['claude']   = $true }
-if (Test-Path "$HOME\.agents")    { $Ides['codex']    = $true }
-if (Test-Path "$HOME\.cursor")    { $Ides['cursor']   = $true }
-if (Test-Path "$HOME\.hermes")    { $Ides['hermes']   = $true }
-if (Test-Path "$HOME\.gemini")    { $Ides['gemini']   = $true }
-if (Test-Path "$HOME\.openclaw")  { $Ides['openclaw'] = $true }
+if (Test-Path (Join-Path $HOME ".claude"))    { $Ides['claude']   = $true }
+if (Test-Path (Join-Path $HOME ".agents"))    { $Ides['codex']    = $true }
+if (Test-Path (Join-Path $HOME ".cursor"))    { $Ides['cursor']   = $true }
+if (Test-Path (Join-Path $HOME ".hermes"))    { $Ides['hermes']   = $true }
+if (Test-Path (Join-Path $HOME ".gemini"))    { $Ides['gemini']   = $true }
+if (Test-Path (Join-Path $HOME ".openclaw"))  { $Ides['openclaw'] = $true }
 
 if ($Ide) {
     $requested = @{}
@@ -180,8 +759,8 @@ if ($All) {
         $p = $p.Trim()
         if (-not $p) { continue }
         if ($Tiers.ContainsKey($p)) { Add-Tier $p; continue }
-        if (Test-Path "skills\integration-$p") { $Chosen["integration-$p"] = $true; continue }
-        if (Test-Path "skills\$p") { $Chosen[$p] = $true; continue }
+        if (Test-Path (Join-Path "skills" "integration-$p")) { $Chosen["integration-$p"] = $true; continue }
+        if (Test-Path (Join-Path "skills" $p)) { $Chosen[$p] = $true; continue }
         Write-WarnX "unknown: '$p' — skipping"
     }
 } elseif ($Tier) {
@@ -190,40 +769,49 @@ if ($All) {
         $t = $t.Trim()
         if ($Tiers.ContainsKey($t)) { Add-Tier $t } else { Write-WarnX "unknown tier: '$t'" }
     }
-} elseif ($Pick -or ([Environment]::UserInteractive -and $Host.UI.RawUI)) {
+} elseif ($Pick -or (-not [Console]::IsInputRedirected)) {
+    # Interactive picker: only on a terminal (or with -Pick); piped stdin falls through to "all".
     Write-Host @"
 
 hstack currently has 71 integrations across 20 tiers.
 Core skills (/hermes-deploy, all platforms) are ALWAYS installed.
 
 Available integration tiers:
-  all              - everything (71 integrations)
-  memory           - mem0, supermemory
-  database         - supabase, postgres, neon, redis
-  vector           - pinecone, qdrant
-  auth             - auth0, clerk
-  observability    - posthog, sentry, datadog, segment
-  rag              - firecrawl
-  code             - e2b
-  ai-tools         - openai-tools, elevenlabs, replicate
-  storage          - r2
-  crm              - hubspot, salesforce, pipedrive, zoho-crm
-  docs             - notion, google-workspace, microsoft-365, obsidian
-  dev              - github, gitlab, bitbucket
-  pm               - jira, linear, asana, clickup, monday, trello, airtable
-  cloud            - aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
-  payments         - stripe, paypal, razorpay
-  commerce         - shopify, woocommerce, webflow, wordpress
-  email            - mailchimp, brevo, sendgrid, postmark
-  support          - twilio, sendbird, intercom, zendesk, freshdesk
-  forms            - typeform, tally, calendly, zoom
-  search           - brave-search, tavily, exa
 
-Enter tier names comma-separated (e.g. 'memory,database,ai-tools'),
-or specific integrations ('notion,stripe'),
-or 'all' for everything, or press Enter to skip integrations.
+  1) all              - everything (71 integrations)
+  2) memory           - mem0, supermemory
+  3) database         - supabase, postgres, neon, redis
+  4) vector           - pinecone, qdrant
+  5) auth             - auth0, clerk
+  6) observability    - posthog, sentry, datadog, segment
+  7) rag              - firecrawl (web scraping for RAG)
+  8) code             - e2b (safe code execution)
+  9) ai-tools         - openai-tools (DALL-E, Whisper, embeddings), elevenlabs (voice), replicate
+ 10) storage          - r2 (zero-egress S3-compat)
+ 11) crm              - hubspot, salesforce, pipedrive, zoho-crm
+ 12) docs             - notion, google-workspace, microsoft-365, obsidian
+ 13) dev              - github, gitlab, bitbucket
+ 14) pm               - jira, linear, asana, clickup, monday, trello, airtable
+ 15) cloud            - aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
+ 16) payments         - stripe, paypal, razorpay
+ 17) commerce         - shopify, woocommerce, webflow, wordpress
+ 18) email            - mailchimp, brevo, sendgrid, postmark
+ 19) support          - twilio, sendbird, intercom, zendesk, freshdesk
+ 20) forms            - typeform, tally, calendly, zoom
+ 21) search           - brave-search, tavily, exa
+
+Enter the numbers or names of tiers, comma-separated (e.g. '2,3,9' or 'memory,database,ai-tools'),
+or a specific integration ('notion,stripe'),
+or 'all' (or 1) for everything, or press Enter to skip integrations.
+
 "@
-    $picks = Read-Host "> "
+    if ([Console]::IsInputRedirected) {
+        Write-Host -NoNewline "> "
+        $picks = [Console]::In.ReadLine()
+    } else {
+        $picks = Read-Host "> "
+    }
+    if ($null -eq $picks) { $picks = "" }
     if (-not $picks.Trim()) {
         Write-Info "No integrations selected. Installing core + platforms only."
     } else {
@@ -231,10 +819,22 @@ or 'all' for everything, or press Enter to skip integrations.
             $p = $p.Trim()
             if (-not $p) { continue }
             if ($p -eq 'all') { foreach ($t in $IntegrationTiers) { Add-Tier $t }; continue }
+            if ($p -match '^[0-9]+$') {
+                # a menu number: 1 = all, 2.. = $IntegrationTiers in order
+                $num = 0
+                if ([int]::TryParse($p, [ref]$num) -and $num -eq 1) {
+                    foreach ($t in $IntegrationTiers) { Add-Tier $t }
+                } elseif ($num -ge 2 -and $num -le ($IntegrationTiers.Count + 1)) {
+                    Add-Tier $IntegrationTiers[$num - 2]
+                } else {
+                    Write-WarnX "unknown menu number: '$p' - skipping (1-$($IntegrationTiers.Count + 1))"
+                }
+                continue
+            }
             if ($Tiers.ContainsKey($p)) { Add-Tier $p; continue }
-            if (Test-Path "skills\integration-$p") { $Chosen["integration-$p"] = $true; continue }
-            if (Test-Path "skills\$p") { $Chosen[$p] = $true; continue }
-            Write-WarnX "unknown: '$p' — skipping"
+            if (Test-Path (Join-Path "skills" "integration-$p")) { $Chosen["integration-$p"] = $true; continue }
+            if (Test-Path (Join-Path "skills" $p)) { $Chosen[$p] = $true; continue }
+            Write-WarnX "unknown: '$p' - skipping"
         }
     }
 } else {
@@ -245,7 +845,7 @@ or 'all' for everything, or press Enter to skip integrations.
 # Filter chosen to what actually exists
 $Final = @{}
 foreach ($name in $Chosen.Keys) {
-    if (Test-Path "skills\$name\SKILL.md") { $Final[$name] = $true }
+    if (Test-Path (Join-Path (Join-Path "skills" $name) "SKILL.md")) { $Final[$name] = $true }
     else { Write-WarnX "skill '$name' not found in checkout — skipping" }
 }
 
@@ -258,87 +858,117 @@ Write-Ok "$skillCount skills chosen"
 
 Write-Head "==> Wiring into IDEs"
 
-function Copy-SkillTree {
-    param($src, $dst)
-    if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-    Copy-Item -Recurse -Path $src -Destination $dst
-}
-
-function Install-To-Claude {
-    $target = if ($env:CLAUDE_SKILLS_DIR) { $env:CLAUDE_SKILLS_DIR } else { "$HOME\.claude\skills" }
+# Copy every chosen skill directory into $target. hstack-owned destinations are
+# replaced silently; anything else is moved to <dst>.hstack-backup-<stamp> first.
+function Install-SkillDirs {
+    param([string]$target)
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $n = 0
     foreach ($skill in $Final.Keys) {
-        Copy-SkillTree "$InstallDir\skills\$skill" "$target\$skill"
-        $n++
+        $r = Install-HstackDir (Join-Path (Join-Path $InstallDir "skills") $skill) (Join-Path $target $skill)
+        if (($r -ne 'refused') -and ($r -ne 'failed')) { $n++ }
     }
+    return $n
+}
+
+# Cursor rule text for one skill (unmarked). -Legacy reproduces the pre-marker generator so
+# old installs are recognised.
+function Get-HstackMdcText {
+    param([string]$Skill, [string]$Src, [switch]$Legacy)
+    $lines = @(Get-Content -LiteralPath $Src -Encoding UTF8)
+    $desc = ($lines | Where-Object { $_ -match '^description:' } | Select-Object -First 1)
+    if ($desc) { $desc = $desc -replace '^description:\s*','' }
+    if (-not $desc) { $desc = "hstack skill: $Skill" }
+    if ($Legacy) {
+        $body = @($lines | Where-Object { $_ -notmatch '^(name|description):' -and $_ -ne '---' })
+    } else {
+        $body = @()
+        $fences = 0
+        foreach ($l in $lines) {
+            if ($fences -ge 2) { $body += $l }
+            elseif ($l.TrimEnd() -eq '---') { $fences++ }
+        }
+    }
+    $out = @('---', "description: $desc", 'globs:', 'alwaysApply: false', '---', '')
+    $out += $body
+    return (($out -join "`n") + "`n")
+}
+
+# The same text with the ownership line inserted right after the frontmatter.
+function Add-HstackMdcMarker {
+    param([string]$Plain)
+    $lines = $Plain.Split([char]10)
+    $marker = Get-HstackMarkerLine ([Text.Encoding]::GetEncoding(28591).GetString([Text.Encoding]::UTF8.GetBytes($Plain)))
+    $head = @($lines[0..4])
+    $tail = @($lines[5..($lines.Length - 1)])
+    return ((@($head) + @($marker) + @($tail)) -join "`n")
+}
+
+function Install-To-Claude {
+    $target = $TargetDirs.claude
+    if (-not (Test-HstackTargetOk $target)) { return }
+    $n = Install-SkillDirs $target
     Write-Ok "claude    → $target ($n skills)"
 }
 
 function Install-To-Codex {
-    $target = if ($env:CODEX_SKILLS_DIR) { $env:CODEX_SKILLS_DIR } else { "$HOME\.agents\skills" }
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    $n = 0
-    foreach ($skill in $Final.Keys) {
-        Copy-SkillTree "$InstallDir\skills\$skill" "$target\$skill"
-        $n++
-    }
+    $target = $TargetDirs.codex
+    if (-not (Test-HstackTargetOk $target)) { return }
+    $n = Install-SkillDirs $target
     Write-Ok "codex     → $target ($n skills)"
 }
 
 function Install-To-Cursor {
-    $target = if ($env:CURSOR_RULES_DIR) { $env:CURSOR_RULES_DIR } else { "$HOME\.cursor\rules" }
+    $target = $TargetDirs.cursor
+    if (-not (Test-HstackTargetOk $target)) { return }
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $n = 0
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
     foreach ($skill in $Final.Keys) {
-        $src = "$InstallDir\skills\$skill\SKILL.md"
-        $dst = "$target\$skill.mdc"
-        $desc = ((Get-Content $src) -match '^description:' | Select-Object -First 1) -replace '^description:\s*',''
-        $body = (Get-Content $src) | Where-Object { $_ -notmatch '^---$' } | Select-Object -Skip 1
-        @"
----
-description: $desc
-globs:
-alwaysApply: false
----
-"@ | Set-Content -Encoding UTF8 -Path $dst
-        Add-Content -Path $dst -Value ""
-        Get-Content $src | Where-Object { $_ -notmatch '^(name|description):' -and $_ -ne '---' } | Add-Content -Path $dst
+        $src = Join-Path (Join-Path (Join-Path $InstallDir "skills") $skill) "SKILL.md"
+        $dst = Join-Path $target "$skill.mdc"
+        $plain = Get-HstackMdcText -Skill $skill -Src $src
+        $legacy = Get-HstackMdcText -Skill $skill -Src $src -Legacy
+        $marked = Add-HstackMdcMarker $plain
+        # Clear first (owned: removed, otherwise backed up) so a symlink is never written through.
+        $res = Clear-HstackDst $dst -RefText @($plain, $legacy)
+        if (($res -eq 'refused') -or ($res -eq 'failed')) { continue }
+        if (-not (Write-HstackFileSafe $dst ($utf8.GetBytes($marked)))) { continue }
         $n++
     }
     Write-Ok "cursor    → $target ($n skills, converted to .mdc)"
 }
 
 function Install-To-Hermes {
-    $target = if ($env:HERMES_SKILLS_DIR) { $env:HERMES_SKILLS_DIR } else { "$HOME\.hermes\skills" }
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    $n = 0
-    foreach ($skill in $Final.Keys) {
-        Copy-SkillTree "$InstallDir\skills\$skill" "$target\$skill"
-        $n++
-    }
+    $target = $TargetDirs.hermes
+    if (-not (Test-HstackTargetOk $target)) { return }
+    $n = Install-SkillDirs $target
     Write-Ok "hermes    → $target ($n skills)"
 }
 
 function Install-To-Gemini {
-    $target = if ($env:GEMINI_CONTEXT_DIR) { $env:GEMINI_CONTEXT_DIR } else { "$HOME\.gemini\context\hstack" }
+    $target = $TargetDirs.gemini
+    if (-not (Test-HstackTargetOk $target)) { return }
     New-Item -ItemType Directory -Force -Path $target | Out-Null
     $n = 0
+    $latin1 = [Text.Encoding]::GetEncoding(28591)
     foreach ($skill in $Final.Keys) {
-        Copy-Item -Path "$InstallDir\skills\$skill\SKILL.md" -Destination "$target\$skill.md" -Force
+        $src = Join-Path (Join-Path (Join-Path $InstallDir "skills") $skill) "SKILL.md"
+        $dst = Join-Path $target "$skill.md"
+        $res = Clear-HstackDst $dst -RefFile $src
+        if (($res -eq 'refused') -or ($res -eq 'failed')) { continue }
+        # the source bytes verbatim, a newline, then the ownership line (sig covers all before it)
+        $body = $latin1.GetString([IO.File]::ReadAllBytes($src)) + "`n"
+        if (-not (Write-HstackFileSafe $dst ($latin1.GetBytes($body + (Get-HstackMarkerLine $body) + "`n")))) { continue }
         $n++
     }
     Write-Ok "gemini    → $target ($n skills)"
 }
 
 function Install-To-Openclaw {
-    $target = if ($env:OPENCLAW_SKILLS_DIR) { $env:OPENCLAW_SKILLS_DIR } else { "$HOME\.openclaw\skills" }
-    New-Item -ItemType Directory -Force -Path $target | Out-Null
-    $n = 0
-    foreach ($skill in $Final.Keys) {
-        Copy-SkillTree "$InstallDir\skills\$skill" "$target\$skill"
-        $n++
-    }
+    $target = $TargetDirs.openclaw
+    if (-not (Test-HstackTargetOk $target)) { return }
+    $n = Install-SkillDirs $target
     Write-Ok "openclaw  → $target ($n skills)"
 }
 
@@ -373,3 +1003,7 @@ Write-Host "Docs:    https://github.com/paarths-collab/hstack"
 Write-Host ""
 Write-Host "To re-run this installer with different choices:"
 Write-Host "  powershell -File $InstallDir\install.ps1 -Pick"
+if ($script:HstackFailures -gt 0) {
+    Write-WarnX "$($script:HstackFailures) entries could not be installed and were left untouched (see the warnings above). Exiting with an error."
+    exit 1
+}
