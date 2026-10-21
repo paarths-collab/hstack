@@ -1,0 +1,55 @@
+name: Recipe tests
+
+on:
+  push:
+    paths:
+      - "packages/**"
+      - "tests/**"
+      - "skills/blueprint-*/**"
+      - "blueprints/**"
+      - "recipes/**"
+      - "apps/composer/**"
+      - ".github/workflows/recipe-tests.yml"
+  pull_request:
+    paths:
+      - "packages/**"
+      - "tests/**"
+      - "skills/blueprint-*/**"
+      - "blueprints/**"
+      - "recipes/**"
+      - "apps/composer/**"
+      - ".github/workflows/recipe-tests.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recipes:
+    name: Recipe tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run recipe tests
+        run: node --test tests/recipes/
+
+      - name: Validate sample blueprints
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in blueprints/*.hstack-blueprint.json; do
+            python3 skills/blueprint-install/scripts/validate_blueprint.py "$f" --summary
+          done

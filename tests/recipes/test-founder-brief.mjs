@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +22,25 @@ const recipe = JSON.parse(
 const publicRegistry = JSON.parse(
   readFileSync(path.join(repoRoot, "recipes", "registry.json"), "utf8"),
 );
+
+// Returns [command, ...prefixArgs] for the first interpreter that runs and reports Python 3.
+// HSTACK_PYTHON, when set, is the only candidate. Windows users get `py -3` via the launcher.
+function resolvePython3() {
+  const override = process.env.HSTACK_PYTHON;
+  const candidates = override
+    ? [[override]]
+    : [["python3"], ["python"], ["py", "-3"]];
+  for (const [command, ...prefix] of candidates) {
+    const probe = spawnSync(command, [...prefix, "--version"], { encoding: "utf8", stdio: "pipe" });
+    if (probe.error || probe.status !== 0) {
+      continue;
+    }
+    if (/^Python 3\./.test(`${probe.stdout}${probe.stderr}`.trim())) {
+      return [command, ...prefix];
+    }
+  }
+  throw new Error("Python 3 not found; set HSTACK_PYTHON");
+}
 
 function collectJsonFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -133,13 +152,15 @@ test("the generated plan passes the existing blueprint safety validator", () => 
       cadence: "weekly",
     },
   });
+  const [pythonCommand, ...pythonPrefix] = resolvePython3();
   const tempDirectory = mkdtempSync(path.join(os.tmpdir(), "agent-recipes-test-"));
   const blueprintPath = path.join(tempDirectory, result.fileName);
   try {
     writeFileSync(blueprintPath, stringifyBlueprint(result));
     execFileSync(
-      "py",
+      pythonCommand,
       [
+        ...pythonPrefix,
         path.join(repoRoot, "skills", "blueprint-install", "scripts", "validate_blueprint.py"),
         blueprintPath,
         "--json",

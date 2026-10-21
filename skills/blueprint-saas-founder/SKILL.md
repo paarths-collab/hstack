@@ -155,8 +155,10 @@ of its services for every founder.
 From the hstack repository, validate the exact file the user will hand off:
 
 ```bash
-py skills/blueprint-install/scripts/validate_blueprint.py founder-radar.hstack-blueprint.json --summary
+python3 skills/blueprint-install/scripts/validate_blueprint.py founder-radar.hstack-blueprint.json --summary
 ```
+
+On Windows without `python3`, use `py -3` in place of `python3`.
 
 If the validator reports any error, stop. Correct the declarative plan and
 rerun it. Do not bypass it by manually calling a skill from a hand-edited
