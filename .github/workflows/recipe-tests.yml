@@ -9,6 +9,13 @@ on:
       - "blueprints/**"
       - "recipes/**"
       - "apps/composer/**"
+      - "acceptance/**"
+      - "connectors/**"
+      - "VERSIONS.txt"
+      - "skills/platform-telegram/**"
+      - "skills/integration-github/**"
+      - "skills/hermes-home/**"
+      - "skills/hermes-cron/**"
       - ".github/workflows/recipe-tests.yml"
   pull_request:
     paths:
@@ -18,6 +25,13 @@ on:
       - "blueprints/**"
       - "recipes/**"
       - "apps/composer/**"
+      - "acceptance/**"
+      - "connectors/**"
+      - "VERSIONS.txt"
+      - "skills/platform-telegram/**"
+      - "skills/integration-github/**"
+      - "skills/hermes-home/**"
+      - "skills/hermes-cron/**"
       - ".github/workflows/recipe-tests.yml"
   workflow_dispatch:
 
@@ -45,6 +59,18 @@ jobs:
 
       - name: Run recipe tests
         run: node --test tests/recipes/
+
+      # Offline: sandbox filesystem + bash test-double `hermes` + golden SSH command fixtures.
+      # Docker-gated tests are skipped with an explicit reason unless HSTACK_DOCKER=1.
+      - name: Run acceptance tests
+        run: node --test tests/acceptance/
+
+      # Real sshd in a local Docker container (ubuntu runners only; macOS runners have no Docker).
+      - name: Run acceptance tests against a Docker sshd target
+        if: runner.os == 'Linux'
+        env:
+          HSTACK_DOCKER: "1"
+        run: node --test tests/acceptance/docker/
 
       - name: Validate sample blueprints
         shell: bash

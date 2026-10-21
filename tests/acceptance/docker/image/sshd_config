@@ -1,0 +1,18 @@
+# Key-only, single-user sshd for the acceptance target. Listens inside the container; the host side is
+# published on 127.0.0.1 only (docker run -p 127.0.0.1::22).
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+PermitRootLogin no
+AllowUsers operator
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM no
+StrictModes yes
+PermitUserEnvironment no
+# Only the stub knobs the tests pass with `ssh -o SendEnv=...`.
+AcceptEnv HSTACK_STUB_* HSTACK_RELOAD_DELAY HSTACK_FAKE_GOOD_TOKEN
+PrintMotd no
+LogLevel INFO

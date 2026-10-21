@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Docker-test-only shim in FRONT of the stub hermes (the stub is moved to hermes.stub next to it) for the
+# Telegram skill test. It adds exactly three things the skill calls but the stub's declared surface lacks;
+# every other call is passed to the stub unchanged:
+#   hermes config set KEY -- VALUE   -> stub `config set KEY VALUE`   (the skill's `--` guard for negative ids)
+#   hermes gateway status            -> "gateway: running|stopped" from the stub's gateway.state
+#   hermes logs gateway -n N         -> a "telegram connected" line only while the gateway state is running
+# These are assumptions about Hermes, the same class as the stub: not evidence about the real CLI.
+set -u
+here=$(cd "$(dirname "$0")" && pwd)
+stub="$here/hermes.stub"
+state=$(cat "$HOME/.hermes/gateway.state" 2>/dev/null || echo stopped)
+case "${1:-} ${2:-}" in
+  "gateway status")
+    if [ "$state" = running ]; then echo "gateway: running"; else echo "gateway: stopped"; fi
+    exit 0 ;;
+  "logs gateway")
+    if [ "$state" = running ]; then echo "[gateway] telegram connected (long-poll)"; else echo "[gateway] not started"; fi
+    exit 0 ;;
+  "config set")
+    if [ $# -eq 5 ] && [ "$4" = "--" ]; then exec "$stub" config set "$3" "$5"; fi ;;
+esac
+exec "$stub" "$@"
