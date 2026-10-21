@@ -67,7 +67,7 @@ metrics/                 — clone traffic tracking (update-clone-traffic.mjs + 
 acceptance/              — acceptance contract(s) for the reversible transaction
 packages/acceptance/     — acceptance transaction (JS core, target-side script, receipt schema)
 scripts/                 — skill validators; bash 3.2 compatible (stock macOS)
-tests/                   — recipe tests (tests/recipes), acceptance tests (tests/acceptance, Docker-gated)
+tests/                   — recipe tests (tests/recipes), acceptance tests (tests/acceptance, Docker-gated), skill-block tests (tests/skills: run the repaired SKILL.md bash blocks against stub ssh/curl/hermes), installer tests (tests/installer)
 ```
 
 ## Integration tier catalog (71 connectors, 20 tiers)
