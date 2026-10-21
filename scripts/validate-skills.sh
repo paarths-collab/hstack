@@ -99,18 +99,20 @@ done
 # Build the target list
 # ---------------------------------------------------------------------------
 
+# Bash 3.2 (stock macOS /bin/bash) has no mapfile; read lines in a loop instead.
+TARGETS=()
 if [ -n "$ONE_SKILL" ]; then
   TARGETS=("skills/${ONE_SKILL}/SKILL.md")
   [ -f "${TARGETS[0]}" ] || { echo "ERROR: skill '$ONE_SKILL' not found." >&2; exit 2; }
 elif [ "$CHANGED_ONLY" = "1" ]; then
   base="${GITHUB_BASE_REF:-main}"
-  mapfile -t TARGETS < <(git diff --name-only "origin/${base}...HEAD" 2>/dev/null | grep -E '^skills/[^/]+/SKILL\.md$' || true)
+  while IFS= read -r line; do TARGETS+=("$line"); done < <(git diff --name-only "origin/${base}...HEAD" 2>/dev/null | grep -E '^skills/[^/]+/SKILL\.md$' || true)
   if [ "${#TARGETS[@]}" -eq 0 ]; then
     [ "$QUIET" = "1" ] || echo "No skill changes vs origin/${base}. Nothing to validate."
     exit 0
   fi
 else
-  mapfile -t TARGETS < <(find skills -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
+  while IFS= read -r line; do TARGETS+=("$line"); done < <(find skills -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 fi
 
 # ---------------------------------------------------------------------------
@@ -288,7 +290,7 @@ assert_hermes_pin_consistency() {
 
 [ "$QUIET" = "1" ] || echo "Validating ${#TARGETS[@]} skill(s) against VERSIONS.txt (HERMES_VERSION=$HERMES_VERSION)..."
 
-for f in "${TARGETS[@]}"; do
+for f in ${TARGETS[@]+"${TARGETS[@]}"}; do
   [ -f "$f" ] || { log_fail "$f" "file not found"; continue; }
   before_fail=$FAIL_COUNT
   assert_frontmatter                 "$f" || true
@@ -315,7 +317,7 @@ if [ "$JSON" = "1" ]; then
   # Compact JSON — no external `jq`.
   printf '{"total":%d,"passed":%d,"failed":%d,"failures":[' "${#TARGETS[@]}" "$PASS_COUNT" "$FAIL_COUNT"
   first=1
-  for entry in "${FAILURES[@]}"; do
+  for entry in ${FAILURES[@]+"${FAILURES[@]}"}; do
     esc=${entry//\\/\\\\}
     esc=${esc//\"/\\\"}
     if [ "$first" = "1" ]; then first=0; else printf ','; fi

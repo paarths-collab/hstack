@@ -50,7 +50,9 @@ for arg in "$@"; do
 done
 
 # Markdown files we actually control. Skip vendored/generated trees.
-mapfile -t DOCS < <(
+# Bash 3.2 (stock macOS /bin/bash) has no mapfile; read lines in a loop instead.
+DOCS=()
+while IFS= read -r line; do DOCS+=("$line"); done < <(
   find . -type f -name '*.md' \
     -not -path './.git/*' \
     -not -path './node_modules/*' \
@@ -68,11 +70,43 @@ is_runtime_command() {
   esac
 }
 
-declare -A SEEN_IN   # skill name -> space-separated list of files referencing it
+# Bash 3.2 has no associative arrays (declare -A). The reference map is kept as
+# parallel indexed arrays: REF_NAMES[i] is a skill name, and REF_FILES[i] is the
+# space-separated list of files referencing it (each prefixed with a space).
+REF_NAMES=()
+REF_FILES=()
+REF_COUNT=0
 MISSING=0
 TOTAL_REFS=0
 
-for doc in "${DOCS[@]}"; do
+# add_ref NAME DOC: record that DOC references skill NAME.
+add_ref() {
+  local name="$1" doc="$2" i=0
+  while [ "$i" -lt "$REF_COUNT" ]; do
+    if [ "${REF_NAMES[$i]}" = "$name" ]; then
+      REF_FILES[$i]="${REF_FILES[$i]} $doc"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+  REF_NAMES[$REF_COUNT]="$name"
+  REF_FILES[$REF_COUNT]=" $doc"
+  REF_COUNT=$((REF_COUNT + 1))
+}
+
+# ref_files NAME: print the space-separated file list recorded for NAME.
+ref_files() {
+  local name="$1" i=0
+  while [ "$i" -lt "$REF_COUNT" ]; do
+    if [ "${REF_NAMES[$i]}" = "$name" ]; then
+      printf '%s' "${REF_FILES[$i]}"
+      return 0
+    fi
+    i=$((i + 1))
+  done
+}
+
+for doc in ${DOCS[@]+"${DOCS[@]}"}; do
   # Pull /hermes-x, /platform-x, /integration-x, /setup-x, /blueprint-x. Require a non-path
   # character before the slash so `skills/hermes-cron/SKILL.md` does not match, and
   # exclude `~` so the `~/hermes-backups` directory is not read as a skill ref.
@@ -80,7 +114,7 @@ for doc in "${DOCS[@]}"; do
     [ -n "$ref" ] || continue
     is_runtime_command "$ref" && continue
     TOTAL_REFS=$((TOTAL_REFS + 1))
-    SEEN_IN[$ref]="${SEEN_IN[$ref]:-} $doc"
+    add_ref "$ref" "$doc"
   done < <(
     grep -oE '(^|[^a-zA-Z0-9._/~-])/(hermes|platform|integration|setup|blueprint)-[a-z0-9-]+' "$doc" 2>/dev/null \
       | grep -oE '(hermes|platform|integration|setup|blueprint)-[a-z0-9-]+' \
@@ -90,22 +124,23 @@ for doc in "${DOCS[@]}"; do
 done
 
 if [ "$LIST_ONLY" = "1" ]; then
-  for name in $(printf '%s\n' "${!SEEN_IN[@]}" | sort); do
-    printf '%-34s %s\n' "$name" "$(echo "${SEEN_IN[$name]}" | tr ' ' '\n' | grep -c . ) file(s)"
+  for name in $(printf '%s\n' ${REF_NAMES[@]+"${REF_NAMES[@]}"} | sort); do
+    printf '%-34s %s\n' "$name" "$(ref_files "$name" | tr ' ' '\n' | grep -c . ) file(s)"
   done
   exit 0
 fi
 
-[ "$QUIET" = "1" ] || echo "Checking ${#SEEN_IN[@]} distinct skill references across ${#DOCS[@]} Markdown files..."
+[ "$QUIET" = "1" ] || echo "Checking ${REF_COUNT} distinct skill references across ${#DOCS[@]} Markdown files..."
 
-for name in $(printf '%s\n' "${!SEEN_IN[@]}" | sort); do
+for name in $(printf '%s\n' ${REF_NAMES[@]+"${REF_NAMES[@]}"} | sort); do
   if [ ! -f "skills/${name}/SKILL.md" ]; then
+    ref_docs=$(ref_files "$name")
     # shellcheck disable=SC2086
-    files=$(echo ${SEEN_IN[$name]} | tr ' ' '\n' | grep -c .)
+    files=$(echo $ref_docs | tr ' ' '\n' | grep -c .)
     printf '  \033[31m✗\033[0m /%s referenced in %s file(s) but skills/%s/SKILL.md does not exist\n' \
       "$name" "$files" "$name" >&2
     # shellcheck disable=SC2086
-    for f in ${SEEN_IN[$name]}; do echo "      $f" >&2; done
+    for f in $ref_docs; do echo "      $f" >&2; done
     MISSING=$((MISSING + 1))
   fi
 done
@@ -117,5 +152,5 @@ if [ "$MISSING" -gt 0 ]; then
   exit 1
 fi
 
-[ "$QUIET" = "1" ] || echo "OK: all ${#SEEN_IN[@]} referenced skills exist in skills/."
+[ "$QUIET" = "1" ] || echo "OK: all ${REF_COUNT} referenced skills exist in skills/."
 exit 0
