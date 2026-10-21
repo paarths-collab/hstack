@@ -1,0 +1,34 @@
+#!/bin/bash
+# Test double of ssh for the skill block tests. It never opens a network connection.
+#
+# It behaves like the real client in the one way that matters for these tests: everything after the
+# host is joined with single spaces into ONE string, which then runs under a shell on the "VPS". The
+# VPS is simulated by a clean environment (env -i) whose PATH is the fake remote_bin directory plus
+# /usr/bin:/bin, and whose HOME is the sandbox home. stdin passes straight through, so
+# `printf ... | remote 'IFS= read -r v'` and `remote 'bash -s' <<'EOF'` work as they do over real ssh.
+#
+# Each call is appended to $HSTACK_FAKE/logs/ssh-argv.log (the exact string the remote shell got) and
+# a one-word line is added to events.log. Knob: knobs/ssh_down makes every call exit 255.
+set -u
+fake=${HSTACK_FAKE:?HSTACK_FAKE is not set}
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o|-i|-p|-l|-F|-J|-L|-R) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+host=${1:-}
+[ $# -gt 0 ] && shift
+cmd="$*"
+{
+  printf '%s\n' "----ssh-call----"
+  printf 'host=%s\n' "$host"
+  printf '%s\n' "$cmd"
+} >> "$fake/logs/ssh-argv.log"
+printf 'ssh\n' >> "$fake/logs/events.log"
+if [ -f "$fake/knobs/ssh_down" ]; then
+  echo "ssh: connect to host ${host#*@} port 22: Connection refused (test double)" >&2
+  exit 255
+fi
+exec env -i HOME="$fake" PATH="$fake/remote_bin:/usr/bin:/bin" /bin/bash -c "$cmd"

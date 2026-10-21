@@ -1,0 +1,15 @@
+#!/bin/bash
+# Test double of crontab for the simulated VPS. The "crontab" is the file $HOME/crontab.store.
+store=$HOME/crontab.store
+case "${1:-}" in
+  -l)
+    if [ -f "$store" ]; then cat "$store"; else echo "no crontab for root" >&2; exit 1; fi ;;
+  -r)
+    rm -f "$store" ;;
+  -|"")
+    # Like the real crontab: read all of stdin first, replace the table afterwards. Writing in place
+    # would truncate it while `crontab -l | ... | crontab -` is still reading it.
+    cat > "$store.new" && mv "$store.new" "$store" ;;
+  *)
+    cat "$1" > "$store" ;;
+esac

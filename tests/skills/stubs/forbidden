@@ -1,0 +1,9 @@
+#!/bin/bash
+# Installed under the names of tools that must NEVER run in these tests: curl and wget on the agent
+# machine (the skills reach vendors only through the VPS curl), docker on the simulated VPS.
+# A call is logged to logs/local-forbidden.log and fails.
+fake=${HSTACK_FAKE:-$HOME}
+mkdir -p "$fake/logs" 2>/dev/null
+printf 'LOCAL %s called: %s\n' "$(basename "$0")" "$*" >> "$fake/logs/local-forbidden.log" 2>/dev/null
+echo "$(basename "$0"): not allowed on the local machine in this test" >&2
+exit 99

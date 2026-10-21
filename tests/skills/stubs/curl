@@ -1,0 +1,91 @@
+#!/bin/bash
+# Test double of curl for the simulated VPS. It never touches the network.
+#
+# The skills send credentials as a curl config on stdin (`--config -`), so this stub reads that
+# config for the token (`header = "Authorization: Bearer <t>"`, or the Telegram `url = ".../bot<t>/getMe"`)
+# and decides from $HOME/valid_tokens (one accepted fake token per line) whether the vendor "accepts" it:
+# 200 for a listed token, 401 for anything else, including an empty one.
+#
+# The log (logs/curl.log) records the full argv, the URL with the token masked, the token LENGTH, whether
+# the token appears in argv, and the status. It never records the token itself.
+#
+# Knobs (files under $HOME/knobs): net_down -> exit 7 like an unreachable host;
+# curl_force -> lines "N=CODE": the Nth call of this run answers CODE (e.g. 2=401 fails the smoke test).
+set -u
+H=$HOME
+mkdir -p "$H/logs" "$H/state"
+args=("$@")
+cfg=""
+wfmt=""
+url=""
+fail=0
+i=0
+while [ "$i" -lt "$#" ]; do
+  a=${args[$i]}
+  case "$a" in
+    --config)
+      i=$((i + 1))
+      if [ "${args[$i]}" = "-" ]; then cfg=$(cat); fi ;;
+    -w|--write-out)
+      i=$((i + 1)); wfmt=${args[$i]} ;;
+    -o|--output|-H|--header|-d|--data|--max-time|-m|-X|--request)
+      i=$((i + 1)) ;;
+    -f|--fail|-fsS|-fS|-sf)
+      fail=1 ;;
+    -*) ;;
+    *) url=$a ;;
+  esac
+  i=$((i + 1))
+done
+
+cfg_url=$(printf '%s\n' "$cfg" | sed -n 's/^url *= *"\(.*\)" *$/\1/p' | head -1)
+[ -n "$cfg_url" ] && url=$cfg_url
+tok=$(printf '%s\n' "$cfg" | sed -n 's/^header *= *"Authorization: Bearer \(.*\)" *$/\1/p' | head -1)
+case "$url" in
+  */bot*/getMe) tok=${url#*/bot}; tok=${tok%/getMe} ;;
+esac
+
+n=0
+[ -f "$H/state/curl.count" ] && n=$(cat "$H/state/curl.count")
+n=$((n + 1))
+echo "$n" > "$H/state/curl.count"
+
+masked=$url
+[ -n "$tok" ] && masked=${url//"$tok"/<TOKEN>}
+has_tok=0
+if [ -n "$tok" ]; then case "$*" in *"$tok"*) has_tok=1 ;; esac; fi
+has_dollar=0
+case "$tok" in *'$'*) has_dollar=1 ;; esac
+
+if [ -f "$H/knobs/net_down" ]; then
+  printf 'call=%s status=none url=%s token_len=%s token_has_dollar=%s argv_has_token=%s argv=%s\n' \
+    "$n" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$*" >> "$H/logs/curl.log"
+  printf 'curl\n' >> "$H/logs/events.log"
+  echo "curl: (7) Failed to connect (test double)" >&2
+  exit 7
+fi
+
+code=401
+if [ -n "$tok" ] && grep -qxF -- "$tok" "$H/valid_tokens" 2>/dev/null; then code=200; fi
+if [ -f "$H/knobs/curl_force" ]; then
+  forced=$(sed -n "s/^$n=//p" "$H/knobs/curl_force" | head -1)
+  [ -n "$forced" ] && code=$forced
+fi
+
+printf 'call=%s status=%s url=%s token_len=%s token_has_dollar=%s argv_has_token=%s argv=%s\n' \
+  "$n" "$code" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$*" >> "$H/logs/curl.log"
+printf 'curl status=%s\n' "$code" >> "$H/logs/events.log"
+
+if [ -n "$wfmt" ]; then
+  printf '%s' "${wfmt/\%\{http_code\}/$code}"
+else
+  case "$url" in
+    */getMe) [ "$code" = 200 ] && printf '{"ok":true,"result":{"id":1,"is_bot":true,"username":"fake_test_bot"}}' ;;
+    *) printf '{"results":[]}' ;;
+  esac
+fi
+if [ "$fail" = 1 ] && [ "$code" -ge 400 ]; then
+  echo "curl: (22) The requested URL returned error: $code" >&2
+  exit 22
+fi
+exit 0

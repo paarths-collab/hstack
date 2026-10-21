@@ -16,6 +16,10 @@ on:
       - "skills/integration-github/**"
       - "skills/hermes-home/**"
       - "skills/hermes-cron/**"
+      - "skills/integration-notion/**"
+      - "skills/hermes-model/**"
+      - "skills/hermes-deploy/**"
+      - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   pull_request:
     paths:
@@ -32,6 +36,10 @@ on:
       - "skills/integration-github/**"
       - "skills/hermes-home/**"
       - "skills/hermes-cron/**"
+      - "skills/integration-notion/**"
+      - "skills/hermes-model/**"
+      - "skills/hermes-deploy/**"
+      - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   workflow_dispatch:
 
@@ -64,6 +72,11 @@ jobs:
       # Docker-gated tests are skipped with an explicit reason unless HSTACK_DOCKER=1.
       - name: Run acceptance tests
         run: node --test tests/acceptance/
+
+      # Offline: the repaired SKILL.md bash blocks run in one /bin/bash against a simulated VPS (stub ssh, curl,
+      # hermes, crontab). Covers the credential gates, rollback, and deploy composition on bash 3.2 (macOS) and 5.x.
+      - name: Run skill block tests
+        run: node --test tests/skills/
 
       # Real sshd in a local Docker container (ubuntu runners only; macOS runners have no Docker).
       - name: Run acceptance tests against a Docker sshd target

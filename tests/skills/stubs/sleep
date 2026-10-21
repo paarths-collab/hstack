@@ -1,0 +1,3 @@
+#!/bin/bash
+# Test double of sleep: returns at once so skills that wait for a gateway do not slow the tests down.
+exit 0
