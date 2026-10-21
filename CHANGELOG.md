@@ -12,6 +12,24 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+### Fixed
+- **Installers run on stock macOS bash 3.2.** `install.sh` used `declare -A`, which aborted `--help` and every run before argument parsing. Tier membership is now a case function, and the `setup-*` scripts are checked under `/bin/bash` 3.2 in CI. Piping into `zsh` prints a one-line error; `zsh install.sh` re-execs under bash.
+- **Installers no longer delete files they did not install.** A re-run could `rm -rf` a same-named user skill. Now only hstack's own links and marked copies are replaced. Anything else is moved aside, never deleted, and the exact backup path is printed. A backup that cannot be made leaves the entry untouched and the run exits non-zero.
+- **Instruction-file rewrites are atomic.** The hstack block in CLAUDE.md, AGENTS.md or GEMINI.md is replaced between markers via a temp file and verified rename, after a backup. An unterminated start marker is never truncated.
+- **Install paths refuse an unusable `HOME`** (exit 2 when unset, empty or relative), and refuse destinations that are, or resolve into, an hstack skills tree. Relative `*_DIR` overrides resolve against the directory the command was run from.
+- **Skill validators run on bash 3.2.** `scripts/validate-skills.sh` and `scripts/check-skill-refs.sh` no longer use bash 4 features and run under `/bin/bash` in CI on macOS.
+- **Recipe tests find Python 3 portably.** They try `python3`, `python` and `py -3`; `HSTACK_PYTHON` overrides the lookup. Recipe tests run in CI on Linux and macOS.
+- **Integration template, Notion and GitHub.** The live credential check is a HARD GATE that runs before the dry run and before any write. Snapshot and rollback restore the exact prior `~/.hermes/.env` and `config.yaml`, not just unset keys. Secrets travel to the VPS over ssh stdin, never in argv or URLs.
+- **`/platform-telegram`.** The live token check sends the real token over ssh stdin. A numeric user-ID allowlist is required; an empty allowlist aborts. The allowlist is written before the token. The skill no longer relies on a `TELEGRAM_ENABLED` variable, and it does not set the group-wide `TELEGRAM_GROUP_ALLOWED_CHATS`.
+- **`/hermes-deploy` and `/hermes-model`.** Deployment variables are passed explicitly to the VPS (a quoted heredoc had left them empty). Credentials use the key names Hermes reads, such as `OPENROUTER_API_KEY` and `ANTHROPIC_API_KEY`. `/hermes-deploy` prefixes its helpers (`deploy_*`) so delegated skills cannot shadow them.
+
+### Added
+- **`setup-all` runs all six setup scripts** (`setup`, `setup-codex`, `setup-cursor`, `setup-hermes`, `setup-gemini`, `setup-openclaw`) even when git stores them without the executable bit. It continues past a failure and exits 1 if any script failed.
+- **`--pick` accepts menu numbers** (`1` for everything, `2`–`21` for one tier each) as well as tier and integration names.
+- **PowerShell installer mirror.** `install.ps1` and `setup.ps1` apply the same ownership and backup rules and always copy skills (no symlinks). `tests/installer/test-install.ps1` runs under `pwsh`; it has been verified on Linux `pwsh` only, not on Windows PowerShell 5.1.
+- **Acceptance transaction (experimental).** `packages/acceptance/` wraps the Founder Brief GitHub-to-Telegram workflow in a reversible transaction that writes a secret-free receipt and restores the last working state on rollback. It is verified offline only; a real-server run is still required. See its README.
+- **Docs.** README and CONTRIBUTING describe stock bash 3.2 support, re-run and backup behaviour, and how to test the installers. `reference/TROUBLESHOOTING.md` gains rows for the integration, Telegram, deploy and acceptance failures above.
+
 ## [0.3.0] — 2026-08-03
 
 ### Changed

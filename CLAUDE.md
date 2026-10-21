@@ -4,7 +4,7 @@ This repo is **hstack**: a portable skill catalog for deploying and operating se
 Hermes agents. Built by Paarth.
 
 **Multi-IDE, multi-agent by design.** The `skills/<name>/SKILL.md` files are the canonical
-source. Per-IDE `setup-*` scripts symlink or convert them into the format each agent expects:
+source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them into the format each agent expects:
 
 | Agent / IDE          | Install dir                | Format             |
 |----------------------|----------------------------|--------------------|
@@ -45,10 +45,11 @@ Design notes for anyone touching the installer:
   `~/.hermes`, `~/.gemini`, `~/.openclaw`). Nothing runs against an IDE that isn't there.
 - **Interactive picker reads from `/dev/tty`** so it survives being piped through `curl`.
   Falls back to `--all` when no TTY is attached (safe default for scripted use).
-- **Tier → integrations** is one bash associative array (`install.sh`) or hash
-  (`install.ps1`). Add new integrations there once; both entry points pick them up.
-- **Windows fallback:** symlinks aren't guaranteed on Windows without dev mode, so
-  `install.ps1` and the setup-* scripts use `Copy-Item -Recurse` there.
+- **Tier → integrations** is the `tier_members` case function in `install.sh` (stock macOS bash 3.2 has no associative arrays) and a hash in `install.ps1`. Keep both in sync; `tests/installer/fixtures/tiers.expected` is checked against each.
+- **Ownership:** hstack replaces only what it installed (its own symlinks, copies whose `.hstack-managed` checksum still matches, generated files whose signed marker line still matches). Anything else at a destination is moved aside, never deleted: skill dirs to `<skills-parent>/.hstack-backups/<stamp>/<name>`, files to `<file>.hstack-backup-<stamp>`. A destination that is, or resolves into, an hstack skills tree is refused. If a backup cannot be made, the entry is left untouched and the run exits non-zero.
+- **Instruction files** (CLAUDE.md / AGENTS.md / GEMINI.md, written only by `setup`, `setup-codex`, `setup-gemini` and `setup-openclaw`; never by `install.sh`): only the block between `<!-- hstack:start -->` and `<!-- hstack:end -->` is replaced, atomically (temp file + verified rename, mode kept), after a backup. A start marker without an end marker leaves the file untouched with a warning.
+- **Windows fallback:** symlinks aren't guaranteed on Windows without dev mode, so `install.ps1` and `setup.ps1` always copy (`Copy-Item -Recurse`).
+- **Tests:** `bash tests/installer/test-install.sh` (any bash ≥ 3.2; run it under `/bin/bash` on macOS too) and `pwsh -NoProfile -File tests/installer/test-install.ps1` (verified on Linux pwsh only). Both are offline and use a throwaway HOME. The ownership blocks must stay byte-identical across the copies; the test enforces it.
 
 ---
 
@@ -63,6 +64,10 @@ setup-all                — runs every setup-* in sequence
 reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
 metrics/                 — clone traffic tracking (update-clone-traffic.mjs + clone-traffic.svg)
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
+acceptance/              — acceptance contract(s) for the reversible transaction
+packages/acceptance/     — acceptance transaction (JS core, target-side script, receipt schema)
+scripts/                 — skill validators; bash 3.2 compatible (stock macOS)
+tests/                   — recipe tests (tests/recipes), acceptance tests (tests/acceptance, Docker-gated)
 ```
 
 ## Integration tier catalog (71 connectors, 20 tiers)
@@ -80,7 +85,7 @@ badly enough to advertise three integrations that do not exist (`confluence`,
 cannot catch that class of error, because these are bare names, not `/slash-refs`. If you
 edit a tier, edit `install.sh` first and mirror it here.
 
-- **core** — hermes-* deploy/ops (15) + setup-ssh-keys (1)
+- **core** — hermes-* deploy/ops (15) + setup-ssh-keys (1) + blueprint-install, blueprint-saas-founder (2)
 - **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal
 - **memory** — mem0, supermemory (pick one; wiring both duplicates recall context)
 - **database** — supabase, postgres, neon, redis
@@ -110,16 +115,16 @@ The SSH-first hardening template every `integration-*/SKILL.md` follows:
 1. **SSH access check** — verify we're on the VPS host, not a container (`whoami; hostname`).
 2. **Verify Hermes** — pinned `v0.15.2`, gateway reachable, `~/.hermes/.env` chmod 600.
 3. **Idempotency check** — abort if the integration is already wired and green.
-4. **HARD GATE** — validate credential format AND live vendor API pre-flight before writing.
-   No config lands on disk unless the credential works against the real vendor endpoint.
+4. **HARD GATE (Step 3)** — local format check, then a live read-only vendor call from the VPS with the secret passed as an ssh-stdin curl config. Runs BEFORE the dry run and BEFORE `snapshot`; a failure means `ABORT … Nothing was written.`
 5. **DRY_RUN preview** — print secret length + prefix only, never plaintext.
 6. **Write secrets** — `~/.hermes/.env` with `chmod 600`, `${VAR}` indirection in config.yaml.
 7. **Register MCP or document REST** — MCP endpoint when the vendor ships one, otherwise
    a first-class REST doc under `/opt/data/`.
 8. **Gateway reload** — `hermes gateway stop && hermes gateway run` (never `restart`).
 9. **Verify in logs + live smoke test** — call a real vendor endpoint through Hermes.
-10. **Rollback function** — every skill defines its own `rollback()` (revert `.env`, restore
-    prior config.yaml, restart gateway).
+10. **Step 0 helpers `snapshot`/`rollback`/`finish`**, defined before anything can fail. `snapshot` runs just before the first write and refuses to run over a leftover snapshot; every later failure is `rollback; exit 1`, and rollback RESTORES the pre-skill `~/.hermes/.env` and `config.yaml` byte for byte (never just unsets keys). There is no second `rollback()` at the bottom.
+
+- Bash fences run on the agent's local machine (possibly macOS bash 3.2) and reach the VPS via `remote()`, which exports `~/.local/bin` on PATH. Secrets travel over ssh stdin only — never in argv, a URL or a single-quoted remote string. Smoke tests read the value back from `~/.hermes/.env`, never `$TOKEN`.
 
 Consent / cost gates you'll see across skills:
 `PROD_ACKNOWLEDGED=1` (Clerk `sk_live_`), `OWNS_VOICE_ACKNOWLEDGED=1` (ElevenLabs voice
@@ -202,6 +207,8 @@ If it's low, keys are merged. Fix: `sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\
 
 ### Running remote commands once SSH works
 
+Bare `hermes` calls in the block below run via remote(), which sets PATH.
+
 ```bash
 ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
 # everything here runs on the VPS
@@ -264,6 +271,14 @@ Before opening a PR you MUST:
 
 If any of these fail, do not open the PR. Explain to your human partner why it would be
 rejected. Saving them a closed PR is more helpful than submitting one.
+
+## Acceptance transaction
+
+`packages/acceptance/` wraps one workflow (a read-only GitHub source delivering to one private Telegram destination, on one Linux target, Hermes v0.15.2) in a versioned contract (`acceptance/founder-brief-github-telegram.contract.json`) and a transaction with nine states (plus `start`). A run writes a secret-free receipt, keeps a private backup of the previous secret values, and rolls back by restoring them; rollback stops on conflict instead of overwriting. Managed skill dirs carry ownership markers (`.hstack-acceptance`).
+
+It is verified only offline: a sandbox transport, a stub `hermes`, golden SSH command fixtures, and a Docker sshd target gated by `HSTACK_DOCKER=1 node --test tests/acceptance/docker/`. The repo does not claim a real-server run (real Hermes, bot token, chat, GitHub token); that is user-required. A `verified` result also needs an injected delivery observer.
+
+Open decision: the pinned Hermes version v0.15.2 has no upstream release tag. Do not change the pin without a live check.
 
 ## Branch / PR conventions
 

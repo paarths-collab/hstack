@@ -6,6 +6,7 @@ This guide covers:
 
 - [What kinds of contributions we want](#what-kinds-of-contributions-we-want)
 - [Getting your environment ready](#getting-your-environment-ready)
+- [Changing the installer](#changing-the-installer)
 - [Branch, commit, PR conventions](#branch-commit-pr-conventions)
 - [Authoring a new skill — the SSH-first template, explained](#authoring-a-new-skill--the-ssh-first-template-explained)
 - [Authoring an integration skill — the extra bar](#authoring-an-integration-skill--the-extra-bar)
@@ -38,7 +39,7 @@ We politely decline:
 You need:
 
 - **A Unix-ish shell.** macOS or Linux native. On Windows: WSL2 or Git Bash. PowerShell works for `install.ps1` testing only.
-- **`bash` 4+**, `shellcheck` ≥ 0.9, `shfmt` ≥ 3.8 for lint checks locally. Install via your package manager (`brew install shellcheck shfmt`, `apt install shellcheck && GO111MODULE=on go install mvdan.cc/sh/v3/cmd/shfmt@latest`, etc.).
+- **`bash` 3.2 or newer** (the stock macOS `/bin/bash` is the floor for the installers; see [Changing the installer](#changing-the-installer)), `shellcheck` ≥ 0.9, `shfmt` ≥ 3.8 for lint checks locally. Install via your package manager (`brew install shellcheck shfmt`, `apt install shellcheck && GO111MODULE=on go install mvdan.cc/sh/v3/cmd/shfmt@latest`, etc.).
 - **`gh` CLI** for opening PRs from the terminal (optional; the GitHub web UI works too).
 - **A test VPS.** Any $4–7/mo Linux box works. Hetzner CX22, DigitalOcean $6 droplet, and Hostinger's KVM tier are the three we test on. Don't test destructive skills on your production Hermes.
 
@@ -53,13 +54,39 @@ git remote add upstream https://github.com/paarths-collab/hstack.git
 Confirm your local tools:
 
 ```bash
-bash --version | head -1     # need 4+
+bash --version | head -1     # need 3.2+
 shellcheck --version | head -2
 shfmt --version              # need 3.8+
 bash scripts/validate-skills.sh --quiet  # should print "N passed, 0 failed"
 ```
 
 If `validate-skills.sh` fails on `main`, that's a bug — please file an issue with the output before you continue.
+
+## Changing the installer
+
+`install.sh`, the `setup-*` scripts and the validators in `scripts/` must run on stock macOS `/bin/bash` 3.2. Do not use these constructs (bash 4+ or BSD-incompatible):
+
+- `declare -A` (associative arrays). Tier membership is the `tier_members` case function in `install.sh`.
+- `mapfile` / `readarray`.
+- `${var,,}` / `${var^^}` case conversion.
+- `readlink -f`. BSD `readlink` lacks it; use the `hs_resolve` helper.
+- `sed -i` without a backup suffix. Write to a temp file and rename instead.
+- Expanding an empty array under `set -u` without the guard. Write `${arr[@]+"${arr[@]}"}`, not `"${arr[@]}"`.
+
+**Duplicated blocks.** The ownership helpers (`# >>> hstack-ownership` … `# <<< hstack-ownership`) appear in `install.sh` and in every `setup-*` script except `setup-all`. The instruction-file block (`# >>> hstack-instruction-block` … `# <<< hstack-instruction-block`) appears in `setup`, `setup-codex`, `setup-gemini` and `setup-openclaw`. Edit the copy in `install.sh` (or `setup`) first, then copy the block verbatim into the others. `tests/installer/test-install.sh` fails if the copies drift apart.
+
+**PowerShell mirror.** `install.ps1` and `setup.ps1` carry the same ownership block between the same markers, and `tests/installer/test-install.ps1` checks that they are identical. Tier membership is a hash in `install.ps1`; keep it in sync with `tier_members` in `install.sh`. Both are checked against `tests/installer/fixtures/tiers.expected`.
+
+**Tests:**
+
+```bash
+bash tests/installer/test-install.sh       # any bash >= 3.2; throwaway HOME, no network, several minutes on macOS
+/bin/bash tests/installer/test-install.sh  # the stock macOS bash 3.2 run
+pwsh -NoProfile -File tests/installer/test-install.ps1   # PowerShell 7+; verified on Linux pwsh only
+shellcheck --severity=warning install.sh setup setup-*   # the same gate as .github/workflows/shellcheck.yml
+```
+
+CI runs the bash test on Ubuntu and macOS, plus an explicit `/bin/bash` 3.2 job, in `.github/workflows/installer.yml`. Windows PowerShell 5.1, real junctions and Developer-Mode symlinks are not covered by any run yet.
 
 ## Branch, commit, PR conventions
 

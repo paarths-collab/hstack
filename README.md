@@ -59,7 +59,7 @@ gemini extensions install https://github.com/paarths-collab/hstack
 registry, so install the superpowers directly:
 
 ```bash
-# macOS / Linux / Git Bash
+# macOS (the stock /bin/bash 3.2 is supported) or Linux
 curl -fsSL https://raw.githubusercontent.com/paarths-collab/hstack/main/install.sh | bash
 
 # Windows PowerShell
@@ -88,6 +88,16 @@ bash install.sh --ide=claude,codex            # only wire specific agents
 bash install.sh --all                         # everything, non-interactive
 bash install.sh --help                        # full flag reference
 ```
+
+The `--pick` prompt accepts menu numbers (`1` for everything, `2`–`21` for one tier each) as well as tier and integration names.
+
+**Re-running and backups.** Re-running the installer is safe and replaces only what hstack
+installed before (its own links and marked copies). Anything else already at a destination,
+such as your own skill with the same name or an edited copy, is moved aside and never deleted:
+skill folders go to `<skills-parent>/.hstack-backups/<timestamp>/`, files to
+`<name>.hstack-backup-<timestamp>`. The warning prints the exact path. `install.sh` never
+edits instruction files. `setup`, `setup-codex`, `setup-gemini` and `setup-openclaw` update their
+agent's instruction file only between `<!-- hstack:start -->` and `<!-- hstack:end -->` markers, with a backup.
 
 ## How you actually use it
 
@@ -229,6 +239,10 @@ Every failure mode below is a real, logged trap that hstack pre-solves so you do
 
 Full catalogue: [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md).
 
+## Acceptance transaction (experimental)
+
+[`packages/acceptance/`](packages/acceptance/README.md) wraps one workflow (a read-only GitHub source delivering to one private Telegram destination, on one Linux target) in a reversible transaction that writes a secret-free receipt. It is verified offline only. A real-server run is still required, and the pinned Hermes version has no matching upstream release tag yet. Read its README before relying on it.
+
 ## Security defaults
 
 - Localhost binding everywhere. Network exposure is an explicit, warned opt-in.
@@ -239,7 +253,7 @@ Full catalogue: [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md).
 
 ## How it works
 
-Each command is a single `skills/<name>/SKILL.md`. `install.sh` symlinks (or copies, on Windows) the same files into each detected agent's skill directory, converting to `.mdc` for Cursor and `@-referenceable context` for Gemini CLI.
+Each command is a single `skills/<name>/SKILL.md`. `install.sh` symlinks the same files into each detected agent's skill directory, and falls back to marked copies where symlinks are unavailable; `install.ps1` always copies. Cursor gets converted `.mdc` rules and Gemini CLI gets `@-referenceable` context files.
 
 The agent does everything unattended: runs the installer, writes secrets, seeds memory + SOUL, registers the gateway, runs smoke tests, wires integrations. It stops only for things you must do: minting tokens, OAuth flows, the WhatsApp QR, and the first "hello."
 

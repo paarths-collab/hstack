@@ -71,3 +71,29 @@ Real failure chain from a documented deploy session — in the order they appear
 | Discord bot reads nothing | missing privileged intents | enable Message Content + Server Members intents |
 | Slack `/sethome` "app did not respond" | Slack namespaces slash commands | use `/hermes sethome`; `SLACK_HOME_CHANNEL` must be a `C…` id + bot invited |
 | Bot ignores everyone | gateway denies all by default | set the allowlist (or DM-pair) |
+
+## Integration skills (SSH helpers, secrets, rollback)
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `hermes: command not found` over ssh although Hermes is installed | non-login ssh shells lack `~/.local/bin` on PATH | run commands through the shared `remote()` helper, which exports PATH on every call; never bypass it with a raw `ssh` |
+| A smoke test returns 401 right after a successful write, then the working token disappears | the test used `$TOKEN` in a non-interactive ssh shell that never loaded `~/.hermes/.env` (empty header), and the old rollback deleted keys | smoke tests read the value from `~/.hermes/.env` on the VPS; the live vendor preflight now runs BEFORE any write |
+| `config.yaml` has an empty or plaintext secret where `${VAR}` should be | sed placeholder injection with `'"$VAR"'` expanded an unset remote variable | use the remote-literal `\${VAR}` and the leak check in the skill |
+| `rollback: command not found`, or "Rolling back" prints but nothing is restored | `rollback()` was defined after its first call, or run via `bash <(declare -f rollback)` in a child shell, or the harness uses a fresh shell per command | Step 0 defines `snapshot`/`rollback`/`finish` first; re-run Step 0 in any new shell |
+| A `FORCE=1` re-run failed and the previously working key is gone | the old rollback unset keys instead of restoring them | rollback restores `~/.hermes/.hstack-backup/<skill>/` byte for byte; for a finished run, move `<skill>.prev` back and run rollback |
+| `snapshot: … exists — a previous <skill> run did not finish`, then `ABORT: snapshot failed … Nothing was written` | an earlier run crashed after its snapshot | load Step 0, run `rollback`, then re-run |
+| `/platform-telegram` always aborts "rejected the token" even with a good token | the old preflight sent a literal `$TELEGRAM_BOT_TOKEN` in a single-quoted remote URL and ran before the token was written | the preflight now passes the token over ssh stdin as a curl config; update the skill |
+| Telegram bot answers anyone; `TELEGRAM_ALLOW_ALL_USERS` or `GATEWAY_ALLOW_ALL_USERS` is set, or the allowlist contains `*` | open-access switch present in `.env` | the skills now refuse to continue; remove the switch and set numeric `TELEGRAM_ALLOWED_USERS` |
+| Deploy used empty model/platform/home-channel values; `.env` contains `telegram_TOKEN` or `anthropic_API_KEY` | a quoted heredoc referenced local variables, and invented key names are read by nothing | hermes-deploy validates locally, passes the values explicitly (`printf %q` env prefix) and delegates credential writing to `/hermes-model` and `/platform-<name>`; delete the stray lowercase keys |
+| Status check passes while the gateway is down; a count shows `0` on two lines | `grep -c … \|\| echo 0` prints two lines, and `grep -c 'running'` matches "not running" | use `\|\| true` and test negatives first |
+| `hermes config set KEY -- "$v"` fails "unrecognized arguments" for values starting with `-` (negative Telegram group ids) | option parsing treats the value as a flag | put `--` before the value (unverified against upstream; marked in the skills) |
+| A `[[ … =~ … ]]` regex with a large repetition count (e.g. `{16,300}`) errors in a bash block on macOS | the regex engine in stock macOS bash 3.2 rejects repetition counts above 255 (`{16,255}` works) | keep repetition counts ≤ 255 |
+| `rollback: files restored, but the gateway did NOT come back` | the rollback ends by running `gateway run --daemon` and checking `gateway status` | start it manually (`hermes gateway start`) and check `hermes logs`; `gateway run --daemon` and `gateway status` wording is unverified against upstream docs |
+
+## Acceptance transaction
+Failure states from `packages/acceptance/` (see its README for the full state machine and recovery commands).
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `skill_collision:<name>` (exit 5) | a same-named skill dir exists that the transaction did not install | nothing was changed; move or remove it yourself, or choose another target; no auto-adoption |
+| `restore_conflict` / `manual_recovery_required` | a managed key or `config.yaml` changed after apply | nothing was overwritten; inspect the named keys, resolve manually, then restore or purge with the exact commands in the README |
+| `incomplete_transaction:<id>` | an earlier transaction has no done/restored marker | resume it (`restore`) or abandon it per the README before starting another |
+| `delivery check unknown` | no delivery observer supplied | provide an observer; without one a transaction cannot reach `verified` |
