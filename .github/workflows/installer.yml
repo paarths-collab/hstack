@@ -1,0 +1,70 @@
+name: Installer tests
+
+# install.sh and the setup* scripts must work on stock macOS /bin/bash 3.2 as well as
+# modern bash: the previous installer died on macOS at `declare -A` before parsing a flag,
+# and nothing in CI ran on macOS, so it went unnoticed.
+
+on:
+  push:
+    paths:
+      - "install.sh"
+      - "setup"
+      - "setup-*"
+      - "tests/installer/**"
+      - "skills/**"
+      - "scripts/validate-skills.sh"
+      - "scripts/check-skill-refs.sh"
+      - ".github/workflows/installer.yml"
+  pull_request:
+    paths:
+      - "install.sh"
+      - "setup"
+      - "setup-*"
+      - "tests/installer/**"
+      - "skills/**"
+      - "scripts/validate-skills.sh"
+      - "scripts/check-skill-refs.sh"
+      - ".github/workflows/installer.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    name: Installer tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Installer tests (default bash)
+        shell: bash
+        run: bash tests/installer/test-install.sh
+
+  macos-bash32:
+    name: Installer on macOS /bin/bash 3.2
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show bash version
+        run: /bin/bash --version | head -1
+
+      - name: Installer tests under /bin/bash
+        run: /bin/bash tests/installer/test-install.sh
+
+      - name: install.sh --help under /bin/bash
+        run: /bin/bash install.sh --help
+
+      - name: Piped install.sh --help under /bin/bash
+        run: /bin/bash -s -- --help < install.sh
+
+      - name: validate-skills.sh under /bin/bash
+        run: /bin/bash scripts/validate-skills.sh
+
+      - name: check-skill-refs.sh under /bin/bash
+        run: /bin/bash scripts/check-skill-refs.sh

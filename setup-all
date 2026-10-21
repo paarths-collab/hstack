@@ -4,6 +4,17 @@
 # Safe to re-run.
 set -euo pipefail
 
+# Path overrides may be relative. Make them absolute NOW: the cd below would otherwise make
+# them resolve inside the checkout (e.g. CLAUDE_SKILLS_DIR=skills would point at our own sources).
+for v in CLAUDE_SKILLS_DIR CODEX_SKILLS_DIR CURSOR_RULES_DIR HERMES_SKILLS_DIR GEMINI_CONTEXT_DIR \
+  OPENCLAW_SKILLS_DIR CLAUDE_MD_PATH AGENTS_MD_PATH GEMINI_MD_PATH OPENCLAW_MD_PATH; do
+  val="${!v:-}"
+  case "$val" in
+    "" | /*) ;;
+    *) export "$v=$(pwd)/${val#./}" ;;
+  esac
+done
+
 HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HSTACK_DIR"
 
@@ -11,13 +22,23 @@ echo "=== hstack setup-all ==="
 echo "Installing hstack skills into every supported environment."
 echo
 
+FAILED=0
 for ide in "setup" "setup-codex" "setup-cursor" "setup-hermes" "setup-gemini" "setup-openclaw"; do
-  if [ -x "./$ide" ]; then
+  # Run through bash so a checkout without the executable bit (e.g. a zip download) still works.
+  if [ -f "./$ide" ]; then
     echo "--- $ide ---"
-    "./$ide" || echo "WARN: $ide failed (continuing)"
+    if ! bash "./$ide"; then
+      echo "WARN: $ide failed (continuing)" >&2
+      FAILED=1
+    fi
     echo
   fi
 done
+
+if [ "$FAILED" != "0" ]; then
+  echo "=== Finished with failures (see warnings above); nothing was deleted ===" >&2
+  exit 1
+fi
 
 echo "=== Done ==="
 echo "Skills are now available in: Claude Code, Codex, Cursor, Hermes, Gemini CLI, OpenClaw"

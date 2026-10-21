@@ -1,14 +1,321 @@
 #!/usr/bin/env bash
 # hstack setup — registers the hstack skills with Gemini CLI.
 # Safe to re-run (idempotent). No sudo. No network calls.
+# Replaces only what hstack installed; anything else already at a destination
+# is moved aside to <name>.md.hstack-backup-<timestamp>.
 #
 # Gemini CLI reads context files from ~/.gemini/context/ or a project-local
 # GEMINI.md. We expose each skill as a context file the user can @reference.
 set -euo pipefail
 
+# HOME must be an absolute path (otherwise we would write to "/.claude" or the cwd).
+case "${HOME:-}" in
+  /*) ;;
+  *)
+    echo "hstack: HOME must be set to an absolute path (got '${HOME:-}')" >&2
+    exit 2
+    ;;
+esac
+
 HSTACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="$HSTACK_DIR/skills"
 GEMINI_DIR="${GEMINI_CONTEXT_DIR:-$HOME/.gemini/context/hstack}"
+
+hs_warn() { echo "WARN: $*" >&2; }
+# >>> hstack-ownership (this block is identical in install.sh and every setup* script;
+# >>> tests/installer/test-install.sh fails if the copies drift apart)
+#
+# Rule: hstack replaces only what hstack itself installed, and never deletes anything else.
+# A non-owned entry found at a destination is moved aside and the exact new path is printed:
+#   skill dir / symlink -> <skills-parent>/.hstack-backups/<stamp>[-N]/<name>
+#                          (outside the skills dir, so agents do not load the old skill twice)
+#   file (.mdc/.md)     -> <file>.hstack-backup-<stamp>
+# Owned means:
+#   symlink : its target resolves inside a hstack skills tree (HS_ROOTS) or any hstack
+#             checkout, or it dangles at ".../skills/<same name>" (a removed old checkout)
+#   dir     : the .hstack-managed marker holds "sha256:<digest of the tree as hstack wrote
+#             it>" and the tree still matches it (an unedited, possibly older, copy: replaced
+#             silently on upgrade), or the dir equals the source being installed (marker
+#             ignored; this is also the rule for an empty legacy marker)
+#   file    : the "<!-- hstack-managed sig=... -->" line matches the digest of the rest of
+#             the file (unedited), or the file equals what hstack would write now (marker
+#             line ignored). A user-edited copy is backed up like any foreign entry.
+# Destinations that are, or lie inside, a hstack skills tree are refused outright.
+# Callers define hs_warn() and HS_ROOTS (newline-separated physical skills dirs).
+HS_MARKER=".hstack-managed"
+HS_STAMP="${HS_STAMP:-$(date +%Y%m%d%H%M%S)}"
+
+# HOME must be an absolute path: anything else would write to "/.claude" or the cwd.
+hs_need_home() {
+  case "${HOME:-}" in
+    /*) ;;
+    *)
+      echo "hstack: HOME must be set to an absolute path (got '${HOME:-}')" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# Absolute form of a path, resolved against the CURRENT directory. Call before any cd.
+hs_abs() {
+  case "$1" in
+    /*) printf '%s\n' "$1" ;;
+    *) printf '%s/%s\n' "$(pwd)" "${1#./}" ;;
+  esac
+}
+
+# Physical (symlink-free) absolute path of a directory; fails if it does not exist.
+hs_pdir() { (CDPATH='' cd -P "$1" 2>/dev/null && pwd -P); }
+
+# "sha256:<hex>" digest of stdin (a cksum value where no sha256 tool exists), and of a
+# directory tree: sorted names, kinds, file digests and link texts; only the top-level
+# marker file is excluded, so extra files, empty dirs and symlinks all change it.
+hs_sig() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf 'sha256:%s\n' "$(sha256sum | cut -d' ' -f1)"
+  elif command -v shasum >/dev/null 2>&1; then
+    printf 'sha256:%s\n' "$(shasum -a 256 | cut -d' ' -f1)"
+  else
+    printf 'cksum:%s\n' "$(cksum | tr ' ' '-')"
+  fi
+}
+hs_sig_dir() {
+  (
+    cd "$1" || exit 1
+    find . ! -path . ! -path "./$HS_MARKER" -print | LC_ALL=C sort | while IFS= read -r f; do
+      if [ -L "$f" ]; then
+        printf 'l %s -> %s\n' "$f" "$(readlink "$f")"
+      elif [ -d "$f" ]; then
+        printf 'd %s\n' "$f"
+      elif [ -f "$f" ]; then
+        printf 'f %s %s\n' "$f" "$(hs_sig <"$f")"
+      else
+        printf 'o %s\n' "$f"
+      fi
+    done | hs_sig
+  )
+}
+
+# stdin-less helper: <file> with the one marker line "<!-- hstack-managed sig=$2 -->" removed.
+hs_strip_marker() {
+  awk -v m="<!-- hstack-managed sig=$2 -->" '!d && $0 == m { d = 1; next } { print }' "$1"
+}
+
+# Follow a symlink chain and return the absolute final path (no readlink -f: BSD/macOS
+# readlink lacks it). A dangling link yields its best-effort target path.
+hs_resolve() {
+  local p="$1" n=0 t d
+  while [ -L "$p" ] && [ "$n" -lt 20 ]; do
+    t="$(readlink "$p")"
+    case "$t" in
+      /*) p="$t" ;;
+      *) p="$(dirname "$p")/$t" ;;
+    esac
+    n=$((n + 1))
+  done
+  if d="$(hs_pdir "$(dirname "$p")")"; then p="${d%/}/$(basename "$p")"; fi
+  printf '%s\n' "$p"
+}
+
+# 0 if the symlink points into a hstack skills tree, into any hstack checkout, or dangles
+# at ".../skills/<its own name>" (the checkout it came from was removed or moved).
+hs_is_our_link() {
+  local t root top b
+  t="$(hs_resolve "$1")"
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$t" in "$root"/*) return 0 ;; esac
+  done <<<"$HS_ROOTS"
+  if [ ! -e "$1" ]; then
+    b="$(basename "$1")"
+    case "$t" in
+      */skills/"$b" | */skills/"$b"/SKILL.md | */skills/"${b%.md}"/SKILL.md) return 0 ;;
+    esac
+    return 1
+  fi
+  t="${t%/SKILL.md}"
+  top="$(dirname "$(dirname "$t")")"
+  [ -f "$top/install.sh" ] && [ -f "$top/setup-all" ] && [ -f "$t/SKILL.md" ]
+}
+
+# hs_owned <dst> [<reference copy of what would be installed>]
+hs_owned() {
+  local dst="$1" ref="${2%/}" rec
+  if [ -L "$dst" ]; then
+    hs_is_our_link "$dst"
+  elif [ -d "$dst" ]; then
+    if [ -f "$dst/$HS_MARKER" ] && [ "$(cat "$dst/$HS_MARKER")" = "$(hs_sig_dir "$dst")" ]; then return 0; fi
+    # equal to the source being installed (top-level marker ignored; compared by digest,
+    # not diff, because some diffs miss empty dirs and symlinks)
+    [ -d "$ref" ] || return 1
+    [ "$(hs_sig_dir "$dst")" = "$(hs_sig_dir "$ref")" ]
+  elif [ -f "$dst" ]; then
+    rec="$(sed -n 's/^<!-- hstack-managed sig=\([0-9a-z:-]*\) -->$/\1/p' "$dst" 2>/dev/null | head -1)"
+    if [ -n "$rec" ]; then
+      if [ "$rec" = "$(hs_strip_marker "$dst" "$rec" | hs_sig)" ]; then return 0; fi
+      # still what hstack would write now (the one marker line ignored)?
+      [ -f "$ref" ] && hs_strip_marker "$dst" "$rec" | cmp -s - "$ref" && return 0
+    fi
+    # an unmarked copy identical to what hstack would install
+    [ -f "$ref" ] && cmp -s "$ref" "$dst"
+  else
+    return 1
+  fi
+}
+
+# An unused "<path>.hstack-backup-<stamp>[-n]" name (files backed up next to the original).
+hs_bak_path() {
+  local bak="$1.hstack-backup-$HS_STAMP" n=1
+  while [ -e "$bak" ] || [ -L "$bak" ]; do
+    bak="$1.hstack-backup-$HS_STAMP-$n"
+    n=$((n + 1))
+  done
+  printf '%s\n' "$bak"
+}
+
+# An unused "<skills-parent>/.hstack-backups/<stamp>[-n]/<name>" path, parent dir created.
+hs_dir_bak_path() {
+  local name root d suffix="" n=0
+  name="$(basename "$1")"
+  root="$(dirname "$(dirname "$1")")/.hstack-backups"
+  while :; do
+    d="$root/$HS_STAMP$suffix"
+    if [ ! -e "$d/$name" ] && [ ! -L "$d/$name" ]; then break; fi
+    n=$((n + 1))
+    suffix="-$n"
+  done
+  mkdir -p "$d" || return 1
+  [ -d "$d" ] && [ -w "$d" ] || return 1
+  printf '%s\n' "$d/$name"
+}
+
+# hs_clear_dst <dst> [<ref>] [dir|file]
+# Free <dst> for a fresh install: remove it if hstack owns it, otherwise move it aside.
+# Returns 1 and writes nothing if <dst> is the hstack source itself, or if it could not be
+# removed / moved aside (failed backups are never ignored: the caller must not write then).
+hs_clear_dst() {
+  local dst="$1" ref="${2:-}" kind="${3:-file}" bak
+  [ -e "$dst" ] || [ -L "$dst" ] || return 0
+  if [ ! -L "$dst" ] && [ -n "$ref" ] && [ "$dst" -ef "$ref" ]; then
+    hs_warn "$dst is the hstack source itself - skipped"
+    return 1
+  fi
+  if hs_owned "$dst" "$ref"; then
+    if [ -d "$dst" ] && [ ! -L "$dst" ]; then rm -rf "$dst"; else rm -f "$dst"; fi
+  else
+    if [ "$kind" = dir ]; then
+      bak="$(hs_dir_bak_path "$dst")" || {
+        hs_warn "$dst is not managed by hstack and no backup location is usable - left untouched"
+        return 1
+      }
+    else
+      bak="$(hs_bak_path "$dst")"
+    fi
+    mv "$dst" "$bak" || {
+      hs_warn "cannot move $dst aside to $bak - left untouched"
+      return 1
+    }
+    hs_warn "$dst is not managed by hstack - moved to $bak (nothing deleted)"
+  fi
+  # Whatever happened, only write when the destination is really free.
+  if [ -e "$dst" ] || [ -L "$dst" ]; then
+    hs_warn "$dst could not be cleared - left untouched"
+    return 1
+  fi
+  return 0
+}
+
+# hs_target_ok <dir>: refuse a destination that is, or resolves to somewhere inside, a
+# hstack skills tree (e.g. ~/.claude/skills symlinked to the checkout's skills/).
+hs_target_ok() {
+  local p root
+  p="$(hs_pdir "$1")" || {
+    hs_warn "cannot use $1 as a destination: not a directory"
+    return 1
+  }
+  while IFS= read -r root; do
+    [ -n "$root" ] || continue
+    case "$p/" in
+      "$root"/*)
+        hs_warn "refusing to install into $1: it resolves to $p, which is inside the hstack source tree $root"
+        return 1
+        ;;
+    esac
+  done <<<"$HS_ROOTS"
+  return 0
+}
+
+# Skill directory: symlink (preferred) or copy carrying a checksum marker.
+hs_install_dir() {
+  local src="${1%/}" dst="$2"
+  hs_clear_dst "$dst" "$src" dir || return 1
+  if ln -s "$src" "$dst" 2>/dev/null; then
+    :
+  else
+    if ! cp -R "$src" "$dst" 2>/dev/null || ! hs_sig_dir "$dst" >"$dst/$HS_MARKER"; then
+      rm -rf "$dst"
+      hs_warn "write error: could not copy $src to $dst (partial copy removed)"
+      return 1
+    fi
+  fi
+}
+
+# Single file (Gemini context): symlink (preferred) or copy ending in a checksum marker.
+hs_install_file() {
+  local src="$1" dst="$2"
+  hs_clear_dst "$dst" "$src" file || return 1
+  if ln -s "$src" "$dst" 2>/dev/null; then
+    :
+  else
+    # dst was free before this point, so anything at dst now is the partial file we just made
+    if ! { cat "$src" >"$dst" && printf '\n' >>"$dst"; } 2>/dev/null ||
+      ! printf '<!-- hstack-managed sig=%s -->\n' "$(hs_sig <"$dst")" 2>/dev/null >>"$dst"; then
+      rm -f "$dst"
+      hs_warn "write error: could not write $dst (partial file removed)"
+      return 1
+    fi
+  fi
+}
+
+# Cursor rule body for <skill>; a non-empty 3rd argument is the checksum for the marker line.
+hs_gen_mdc() {
+  local skill="$1" src="$2" sig="${3:-}" desc
+  desc="$(awk '/^description:/{sub(/^description: */,""); print; exit}' "$src")"
+  echo "---"
+  echo "description: ${desc:-hstack skill: $skill}"
+  echo "globs:"
+  echo "alwaysApply: false"
+  echo "---"
+  if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
+  echo
+  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+}
+
+# Cursor .mdc rule. Written through a temp file onto a fresh path, never through an
+# existing symlink.
+hs_install_mdc() {
+  local skill="$1" src="$2" dst="$3" new legacy
+  new="$(mktemp "${TMPDIR:-/tmp}/hstack-mdc.XXXXXX")"
+  legacy="$(mktemp "${TMPDIR:-/tmp}/hstack-mdc.XXXXXX")"
+  hs_gen_mdc "$skill" "$src" >"$legacy"
+  hs_gen_mdc "$skill" "$src" "$(hs_sig <"$legacy")" >"$new"
+  if ! hs_clear_dst "$dst" "$legacy" file; then
+    rm -f "$new" "$legacy"
+    return 1
+  fi
+  # dst is free here, so a failed write leaves only our own partial file: remove exactly that
+  if ! cat "$new" 2>/dev/null >"$dst" || ! cmp -s "$new" "$dst"; then
+    rm -f "$new" "$legacy" "$dst"
+    hs_warn "write error: could not write $dst (partial file removed)"
+    return 1
+  fi
+  rm -f "$new" "$legacy"
+}
+# <<< hstack-ownership
+HS_ROOTS="$(hs_pdir "$SKILLS_SRC" || echo "$SKILLS_SRC")"$'\n'"$HOME/.hstack/skills"
+# Overrides may be relative: resolve them against the invoking directory.
+GEMINI_DIR="$(hs_abs "$GEMINI_DIR")"
+SETUP_PROBLEMS=0
 
 echo "hstack setup (Gemini CLI)"
 echo "  source : $SKILLS_SRC"
@@ -20,19 +327,25 @@ echo
   exit 1
 }
 mkdir -p "$GEMINI_DIR"
+hs_target_ok "$GEMINI_DIR" || exit 1
 
 count=0
 for dir in "$SKILLS_SRC"/*/; do
   [ -f "$dir/SKILL.md" ] || continue
-  name="$(basename "$dir")"
-  link="$GEMINI_DIR/$name.md"
-  if [ -L "$link" ] || [ -e "$link" ]; then rm -rf "$link"; fi
-  if ln -s "$dir/SKILL.md" "$link" 2>/dev/null; then :; else cp "$dir/SKILL.md" "$link"; fi
-  count=$((count + 1))
+  dir="${dir%/}"
+  if hs_install_file "$dir/SKILL.md" "$GEMINI_DIR/$(basename "$dir").md"; then
+    count=$((count + 1))
+  else
+    SETUP_PROBLEMS=1
+  fi
 done
 echo "Registered $count skills for Gemini CLI."
+if [ "$SETUP_PROBLEMS" != "0" ]; then
+  echo "Some skills were skipped (see warnings above); nothing was deleted." >&2
+  exit 1
+fi
 
-GEMINI_MD="${GEMINI_MD_PATH:-$HOME/.gemini/GEMINI.md}"
+GEMINI_MD="$(hs_abs "${GEMINI_MD_PATH:-$HOME/.gemini/GEMINI.md}")"
 MARK_START="<!-- hstack:start -->"
 MARK_END="<!-- hstack:end -->"
 SECTION="$MARK_START
@@ -43,19 +356,108 @@ in your prompt, e.g. \`@hstack/hermes-deploy.md please run this skill against \$
 Every skill is SSH-first and assumes \$VPS_IP + \$VPS_USER are exported.
 $MARK_END"
 
-mkdir -p "$(dirname "$GEMINI_MD")"
-touch "$GEMINI_MD"
-if grep -q "$MARK_START" "$GEMINI_MD" 2>/dev/null; then
-  tmp="$(mktemp)"
-  awk -v s="$MARK_START" -v e="$MARK_END" '
-    $0==s{skip=1} skip&&$0==e{skip=0;next} !skip' "$GEMINI_MD" >"$tmp"
-  { cat "$tmp"; echo; echo "$SECTION"; } >"$GEMINI_MD"
+# >>> hstack-instruction-block (identical in setup, setup-codex, setup-gemini, setup-openclaw;
+# >>> tests/installer/test-install.sh fails if the copies drift apart)
+#
+# hs_write_block <file> <start-marker> <end-marker> <section>
+# Replaces the marked section in place, or appends it. Never truncates and never writes in
+# place: the new content is built in a temp file, verified, then moved over the original
+# (mode and owner preserved). If the start marker has no matching end marker the file is left
+# untouched with a warning. Before a rewrite a backup "<file>.hstack-backup-<stamp>" is made;
+# if any step fails the original is left (or put back) intact, the backup is KEPT and its path
+# printed, and the function returns 1 (the setup script then exits non-zero).
+# A file (or directory) that cannot be written is skipped with a warning, never half-done.
+# Marker lines are matched with or without a trailing CR (CRLF files).
+
+# hs_install_text <new-content-file> <target>: replace <target> by a verified copy of <new>.
+hs_install_text() {
+  local new="$1" real="$2" t2
+  t2="$(mktemp "$(dirname "$real")/.hstack-new.XXXXXX" 2>/dev/null)" || return 1
+  if cp -p "$real" "$t2" 2>/dev/null && cat "$new" 2>/dev/null >"$t2" && cmp -s "$new" "$t2" &&
+    mv "$t2" "$real" 2>/dev/null && cmp -s "$new" "$real"; then
+    return 0
+  fi
+  rm -f "$t2"
+  return 1
+}
+
+hs_write_block() {
+  local file="$1" start="$2" end="$3" section="$4" dir real tmp bak="" rc=0 replaced=0 what
+  dir="$(dirname "$file")"
+  if [ -e "$file" ] || [ -L "$file" ]; then
+    if [ ! -w "$file" ]; then
+      hs_warn "$file is not writable - hstack section not added. Fix the permissions and re-run."
+      return 0
+    fi
+  else
+    mkdir -p "$dir" 2>/dev/null || true
+    if [ ! -d "$dir" ] || [ ! -w "$dir" ] || ! : 2>/dev/null >"$file"; then
+      hs_warn "cannot create $file - hstack section not added."
+      return 0
+    fi
+  fi
+  real="$(hs_resolve "$file")"
+  tmp="$(mktemp "${TMPDIR:-/tmp}/hstack-md.XXXXXX")"
+  if awk -v s="$start" '{ sub(/\r$/, "") } $0 == s { f = 1 } END { exit !f }' "$real" 2>/dev/null; then
+    HS_SECTION="$section" awk -v s="$start" -v e="$end" '
+      { line = $0; sub(/\r$/, "", line) }
+      line == s && !skip { if (!done) { print ENVIRON["HS_SECTION"]; done = 1 } skip = 1; next }
+      skip { if (line == e) skip = 0; next }
+      { print }
+      END { if (skip) exit 3 }' "$real" >"$tmp" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      rm -f "$tmp"
+      hs_warn "$file has '$start' but no matching '$end' - left unchanged. Add the end marker (or remove the start marker) and re-run."
+      return 0
+    fi
+    replaced=1
+    what="Updated"
+  else
+    if ! {
+      cat "$real"
+      echo
+      echo "$section"
+    } 2>/dev/null >"$tmp"; then
+      rm -f "$tmp"
+      hs_warn "could not read $file - hstack section not added."
+      return 1
+    fi
+    what="Added"
+  fi
+  if cmp -s "$tmp" "$real"; then
+    rm -f "$tmp"
+    echo "hstack section already up to date in $file"
+    return 0
+  fi
+  if [ "$replaced" = 1 ]; then
+    bak="$(hs_bak_path "$file")"
+    if ! cp -p "$real" "$bak" 2>/dev/null; then
+      rm -f "$tmp" "$bak"
+      hs_warn "could not back up $file - left unchanged."
+      return 1
+    fi
+  fi
+  if hs_install_text "$tmp" "$real"; then
+    rm -f "$tmp"
+    if [ -n "$bak" ]; then
+      echo "$what hstack section in $file (backup: $bak)"
+    else
+      echo "$what hstack section in $file"
+    fi
+    return 0
+  fi
   rm -f "$tmp"
-  echo "Updated hstack section in $GEMINI_MD"
-else
-  { echo; echo "$SECTION"; } >>"$GEMINI_MD"
-  echo "Added hstack section to $GEMINI_MD"
-fi
+  # Put the original back if a step got as far as changing it; never drop the backup.
+  if [ -n "$bak" ] && ! cmp -s "$bak" "$real"; then cp -p "$bak" "$real" 2>/dev/null || true; fi
+  if [ -n "$bak" ]; then
+    hs_warn "write failed: could not update $file; the original is intact and a backup was kept at $bak"
+  else
+    hs_warn "write failed: could not update $file; the original is intact"
+  fi
+  return 1
+}
+# <<< hstack-instruction-block
+hs_write_block "$GEMINI_MD" "$MARK_START" "$MARK_END" "$SECTION"
 
 echo
 echo "Done. In Gemini CLI, @reference any hstack skill, e.g.:"
