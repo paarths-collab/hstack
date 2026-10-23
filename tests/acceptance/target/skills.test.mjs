@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
-import { existsSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { TXN, TXN2, sandbox, skillTar, treeHash, ustar } from './helpers/sandbox.mjs';
+import { buildSkillsTar } from '../../../packages/acceptance/ops.js';
 
 const V1 = { 'alpha-skill': { 'SKILL.md': 'alpha v1\n', 'scripts/run.sh': 'echo 1\n' }, 'beta-skill': { 'SKILL.md': 'beta v1\n' } };
 const V2 = { 'alpha-skill': { 'SKILL.md': 'alpha v2\n', 'scripts/run.sh': 'echo 1\n' }, 'beta-skill': { 'SKILL.md': 'beta v1\n' } };
@@ -139,6 +141,71 @@ test('a user-modified managed skill => exit 3 managed_skill_modified and nothing
     // a missing managed dir counts as modified too
     rmSync(join(sb.skillsPath, 'beta-skill'), { recursive: true });
     assert.equal(sb.run(['skills-sync', TXN2, '--names', NAMES], { input: skillTar(V2) }).status, 3);
+  } finally { sb.cleanup(); }
+});
+
+test('permission-only and empty-directory edits fail verification and are preserved by rollback and upgrade refusal', () => {
+  for (const mutate of [
+    (sb) => chmodSync(join(sb.skillsPath, 'alpha-skill', 'scripts', 'run.sh'), 0o700),
+    (sb) => chmodSync(join(sb.skillsPath, 'alpha-skill'), 0o750),
+    (sb) => mkdirSync(join(sb.skillsPath, 'alpha-skill', 'user-empty-dir')),
+  ]) {
+    const sb = seeded();
+    try {
+      sb.stageAll();
+      assert.equal(sb.syncSkills(skillTar(V1), NAMES).status, 0);
+      assert.equal(sb.apply().status, 0);
+      mutate(sb);
+      assert.equal(sb.verify({ skills: NAMES }).kv['check.managed-skills-intact'], 'fail');
+      const before = sb.hash();
+      const restored = sb.restore();
+      assert.equal(restored.status, 3, restored.stdout);
+      assert.equal(restored.kv.conflict, 'skill:alpha-skill');
+      assert.equal(sb.hash(), before, 'rollback preserves every permission/empty-directory edit');
+      assert.equal(sb.commit().status, 0);
+      assert.equal(sb.backup(TXN2).status, 0);
+      const upgradeBefore = sb.hash();
+      const upgrade = sb.syncSkills(skillTar(V2), NAMES, TXN2);
+      assert.equal(upgrade.status, 3, upgrade.stdout);
+      assert.equal(upgrade.kv.error, 'managed_skill_modified');
+      assert.equal(sb.hash(), upgradeBefore);
+    } finally { sb.cleanup(); }
+  }
+});
+
+test('an executable bit removed from a shipped script is detected even when its bytes are unchanged', () => {
+  const sb = seeded();
+  try {
+    const src = join(sb.root, 'archive-source');
+    mkdirSync(join(src, 'alpha-skill'), { recursive: true });
+    writeFileSync(join(src, 'alpha-skill', 'SKILL.md'), 'run the script\n');
+    writeFileSync(join(src, 'alpha-skill', 'run.sh'), '#!/bin/sh\necho hello\n');
+    chmodSync(join(src, 'alpha-skill', 'run.sh'), 0o755);
+    sb.stageAll();
+    assert.equal(sb.syncSkills(buildSkillsTar(src, ['alpha-skill']), 'alpha-skill').status, 0);
+    assert.equal(sb.apply().status, 0);
+    assert.equal(sb.verify({ skills: 'alpha-skill' }).kv['check.managed-skills-intact'], 'pass');
+    chmodSync(join(sb.skillsPath, 'alpha-skill', 'run.sh'), 0o600);
+    assert.equal(sb.verify({ skills: 'alpha-skill' }).kv['check.managed-skills-intact'], 'fail');
+    assert.equal(sb.restore().status, 3);
+    assert.ok(existsSync(join(sb.skillsPath, 'alpha-skill', 'run.sh')));
+  } finally { sb.cleanup(); }
+});
+
+test('legacy content-only manifest hashes are refused without adopting or deleting the old installation', () => {
+  const sb = seeded();
+  try {
+    sb.write('.hermes/skills/alpha-skill/SKILL.md', 'legacy skill\n');
+    // Reproduce the old name+content-only digest of a one-file skill.
+    const digest = (s) => createHash('sha256').update(s).digest('hex');
+    const legacyHash = digest(`${digest('legacy skill\n')}  ./SKILL.md\n`);
+    sb.write('.hermes/.hstack/managed-skills.tsv', `alpha-skill\t${legacyHash}\tlegacytxn\t2026-01-01T00:00:00Z\n`);
+    assert.equal(sb.backup().status, 0);
+    const before = sb.hash();
+    const result = sb.syncSkills(skillTar({ 'alpha-skill': { 'SKILL.md': 'new skill\n' } }), 'alpha-skill');
+    assert.equal(result.status, 3, result.stdout);
+    assert.equal(result.kv.error, 'managed_skill_modified');
+    assert.equal(sb.hash(), before);
   } finally { sb.cleanup(); }
 });
 

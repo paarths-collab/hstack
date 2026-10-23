@@ -70,8 +70,10 @@ describe("shared helpers are identical across the repaired skills", () => {
   // absolute hermes path).
   const REPLACED = [
     "for f in .env config.yaml; do",
-    "hermes gateway stop || true; sleep 2; hermes gateway run --daemon || true",
-    'st=$(hermes gateway status 2>&1 || true)',
+    "hermes -p default gateway stop",
+    "sleep 2",
+    "hermes -p default gateway ensure --json --timeout 60 >/dev/null",
+    'st=$(hermes -p default gateway status 2>&1) || status_rc=$?',
     'echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."',
   ];
   it("deploy_snapshot/deploy_rollback/deploy_finish equal the generic ones modulo the documented extras", () => {

@@ -11,12 +11,19 @@ import { canonicalHash, evaluateSchema, parseStrictJson } from "./receipt.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(here, "..", "..");
 export const DEFAULT_CONTRACT_PATH = path.join(REPO_ROOT, "acceptance", "founder-brief-github-telegram.contract.json");
+export const CANDIDATE_CONTRACT_PATH = path.join(REPO_ROOT, "acceptance", "founder-brief-github-telegram.hermes-0.22.5.candidate.contract.json");
 export const DEFAULT_VERSIONS_PATH = path.join(REPO_ROOT, "VERSIONS.txt");
 
-/** The only hermes subcommands the target script is allowed to call (declared, unverified for real Hermes). */
+/** Legacy adapter surface (declared, unverified for real Hermes). */
 export const KNOWN_ADAPTER_SURFACE = Object.freeze([
   "--version", "cron list", "cron create", "cron remove", "cron run",
   "gateway stop", "gateway run --daemon", "config set",
+]);
+
+/** Source-reviewed candidate surface; it is not promoted or live-runtime verified. */
+export const NATIVE_ADAPTER_SURFACE = Object.freeze([
+  "--version", "cron create", "cron remove", "cron run", "gateway stop --yes",
+  "gateway start", "gateway ensure", "config set",
 ]);
 
 export const KNOWN_CHECK_IDS = Object.freeze([
@@ -128,6 +135,11 @@ export function validateContract(contract, { versions = null } = {}) {
   if (errors.length > 0) return errors;
 
   const c = contract;
+  const runtimeSource = c.runtime.versions_source;
+  const runtimeKey = runtimeSource === "VERSIONS.txt#HERMES_VERSION" ? "HERMES_VERSION"
+    : runtimeSource === "VERSIONS.txt#HERMES_CANDIDATE_VERSION" ? "HERMES_CANDIDATE_VERSION" : null;
+  if (!runtimeKey) errors.push("contract.runtime.versions_source must select the baseline or candidate Hermes pin");
+  const allowedSurface = runtimeKey === "HERMES_CANDIDATE_VERSION" ? NATIVE_ADAPTER_SURFACE : KNOWN_ADAPTER_SURFACE;
   for (const [name, list] of [
     ["managed_env_keys", c.managed_env_keys], ["managed_skills", c.managed_skills],
     ["adapter_surface", c.adapter_surface], ["required_checks", c.required_checks],
@@ -143,7 +155,7 @@ export function validateContract(contract, { versions = null } = {}) {
     if (!c.managed_skills.includes(skill)) errors.push(`contract.managed_skills must include adapter skill ${skill}`);
   }
   for (const entry of c.adapter_surface) {
-    if (!KNOWN_ADAPTER_SURFACE.includes(entry)) errors.push(`contract.adapter_surface: '${entry}' is not a known adapter-surface entry`);
+    if (!allowedSurface.includes(entry)) errors.push(`contract.adapter_surface: '${entry}' is not a known adapter-surface entry for this runtime source`);
   }
   for (const id of c.required_checks) {
     if (!KNOWN_CHECK_IDS.includes(id)) errors.push(`contract.required_checks: unknown check '${id}'`);
@@ -164,11 +176,11 @@ export function validateContract(contract, { versions = null } = {}) {
   if (c.schedule.prompt.includes("|")) errors.push("contract.schedule.prompt must not contain '|'");
 
   if (versions) {
-    if (versions.HERMES_VERSION !== c.runtime.declared_version) {
-      errors.push(`contract.runtime.declared_version (${c.runtime.declared_version}) disagrees with VERSIONS.txt HERMES_VERSION (${versions.HERMES_VERSION ?? "missing"})`);
+    if (!runtimeKey || versions[runtimeKey] !== c.runtime.declared_version) {
+      errors.push(`contract.runtime.declared_version (${c.runtime.declared_version}) disagrees with VERSIONS.txt ${runtimeKey ?? "runtime pin"} (${versions[runtimeKey] ?? "missing"})`);
     }
-    if (!c.runtime.supported_versions.every((v) => v === versions.HERMES_VERSION)) {
-      errors.push("contract.runtime.supported_versions disagrees with VERSIONS.txt HERMES_VERSION");
+    if (!runtimeKey || !c.runtime.supported_versions.every((v) => v === versions[runtimeKey])) {
+      errors.push(`contract.runtime.supported_versions disagrees with VERSIONS.txt ${runtimeKey ?? "runtime pin"}`);
     }
     if (versions.GITHUB_MCP_PKG !== c.adapters.github.mcp_pkg) {
       errors.push(`contract.adapters.github.mcp_pkg disagrees with VERSIONS.txt GITHUB_MCP_PKG (${versions.GITHUB_MCP_PKG ?? "missing"})`);
@@ -188,7 +200,8 @@ function deepFreeze(value) {
 /**
  * Load and strictly validate a contract file.
  * options.versionsFile: when given (or when the default repo VERSIONS.txt exists and options.versionsFile !== null),
- * the declared Hermes version and GitHub MCP pin must equal VERSIONS.txt.
+ * the declared Hermes version must equal its selected baseline/candidate pin,
+ * and the GitHub MCP pin must equal VERSIONS.txt.
  */
 export function loadContract(file = DEFAULT_CONTRACT_PATH, options = {}) {
   let parsed;

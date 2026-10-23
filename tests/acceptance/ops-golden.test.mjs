@@ -7,11 +7,11 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  HELPER_PATH, PATH_EXPORT, UnsafeArgument, assertSafeArg, buildSkillsTar, describeOp, opApply, opBackup, opCommit, opHelperVerify,
+  HELPER_PATH, PATH_EXPORT, UnsafeArgument, assertSafeArg, bindHelper, buildSkillsTar, describeOp, helperPath, opApply, opBackup, opCommit, opHelperVerify,
   opInspect, opInstallHelper, opPurge, opPutEnv, opReload, opRestore, opSkillsSync, opStageCheck, opVerify, validateHost, validateUser,
 } from "../../packages/acceptance/ops.js";
 import { RecordingTransport, SandboxTransport, SshTransport } from "../../packages/acceptance/transports.js";
-import { validateReceipt } from "../../packages/acceptance/receipt.js";
+import { sha256Hex, validateReceipt } from "../../packages/acceptance/receipt.js";
 import { Transaction } from "../../packages/acceptance/transaction.js";
 import { OperatorInputInvalid } from "../../packages/acceptance/untrusted.js";
 import { cannedResponder } from "./helpers/canned.mjs";
@@ -23,6 +23,7 @@ import os from "node:os";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_SCRIPT_PATH = path.join(here, "fixtures", "target-script-fixture.sh");
 const FIXTURE_SCRIPT = readFileSync(FIXTURE_SCRIPT_PATH, "utf8");
+const PINNED_HELPER = helperPath(sha256Hex(FIXTURE_SCRIPT));
 const TXN = "accept000001";
 const KEYS = contract.managed_env_keys;
 const SCHEDULE = OPERATOR.schedule;
@@ -44,7 +45,7 @@ function allOps() {
     opRestore({ txn: TXN }),
     opCommit({ txn: TXN }),
     opPurge({ txn: TXN }),
-  ];
+  ].map((op) => bindHelper(op, sha256Hex(FIXTURE_SCRIPT)));
 }
 
 const SECRETS = [FAKE.github, FAKE.bot, FAKE.chat, FAKE.allowed];
@@ -76,6 +77,7 @@ test("secrets reach the target only on stdin: never in argv, never in the redact
 test("no op ever contains doctor, --fix, eval, restart or command substitution", () => {
   for (const op of allOps()) {
     for (const forbidden of ["doctor", "--fix", "eval ", "restart", "$(", "`", "&&&", "sudo", "curl", "wget", "rm -rf", " | sh", ">>"]) {
+      if (op.op === "install-helper" && forbidden === "$(") continue; // fixed mktemp invocation only
       assert.equal(op.remote.includes(forbidden), false, `${op.op}: ${forbidden}`);
     }
   }
@@ -85,15 +87,18 @@ test("every target op carries the PATH export and calls the installed helper wit
   const target = allOps().filter((op) => op.remote.startsWith(PATH_EXPORT));
   assert.deepEqual(target.map((op) => op.op).sort(), ["apply", "backup", "commit", "put-env", "put-env", "put-env", "put-env", "purge", "reload", "restore", "stage-check", "skills-sync", "verify"].sort());
   for (const op of target) {
-    assert.ok(op.remote.startsWith(`${PATH_EXPORT}${HELPER_PATH} ${op.op}`), op.op);
+    assert.ok(op.remote.startsWith(`${PATH_EXPORT}${PINNED_HELPER} ${op.op}`), op.op);
     // After removing quoted arguments only the fixed skeleton and `--flag` words remain.
-    const skeleton = op.remote.slice(PATH_EXPORT.length + HELPER_PATH.length).replace(/'[^']*'/g, "ARG");
+    const skeleton = op.remote.slice(PATH_EXPORT.length + PINNED_HELPER.length).replace(/'[^']*'/g, "ARG");
     assert.match(skeleton, /^ [a-z-]+( (ARG|--[a-z-]+))*$/, op.remote);
   }
   assert.equal(PATH_EXPORT, 'export PATH="$HOME/.local/bin:$PATH"; ');
   assert.equal(opInspect(FIXTURE_SCRIPT).remote, "bash -s -- inspect");
   assert.equal(opInspect(FIXTURE_SCRIPT).mutates, "none");
-  assert.match(opInstallHelper(FIXTURE_SCRIPT).remote, /^umask 077; mkdir -p ~\/\.hermes\/\.hstack\/bin && cat > ~\/\.hermes\/\.hstack\/bin\/hstack-target\.sh && chmod 700 ~\/\.hermes\/\.hstack\/bin\/hstack-target\.sh$/);
+  const install = opInstallHelper(FIXTURE_SCRIPT);
+  assert.ok(install.remote.includes(`ln "$t" ${PINNED_HELPER}`), "publish by no-clobber hard link");
+  assert.equal(install.remote.includes(`cat > ${PINNED_HELPER}`), false, "never truncate a published helper");
+  assert.equal(install.remote.includes(HELPER_PATH), false, "never install the shared legacy path");
 });
 
 test("only the live ops are marked live, and inspect/verify/stage-check mutate nothing", () => {

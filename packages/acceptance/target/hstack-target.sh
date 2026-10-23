@@ -3,23 +3,30 @@
 #
 # Runs ON the VPS (Linux, bash). Also runs on macOS /bin/bash 3.2 so the sandbox tests can
 # execute the very same file. No dependencies beyond coreutils-ish tools (awk, sed, grep, find,
-# tar, sha256sum|shasum, stat, cp, mv). No `eval`, no mapfile, no associative arrays.
+# tar, sha256sum|shasum, stat, cp, mv). The candidate native adapter also needs Python 3
+# (stdlib only). No `eval`, no mapfile, no associative arrays.
 #
 # What it manages: ONE reversible transaction over ~/.hermes: a few .env keys, a few skill
 # directories, and idempotent cron entries marked `[hstack:<id>]`. Everything else (unrelated
 # env keys, skills, cron entries, config.yaml) is never written, and restore refuses to
 # overwrite anything the user changed after apply.
 #
-# HONESTY: the Hermes CLI is touched only through a small declared surface
+# HONESTY: legacy recovery retains the small declared surface
 #   hermes --version | cron list|create|remove | gateway stop|run --daemon
 # (`cron list` is assumed to print one job per line: <id> TAB <schedule> TAB <prompt>).
 # That surface is UNVERIFIED against real Hermes; the test double is tests/acceptance/stubs/hermes.
+# Candidate v0.22.5 uses a bundled, version-specific structured jobs.json reader and native
+# CLI writes, explicitly bound to HERMES_HOME and --profile default. Its gateway reload is
+# limited to an exclusive default profile with an installed systemd service and validated
+# readiness identity. Candidate status is not production promotion or live delivery proof.
 # This script never runs `hermes doctor` or any `--fix`.
 #
 # Layout (HSTACK_HOME defaults to $HOME):
 #   $HSTACK_HOME/.hermes/.env  config.yaml  skills/<name>/
 #   $HSTACK_HOME/.hermes/.hstack/managed-skills.tsv   name TAB sha256 TAB txn TAB time
 #   $HSTACK_HOME/.hermes/.hstack/txn/<txn>/           (dir 700, files 600, umask 077)
+# Native snapshots and immutable intent plans are private JSON files within that transaction;
+# the shell and Python adapter are shipped as one reviewed, content-addressed artifact.
 # hermes binary: $HSTACK_HOME/.local/bin/hermes if executable, else `hermes` on PATH, else absent.
 #
 # Output: `key=value` lines on stdout (single line values, NEVER a secret value). On a non-zero
@@ -91,13 +98,15 @@
 #   apply <txn> [--cron 'id|schedule|prompt']...
 #     Exit 3 changed_since_backup if live env/config/manifest differ from backup time (this txn's own
 #     previous apply/skills-sync results are accepted, so apply is re-runnable). Writes `applying`
-#     (write-ahead), swaps the staged env in (same-dir temp + mv; original mode/owner kept; new file
+#     (write-ahead), swaps the staged env in (same-dir temp + mv; original owner kept; mode
 #     600), then ensures each cron entry idempotently keyed on the marker `[hstack:<id>]`
 #     (absent -> create, identical -> unchanged, different -> create new then remove old = updated;
 #     entries WITHOUT the marker are never touched), then writes `applied`. If the prompt lacks the
 #     marker the script PREFIXES it. Emits env_swapped=0|1, cron_<id>=created|unchanged|updated, applied=1.
-#   reload <txn>   (needs applied or restored) `gateway stop || true; sleep 2; gateway run --daemon`
-#     -- never `restart`. Delay override: HSTACK_RELOAD_DELAY (0..30). Emits reloaded=1.
+#   reload <txn>   (needs applied or restored)
+#     Legacy: `gateway stop || true; sleep 2; gateway run --daemon`; delay HSTACK_RELOAD_DELAY.
+#     Native: exclusive-default service check, gateway stop --yes, start, ensure --json;
+#     no foreground/all/force fallback. Emits reloaded=1 only after readiness confirmation.
 #   verify <txn> --destination-fp <16hex> --allow-var VAR --dest-var VAR --cron-id ID --schedule 'S'
 #          [--skills a,b]
 #     TARGET-STATE checks only (delivery is NOT checked here). Emits, for each of env-boundary,
@@ -122,6 +131,8 @@ set -u
 umask 077
 LC_ALL=C
 export LC_ALL
+# Native inspection must not create Python bytecode caches in an otherwise untouched home.
+export PYTHONDONTWRITEBYTECODE=1
 IFS=$' \t\n'
 unset CDPATH BASH_ENV ENV 2>/dev/null || true
 PATH=/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}
@@ -153,6 +164,7 @@ usage() { fail 2 usage "$1"; }
 # ----------------------------------------------------------------------------------------------
 HOME_DIR="" HERMES_DIR="" STATE="" ENV_FILE="" CFG_FILE="" SKILLS_DIR="" MANIFEST=""
 HERMES=""
+ADAPTER=legacy-v1 NATIVE_OUT=""
 TXN="" TXN_ID=""
 LOCK_HELD=0
 TMP_PATHS=()
@@ -297,6 +309,10 @@ init_paths() {
   CFG_FILE=$HERMES_DIR/config.yaml
   SKILLS_DIR=$HERMES_DIR/skills
   MANIFEST=$STATE/managed-skills.tsv
+  # This workflow owns only the default profile at this explicit home. Never inherit a
+  # caller's selected profile and accidentally read or mutate a different Hermes instance.
+  export HERMES_HOME="$HERMES_DIR"
+  unset HERMES_PROFILE 2>/dev/null || true
 }
 
 resolve_hermes() {
@@ -310,6 +326,59 @@ resolve_hermes() {
 }
 
 run_hermes() { "$HERMES" "$@" </dev/null 2>/dev/null; }
+
+native_adapter() {
+  command -v python3 >/dev/null 2>&1 || return 4
+  python3 -I -B - "$HERMES_DIR" "$HERMES" "$@" <<'HSTACK_NATIVE_PYTHON'
+# HSTACK_NATIVE_HERMES_V0225_PYTHON
+# Production helpers embed the reviewed adapter here; an unbundled source fails closed.
+raise SystemExit(4)
+HSTACK_NATIVE_PYTHON
+}
+
+native_field() { printf '%s\n' "$NATIVE_OUT" | awk -F= -v k="$1" '$1 == k { print substr($0, length(k) + 2); exit }'; }
+
+native_call() { # stdout is internal structured evidence, never raw jobs/prompts/secrets.
+  local rc rv plan seal nf
+  resolve_hermes
+  [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
+  rv=$(parse_version "$(run_hermes --version)")
+  [ "$rv" = 0.22.5 ] || fail 4 runtime_unavailable "native_adapter_requires_0.22.5"
+  if [ $# -ge 2 ]; then
+    plan=$2/native-cron.plan.json
+    seal=$2/native-cron.plan.sha256
+    if [ -e "$plan" ] || [ -L "$plan" ]; then
+      { [ ! -L "$plan" ] && [ -f "$seal" ] && [ ! -L "$seal" ] &&
+        [ "$(sha_file "$plan")" = "$(cat "$seal")" ]; } || fail 1 backup_corrupt "native_plan_integrity"
+    fi
+  fi
+  NATIVE_OUT=$(native_adapter "$@")
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    if [ "$rc" = 3 ] && [ "$1" = preflight ]; then
+      out conflict "cron:$3"; fail 3 changed_since_backup "cron:$3"
+    elif [ "$rc" = 3 ] && [ "$1" = restore-check ]; then
+      out conflict cron; fail 3 restore_conflict cron
+    fi
+    case $rc in 1|3|4) ;; *) rc=4 ;; esac
+    fail "$rc" native_adapter_failed "op:$1"
+  fi
+  if [ "$1" = intend ]; then
+    nf=$2/.native-plan.sha256.$$
+    register_tmp "$nf"
+    sha_file "$plan" > "$nf" && mv -f "$nf" "$seal" || fail 1 io_error "native_plan_seal_failed"
+  fi
+}
+
+adapter_from_version() { [ "$1" = 0.22.5 ] && ADAPTER=native-v0.22.5 || ADAPTER=legacy-v1; }
+
+legacy_runtime_check() {
+  local rv
+  resolve_hermes
+  [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
+  rv=$(parse_version "$(run_hermes --version)")
+  [ "$rv" != 0.22.5 ] || fail 4 legacy_runtime_incompatible "recover_with_original_runtime_or_manual_reconciliation"
+}
 
 lock_is_stale() { # <lockdir>: holder pid dead, or no pid file for more than a minute (mtime)
   local pid
@@ -379,6 +448,33 @@ env_value() { # <VAR> <file> -> last value, one quote layer stripped; return 1 i
     }' "$2"
 }
 
+security_env_value() { # Access controls also accept dotenv whitespace/export forms.
+  awk -v k="$1" '
+    {
+      t = $0; sub(/^[[:space:]]*/, "", t); sub(/^export[[:space:]]+/, "", t)
+      i = index(t, "="); if (!i) next
+      name = substr(t, 1, i - 1); sub(/[[:space:]]*$/, "", name)
+      if (name != k) next
+      v = substr(t, i + 1); sub(/^[[:space:]]*/, "", v); sub(/[[:space:]]*$/, "", v)
+      n = length(v); a = substr(v, 1, 1); b = substr(v, n, 1)
+      if (n >= 2 && a == b && (a == "\"" || a == "\047")) v = substr(v, 2, n - 2)
+      found = 1
+    }
+    END { if (found) print v; else exit 1 }' "$2"
+}
+
+telegram_access_problem() { # <env file> -> fixed reason only; no values ever leave this helper
+  local name value
+  [ -f "$1" ] || return 0
+  [ -r "$1" ] || { printf 'access_settings_unreadable'; return 0; }
+  for name in TELEGRAM_ALLOW_ALL_USERS GATEWAY_ALLOW_ALL_USERS; do
+    value=$(security_env_value "$name" "$1" 2>/dev/null | tr -d ' \r' | tr 'A-Z' 'a-z')
+    case $value in ''|false|0|no|off) ;; *) printf 'open_access_switch:%s' "$name"; return 0 ;; esac
+  done
+  value=$(security_env_value TELEGRAM_GROUP_ALLOWED_CHATS "$1" 2>/dev/null | tr -d ' \r')
+  if [ -n "$value" ]; then printf 'group_wide_access_enabled'; fi
+}
+
 env_names() { # names of all KEY= lines, sorted unique, comma separated
   [ -f "$1" ] || return 0
   awk "$AWK_FN"'{ n = lname($0); if (n ~ /^[A-Z][A-Z0-9_]*$/) print n }' "$1" | LC_ALL=C sort -u | tr '\n' ',' | sed 's/,$//'
@@ -395,17 +491,25 @@ env_nonmanaged_sha() { # <keys-csv> <file> -> sha of every line NOT belonging to
 # ----------------------------------------------------------------------------------------------
 # skills / manifest helpers
 # ----------------------------------------------------------------------------------------------
-dir_sha() { # deterministic content hash of a skill dir (names + bytes + symlink targets; no modes)
+dir_sha() { # deterministic ownership hash: names, types, modes, bytes and link targets
   (
     cd "$1" 2>/dev/null || exit 1
-    find . \( -type f -o -type l \) ! -path ./.hstack-acceptance -print | LC_ALL=C sort | while IFS= read -r p; do
+    # Include the root and empty directories: chmod-only edits and new empty directories are
+    # user changes too. The prefix deliberately separates this from the old content-only
+    # digest; legacy manifests fail closed and need manual reconciliation, never adoption.
+    printf 'hstack-skill-mode-v2\n'
+    find . ! -path ./.hstack-acceptance -print | LC_ALL=C sort | while IFS= read -r p; do
       if [ -L "$p" ]; then
         printf 'L %s -> %s\n' "$p" "$(readlink "$p")"
+      elif [ -d "$p" ]; then
+        printf 'D %s %s\n' "$(file_mode "$p")" "$p"
+      elif [ -f "$p" ]; then
+        printf 'F %s %s  %s\n' "$(file_mode "$p")" "$(sha_file "$p")" "$p"
       else
-        printf '%s  %s\n' "$(sha_file "$p")" "$p"
+        printf 'O %s\n' "$p"
       fi
-    done | sha_stdin
-  )
+    done
+  ) | sha_stdin
 }
 
 entry_sha() { # sha of a skills-dir entry (dir, file or symlink) or `absent`
@@ -561,6 +665,12 @@ txn_load() {
   bad=$(integrity_bad)
   [ -z "$bad" ] || fail 1 backup_corrupt "files:$bad"
   [ "$(meta_get version)" = 1 ] || fail 1 backup_corrupt "unsupported_meta_version"
+  ADAPTER=$(meta_get adapter)
+  [ -n "$ADAPTER" ] || ADAPTER=legacy-v1
+  case $ADAPTER in legacy-v1|native-v0.22.5) ;; *) fail 1 backup_corrupt "unsupported_adapter" ;; esac
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    [ "$(meta_get runtime_home)" = "$HERMES_DIR" ] || fail 1 backup_corrupt "runtime_home_mismatch"
+  fi
 }
 
 list_incomplete() {
@@ -571,6 +681,12 @@ list_incomplete() {
     valid_txn "$n" || continue
     if [ ! -e "$d/done" ] && [ ! -e "$d/restored" ]; then printf '%s\n' "$n"; fi
   done
+}
+
+lock_txn() { # Check existence without creating state, then re-load under the lock (purge may have won).
+  txn_light "$1"
+  lock_acquire
+  txn_load "$1"
 }
 
 keys_of_txn() { # -> LIST_OUT = managed keys of the loaded txn
@@ -612,6 +728,9 @@ op_inspect() {
   fi
   out runtime_version "$rv"
   out runtime_evidence "$ev"
+  adapter_from_version "$rv"
+  out runtime_adapter "$ADAPTER"
+  out runtime_profile default
 
   os=$(uname -s 2>/dev/null | tr 'A-Z' 'a-z')
   [ -n "$os" ] || os=unknown
@@ -638,13 +757,19 @@ op_inspect() {
     out config_fingerprint absent
   fi
 
-  if [ -n "$HERMES" ] && cl=$(run_hermes cron list); then cl_ok=1; fi
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    native_call service-check
+    native_call inspect
+    out cron_managed_ids "$(native_field cron_managed_ids)"
+    out cron_other_count "$(native_field cron_other_count)"
+    cl_ok=2
+  elif [ -n "$HERMES" ] && cl=$(run_hermes cron list); then cl_ok=1; fi
   if [ "$cl_ok" = 1 ]; then
     ids=$(cron_marked "$cl" | grep -Eo '\[hstack:[a-z0-9-]+\]' | sed 's/^\[hstack://; s/\]$//' | LC_ALL=C sort -u | tr '\n' ',' | sed 's/,$//')
     other=$(cron_other "$cl" | awk 'END { print NR }')
     out cron_managed_ids "$ids"
     out cron_other_count "$other"
-  else
+  elif [ "$cl_ok" = 0 ]; then
     out cron_managed_ids unknown
     out cron_other_count unknown
   fi
@@ -695,15 +820,27 @@ op_backup() {
   local keys_csv
   keys_csv=$(join_csv "${KEYS[@]}")
 
+  # Reject unavailable runtimes/unsafe env paths without creating any target state. Repeat the
+  # measurements under the lock so a concurrent transaction cannot make the backup stale.
   resolve_hermes
   [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
-  cl=$(run_hermes cron list) || fail 4 runtime_unavailable "cron_list_failed"
   if ver_out=$(run_hermes --version); then rv=$(parse_version "$ver_out"); [ -n "$rv" ] || rv=unknown; fi
+  adapter_from_version "$rv"
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call service-check; native_call inspect; cl=""
+  else cl=$(run_hermes cron list) || fail 4 runtime_unavailable "cron_list_failed"; fi
+  if [ -L "$ENV_FILE" ]; then fail 4 env_not_regular_file "env_is_symlink"; fi
+  if [ -e "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then fail 4 env_not_regular_file "env_not_a_file"; fi
+  mkdir -p "$STATE/txn" || fail 1 io_error "cannot_create_state_dir"
+  lock_acquire
+  resolve_hermes
+  [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
+  if ver_out=$(run_hermes --version); then rv=$(parse_version "$ver_out"); [ -n "$rv" ] || rv=unknown; fi
+  adapter_from_version "$rv"
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call service-check; native_call inspect; cl=""
+  else cl=$(run_hermes cron list) || fail 4 runtime_unavailable "cron_list_failed"; fi
   if [ -L "$ENV_FILE" ]; then fail 4 env_not_regular_file "env_is_symlink"; fi
   if [ -e "$ENV_FILE" ] && [ ! -f "$ENV_FILE" ]; then fail 4 env_not_regular_file "env_not_a_file"; fi
 
-  mkdir -p "$STATE/txn" || fail 1 io_error "cannot_create_state_dir"
-  lock_acquire
   inc=$(list_incomplete | head -1)
   [ -z "$inc" ] || fail 4 incomplete_transaction "$inc"
   [ ! -e "$STATE/txn/$txn" ] || fail 2 txn_exists "$txn"
@@ -742,7 +879,10 @@ op_backup() {
   else
     : > "$t/manifest.absent"
   fi
-  cron_marked "$cl" > "$t/cron.before"
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    native_call backup "$t"
+    : > "$t/cron.before"
+  else cron_marked "$cl" > "$t/cron.before"; fi
 
   local envsrc=/dev/null
   [ -f "$t/env.bak" ] && envsrc=$t/env.bak
@@ -767,8 +907,13 @@ op_backup() {
   done
   {
     printf 'env_sha=%s\n' "$(env_nonmanaged_sha "$keys_csv" "$envsrc")"
-    printf 'cron_other_count=%s\n' "$(cron_other "$cl" | awk 'END { print NR }')"
-    printf 'cron_other_sig=%s\n' "$(cron_other_sig "$cl")"
+    if [ "$ADAPTER" = native-v0.22.5 ]; then
+      printf 'cron_other_count=%s\n' "$(native_field cron_other_count)"
+      printf 'cron_other_sig=%s\n' "$(native_field cron_other_sig)"
+    else
+      printf 'cron_other_count=%s\n' "$(cron_other "$cl" | awk 'END { print NR }')"
+      printf 'cron_other_sig=%s\n' "$(cron_other_sig "$cl")"
+    fi
   } > "$t/unrelated.base"
   {
     printf 'version=1\n'
@@ -776,6 +921,7 @@ op_backup() {
     printf 'created=%s\n' "$(now)"
     printf 'keys=%s\n' "$keys_csv"
     printf 'runtime_version=%s\n' "$rv"
+    printf 'adapter=%s\nruntime_home=%s\n' "$ADAPTER" "$HERMES_DIR"
     printf 'env_state=%s\nenv_mode=%s\nenv_owner=%s\nenv_sha=%s\n' "$env_state" "$env_mode" "$env_owner" "$env_sha"
     printf 'config_state=%s\nconfig_mode=%s\nconfig_sha=%s\n' "$cfg_state" "$cfg_mode" "$cfg_sha"
     printf 'manifest_state=%s\nmanifest_sha=%s\n' "$man_state" "$man_sha"
@@ -783,7 +929,7 @@ op_backup() {
   } > "$t/meta"
   : > "$t/integrity"
   for f in meta env.bak env.absent config.bak config.absent cron.before manifest.bak manifest.absent \
-           prior.keys unrelated.base unrelated.skills; do
+           prior.keys unrelated.base unrelated.skills native-cron.before.json; do
     [ -f "$t/$f" ] || continue
     printf '%s  %s\n' "$(sha_file "$t/$f")" "$f" >> "$t/integrity"
   done
@@ -817,12 +963,11 @@ op_put_env() {
   valid_key "$key" || usage "invalid env key"
   parse_csv "$allow" valid_key || usage "invalid or missing --allow"
   in_list "$key" ${LIST_OUT[@]+"${LIST_OUT[@]}"} || usage "key not in --allow: $key"
-  txn_load "$txn"
+  lock_txn "$txn"
   keys_of_txn
   in_list "$key" ${LIST_OUT[@]+"${LIST_OUT[@]}"} || usage "key not managed by this transaction: $key"
   [ ! -e "$TXN/applying" ] || fail 3 staging_closed "apply_already_started"
   [ ! -e "$TXN/done" ] && [ ! -e "$TXN/restored" ] || fail 3 staging_closed "txn_finished"
-  lock_acquire
 
   # stdin -> private temp file inside the txn dir (removed on exit), validated, never in argv.
   local vf=$TXN/.value.$$ rf=$TXN/.repl.$$ nf=$TXN/.env.new.$$
@@ -886,6 +1031,12 @@ stage_check_run() { # TXN already loaded; dies with stage_check_failed; sets STA
     fi
   done < "$TXN/staged.keys"
   unset val
+  # A preserved allow-all setting would override the private per-user allowlist after reload.
+  if grep -Eq '^TELEGRAM_(BOT_TOKEN|ALLOWED_USERS)$' "$TXN/staged.keys"; then
+    local access_problem
+    access_problem=$(telegram_access_problem "$staged")
+    [ -z "$access_problem" ] || fail 1 stage_check_failed "$access_problem"
+  fi
 }
 
 op_stage_check() {
@@ -918,11 +1069,11 @@ op_skills_sync() {
   done
   parse_csv "$names" valid_skill || usage "invalid --names"
   local NAMES=(${LIST_OUT[@]+"${LIST_OUT[@]}"})
-  txn_load "$txn"
+  lock_txn "$txn"
   [ ! -e "$TXN/skills.plan" ] || fail 3 skills_already_synced "once_per_txn"
   [ ! -e "$TXN/done" ] && [ ! -e "$TXN/restored" ] || fail 3 staging_closed "txn_finished"
   [ ! -e "$TXN/applied" ] || fail 3 staging_closed "txn_already_applied"
-  lock_acquire
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call service-check; fi
 
   # ---- spool + validate the archive (no extraction yet) ----
   tarf=$TXN/skills.tar
@@ -1065,9 +1216,8 @@ op_apply() {
       *) usage "unknown argument to apply" ;;
     esac
   done
-  txn_load "$txn"
+  lock_txn "$txn"
   [ ! -e "$TXN/done" ] && [ ! -e "$TXN/restored" ] || fail 3 txn_finished "cannot_apply_a_finished_txn"
-  lock_acquire
 
   # ---- preconditions: nothing may have changed behind the backup (own earlier results accepted) ----
   local cur_env cur_cfg cur_man bad="" ok
@@ -1083,10 +1233,47 @@ op_apply() {
   [ "$ok" = 1 ] || bad=$bad${bad:+,}manifest
   if [ -n "$bad" ]; then out conflict "$bad"; fail 3 changed_since_backup "$bad"; fi
   if [ -f "$TXN/env.staged" ]; then stage_check_run; fi
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call service-check
+  else legacy_runtime_check; fi
   if [ "${#CRON_IDS[@]}" -gt 0 ]; then
     resolve_hermes
     [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
-    run_hermes cron list >/dev/null || fail 4 runtime_unavailable "cron_list_failed"
+    if [ "$ADAPTER" = native-v0.22.5 ]; then
+      local ni=0
+      while [ "$ni" -lt "${#CRON_IDS[@]}" ]; do
+        native_call preflight "$TXN" "${CRON_IDS[$ni]}" "${CRON_SCHEDS[$ni]}" "${CRON_PROMPTS[$ni]}"
+        ni=$((ni + 1))
+      done
+    else
+    local cl cur_cron prior_cron recorded_sig intended_sig i=0
+    cl=$(run_hermes cron list) || fail 4 runtime_unavailable "cron_list_failed"
+    while [ "$i" -lt "${#CRON_IDS[@]}" ]; do
+      id=${CRON_IDS[$i]}
+      cur_cron=$(cron_sig "$cl" "$id")
+      prior_cron=$(cron_sig "$(cat "$TXN/cron.before")" "$id")
+      recorded_sig=$(tsv_get "$TXN/post.cron" "$id" 2) || recorded_sig=""
+      intended_sig=$(str_sha "${CRON_SCHEDS[$i]}"$'\t'"${CRON_PROMPTS[$i]}")
+      # One transaction has one intent per id. Replacing its recorded signature could strand
+      # an earlier owned job after a failed remove, making a later restore refuse it.
+      if [ -n "$recorded_sig" ] && [ "$recorded_sig" != "$intended_sig" ]; then
+        fail 3 cron_intent_changed "id:$id"
+      fi
+      # Completed applies must retain exactly the intended job. Only an incomplete attempt
+      # may accept the prior/post mixture left by our interrupted create/remove sequence.
+      if [ -e "$TXN/applied" ] && [ -n "$recorded_sig" ]; then
+        if [ "$(cron_marked "$cl" "$id" | awk 'END { print NR }')" != 1 ] ||
+           [ "$(cron_line_sig "$(cron_marked "$cl" "$id")")" != "$recorded_sig" ]; then
+          bad=$bad${bad:+,}cron:$id
+        fi
+      elif [ "$cur_cron" != "$prior_cron" ]; then
+        if [ -z "$recorded_sig" ] || ! cron_state_ok "$cl" "$id"; then
+          bad=$bad${bad:+,}cron:$id
+        fi
+      fi
+      i=$((i + 1))
+    done
+    if [ -n "$bad" ]; then out conflict "$bad"; fail 3 changed_since_backup "$bad"; fi
+    fi
   fi
 
   # ---- write-ahead ----
@@ -1115,21 +1302,34 @@ op_apply() {
     for id in "${CRON_IDS[@]}"; do
       grep -Fxq -- "$id" "$TXN/cron.ids" 2>/dev/null || printf '%s\n' "$id" >> "$TXN/cron.ids"
     done
+    if [ "$ADAPTER" = native-v0.22.5 ]; then
+      local ni=0
+      while [ "$ni" -lt "${#CRON_IDS[@]}" ]; do
+        native_call intend "$TXN" "${CRON_IDS[$ni]}" "${CRON_SCHEDS[$ni]}" "${CRON_PROMPTS[$ni]}"
+        ni=$((ni + 1))
+      done
+    fi
   fi
   [ -e "$TXN/applying" ] || now > "$TXN/applying"
+  # A subsequent apply can add cron ids. If it fails part-way, its newly recorded intents
+  # need the same interrupted-state retry rules as the initial attempt, not stale completion.
+  rm -f "$TXN/applied" || fail 1 io_error "applied_marker_clear_failed"
 
-  # ---- env swap (same-directory temp + mv; original mode/owner preserved) ----
-  if [ -f "$TXN/env.staged" ] && [ "$cur_env" != "$staged_sha" ]; then
+  # ---- env swap (same-directory temp + mv; original owner kept, credentials private) ----
+  if [ -f "$TXN/env.staged" ] && { [ "$cur_env" != "$staged_sha" ] || [ "$(file_mode "$ENV_FILE" 2>/dev/null)" != 600 ]; }; then
     local nf=$HERMES_DIR/.env.hstack-new.$$
     register_tmp "$nf"
     mkdir -p "$HERMES_DIR" || fail 1 io_error "mkdir_failed"
     if [ -f "$ENV_FILE" ]; then
       cp -p "$ENV_FILE" "$nf" || fail 1 io_error "env_temp_failed"
+      # cp -p also copies permissive old modes: make the temporary file private BEFORE
+      # copying any new credential into it, not merely before the final rename.
+      chmod 600 "$nf" || fail 1 io_error "env_chmod_failed"
       cat "$TXN/env.staged" > "$nf" || fail 1 io_error "env_write_failed"
     else
       cp "$TXN/env.staged" "$nf" || fail 1 io_error "env_temp_failed"
-      chmod 600 "$nf"
     fi
+    chmod 600 "$nf" || fail 1 io_error "env_chmod_failed"
     mv -f "$nf" "$ENV_FILE" || fail 1 io_error "env_swap_failed"
     swap=1
   fi
@@ -1143,8 +1343,14 @@ op_apply() {
       id=${CRON_IDS[$i]}
       # write-ahead: record the line this txn intends BEFORE touching cron, so an interrupted
       # create/remove sequence is recognised as "ours" by restore
-      cron_post_set "$id" "$(str_sha "${CRON_SCHEDS[$i]}"$'\t'"${CRON_PROMPTS[$i]}")"
-      ensure_cron "$id" "${CRON_SCHEDS[$i]}" "${CRON_PROMPTS[$i]}"
+      if [ "$ADAPTER" = native-v0.22.5 ]; then
+        native_call ensure "$TXN" "$id" "${CRON_SCHEDS[$i]}" "${CRON_PROMPTS[$i]}"
+        CRON_RESULT=$(native_field cron_result)
+        case $CRON_RESULT in created|unchanged|updated) ;; *) fail 1 native_adapter_failed "ensure_confirmation_missing" ;; esac
+      else
+        cron_post_set "$id" "$(str_sha "${CRON_SCHEDS[$i]}"$'\t'"${CRON_PROMPTS[$i]}")"
+        ensure_cron "$id" "${CRON_SCHEDS[$i]}" "${CRON_PROMPTS[$i]}"
+      fi
       out "cron_$id" "$CRON_RESULT"
       i=$((i + 1))
     done
@@ -1160,14 +1366,22 @@ op_apply() {
 op_reload() {
   [ $# -eq 1 ] || usage "reload <txn>"
   txn_light "$1"
+  lock_acquire
+  txn_load "$1"
   { [ -e "$TXN/applied" ] || [ -e "$TXN/restored" ]; } || fail 3 not_applied "reload_needs_applied_or_restored"
   local delay=${HSTACK_RELOAD_DELAY:-2} re='^[0-9]{1,2}$'
   [[ $delay =~ $re ]] && [ "$delay" -le 30 ] || usage "HSTACK_RELOAD_DELAY must be 0..30"
   resolve_hermes
   [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
-  run_hermes gateway stop >/dev/null || true
-  sleep "$delay"
-  run_hermes gateway run --daemon >/dev/null || fail 1 gateway_run_failed "hermes_gateway_run_failed"
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    native_call reload
+    [ "$(native_field native_gateway_reloaded)" = 1 ] || fail 1 native_adapter_failed "reload_confirmation_missing"
+  else
+    legacy_runtime_check
+    run_hermes gateway stop >/dev/null || true
+    sleep "$delay"
+    run_hermes gateway run --daemon >/dev/null || fail 1 gateway_run_failed "hermes_gateway_run_failed"
+  fi
   out op reload
   out reloaded 1
 }
@@ -1216,7 +1430,7 @@ op_verify() {
   out apply_marker "$marker"
 
   # -- env-boundary --
-  local allow chat fpv st="pass" det="" re='^-?[0-9]+$' item rest cnt
+  local allow chat fpv st="pass" det="" re='^-?[0-9]+$' user_re='^[0-9]+$' item rest cnt
   cnt=$(env_key_count "$allowvar" "$ENV_FILE")
   if [ ! -f "$ENV_FILE" ]; then st=fail; det="env_file_missing"
   elif [ "$cnt" -gt 1 ]; then st=fail; det="allowlist_defined_more_than_once"
@@ -1227,8 +1441,11 @@ op_verify() {
     while [ "$st" = pass ] && [ -n "$rest" ]; do
       item=${rest%%,*}
       rest=${rest#*,}
-      item=${item// /}
-      if [ -z "$item" ] || [ "$item" = '*' ]; then st=fail; det="allowlist_contains_wildcard_or_blank"; fi
+      # Ignore surrounding whitespace, but never turn an embedded space into a different id.
+      item=${item#"${item%%[![:space:]]*}"}
+      item=${item%"${item##*[![:space:]]}"}
+      if [ -z "$item" ] || [ "$item" = '*' ]; then st=fail; det="allowlist_contains_wildcard_or_blank"
+      elif ! [[ $item =~ $user_re ]]; then st=fail; det="allowlist_contains_nonnumeric_id"; fi
     done
     [ "$st" = pass ] && det="allowlist_nonempty_no_wildcard"
   fi
@@ -1245,19 +1462,40 @@ op_verify() {
     fi
   fi
   unset chat
+  if [ "$st" = pass ] && [ "$(file_mode "$ENV_FILE" 2>/dev/null)" != 600 ]; then
+    st=fail; det="env_mode_not_600"
+  fi
+  if [ "$st" = pass ]; then
+    local access_problem
+    access_problem=$(telegram_access_problem "$ENV_FILE")
+    if [ -n "$access_problem" ]; then st=fail; det=$access_problem; fi
+  fi
   check_out env-boundary "$st" "$det"
 
   # -- schedule-single --
-  local cl="" cstat cdet cl_ok=0
+  local cl="" cstat cdet cl_ok=0 native_unrelated=unknown
   resolve_hermes
-  if [ -n "$HERMES" ] && cl=$(run_hermes cron list); then cl_ok=1; fi
-  if [ -z "$HERMES" ]; then cstat=unknown; cdet="hermes_not_found"
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    native_call verify "$TXN" "$cronid" "$sched"
+    cstat=$(native_field cron_check)
+    cdet=$(native_field cron_detail)
+    native_unrelated=$(native_field cron_unrelated_check)
+    case $cstat in pass|fail|unknown) ;; *) cstat=unknown; cdet=native_confirmation_missing ;; esac
+    cl_ok=2
+  elif [ -n "$HERMES" ] && cl=$(run_hermes cron list); then cl_ok=1; fi
+  if [ "$ADAPTER" = native-v0.22.5 ]; then :
+  elif [ -z "$HERMES" ]; then cstat=unknown; cdet="hermes_not_found"
   elif [ "$cl_ok" = 0 ]; then cstat=unknown; cdet="cron_list_failed"
   else
     cnt=$(cron_marked "$cl" "$cronid" | awk 'END { print NR }')
     if [ "$cnt" = 1 ]; then
       if [ "$(cron_marked "$cl" "$cronid" | awk -F'\t' '{ print $2 }')" = "$sched" ]; then
-        cstat=pass; cdet="one_marked_entry_expected_schedule"
+        local intended_sig
+        intended_sig=$(tsv_get "$TXN/post.cron" "$cronid" 2) || intended_sig=""
+        if [ -z "$intended_sig" ]; then cstat=unknown; cdet="intended_cron_signature_missing"
+        elif [ "$(cron_line_sig "$(cron_marked "$cl" "$cronid")")" = "$intended_sig" ]; then
+          cstat=pass; cdet="one_marked_entry_expected_schedule_and_prompt"
+        else cstat=fail; cdet="prompt_differs"; fi
       else cstat=fail; cdet="schedule_differs"; fi
     else cstat=fail; cdet="marked_entries=$cnt"; fi
   fi
@@ -1285,6 +1523,7 @@ op_verify() {
   b_cnt=$(awk -F= '$1 == "cron_other_count" { print $2 }' "$TXN/unrelated.base")
   b_sig=$(awk -F= '$1 == "cron_other_sig" { print $2 }' "$TXN/unrelated.base")
   [ "$(env_nonmanaged_sha "$keys_csv" "$ENV_FILE")" = "$b_env" ] || { ustat=fail; udet=$udet${udet:+,}env; }
+  [ "$(sha_or_absent "$CFG_FILE")" = "$(meta_get config_sha)" ] || { ustat=fail; udet=$udet${udet:+,}config; }
   got_sk=""
   for p in "$SKILLS_DIR"/*; do
     [ -e "$p" ] || [ -L "$p" ] || continue
@@ -1294,7 +1533,13 @@ op_verify() {
   done
   want_sk=$(cat "$TXN/unrelated.skills")
   [ "$(printf '%s' "$got_sk" | LC_ALL=C sort)" = "$(printf '%s\n' "$want_sk" | LC_ALL=C sort | awk 'NF > 0')" ] || { ustat=fail; udet=$udet${udet:+,}skills; }
-  if [ "$cl_ok" = 1 ]; then
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    if [ "$native_unrelated" = fail ]; then ustat=fail; udet=$udet${udet:+,}cron
+    elif [ "$native_unrelated" != pass ]; then
+      [ "$ustat" = pass ] && ustat=unknown
+      udet=$udet${udet:+,}cron_unknown
+    fi
+  elif [ "$cl_ok" = 1 ]; then
     cur_cnt=$(cron_other "$cl" | awk 'END { print NR }')
     cur_sig=$(cron_other_sig "$cl")
     { [ "$cur_cnt" = "$b_cnt" ] && [ "$cur_sig" = "$b_sig" ]; } || { ustat=fail; udet=$udet${udet:+,}cron; }
@@ -1302,7 +1547,7 @@ op_verify() {
     [ "$ustat" = pass ] && ustat=unknown
     udet=$udet${udet:+,}cron_unknown
   fi
-  [ "$ustat" = pass ] && udet="env,skills,cron_unchanged"
+  [ "$ustat" = pass ] && udet="env,config,skills,cron_unchanged"
   check_out unrelated-state-unchanged "$ustat" "$udet"
 }
 
@@ -1311,6 +1556,8 @@ op_verify() {
 # ----------------------------------------------------------------------------------------------
 op_restore() {
   [ $# -eq 1 ] || usage "restore <txn>"
+  txn_light "$1"
+  lock_acquire
   txn_light "$1"
   if [ -e "$TXN/restored" ]; then
     out op restore
@@ -1322,13 +1569,17 @@ op_restore() {
   keys_of_txn
   local MKEYS=(${LIST_OUT[@]+"${LIST_OUT[@]}"}) keys_csv k conflicts="" cur prior post
   keys_csv=$(join_csv "${MKEYS[@]}")
-  lock_acquire
 
   local CIDS=() id cl=""
   if [ -f "$TXN/cron.ids" ]; then
     while IFS= read -r id; do valid_cronid "$id" && CIDS[${#CIDS[@]}]=$id; done < "$TXN/cron.ids"
   fi
+  if [ "$ADAPTER" = native-v0.22.5 ]; then
+    native_call restore-check "$TXN"
+    CIDS=()
+  fi
   if [ "${#CIDS[@]}" -gt 0 ]; then
+    legacy_runtime_check
     resolve_hermes
     [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
     cl=$(run_hermes cron list) || fail 4 runtime_unavailable "cron_list_failed"
@@ -1389,6 +1640,7 @@ op_restore() {
 
   # ---- 2. restore (each step idempotent; preconditions already allow the prior state) ----
   local restored_keys=""
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call restore "$TXN"; fi
   if [ "${#CIDS[@]}" -gt 0 ]; then
     for id in "${CIDS[@]}"; do
       cur=$(cron_sig "$cl" "$id")
@@ -1435,7 +1687,9 @@ op_restore() {
   nf=$HERMES_DIR/.env.hstack-restore.$$
   register_tmp "$nf"
   if [ "$cur_env" = "$bak_sha" ]; then
-    :
+    if [ "$(meta_get env_state)" = present ] && [ -f "$TXN/post.env_sha" ]; then
+      chmod "$(meta_get env_mode)" "$ENV_FILE" || fail 1 restore_failed "env_chmod"
+    fi
   elif [ "$cur_env" = "$post_env" ]; then
     if [ "$(meta_get env_state)" = present ]; then
       cp -p "$ENV_FILE" "$nf" || fail 1 restore_failed "env_temp"
@@ -1486,6 +1740,7 @@ op_restore() {
       [ "$(cron_sig "$cl" "$id")" = "$(cron_sig "$(cat "$TXN/cron.before")" "$id")" ] || bad=$bad${bad:+,}cron:$id
     done
   fi
+  if [ "$ADAPTER" = native-v0.22.5 ]; then native_call verify-restored "$TXN"; fi
   [ -z "$bad" ] || fail 1 restore_verification_failed "$bad"
   now > "$TXN/restored"
   rm -f "$TXN/env.staged"   # never leave new secret values behind after a rollback
@@ -1504,9 +1759,10 @@ retained_secrets() { if [ -f "$TXN/env.bak" ]; then printf 'env.bak'; fi; }
 op_commit() {
   [ $# -eq 1 ] || usage "commit <txn>"
   txn_light "$1"
+  lock_acquire
+  txn_light "$1"
   [ ! -e "$TXN/restored" ] || fail 3 txn_finished "already_restored"
   [ -e "$TXN/applied" ] || fail 3 not_applied "commit_needs_applied"
-  lock_acquire
   [ -e "$TXN/done" ] || now > "$TXN/done"
   out op commit
   out committed 1
@@ -1516,8 +1772,9 @@ op_commit() {
 op_purge() {
   [ $# -eq 1 ] || usage "purge <txn>"
   txn_light "$1"
-  { [ -e "$TXN/done" ] || [ -e "$TXN/restored" ]; } || fail 3 txn_not_final "purge_needs_done_or_restored"
   lock_acquire
+  txn_light "$1"
+  { [ -e "$TXN/done" ] || [ -e "$TXN/restored" ]; } || fail 3 txn_not_final "purge_needs_done_or_restored"
   rm -rf "${STATE:?}/txn/${TXN_ID:?}"
   out op purge
   out purged 1

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CRON_SPEC, FAKE, TXN, fingerprint, sandbox, skillTar } from './helpers/sandbox.mjs';
 
@@ -46,6 +46,9 @@ test('env-boundary: wildcard / empty / missing allowlist, wrong or missing desti
       ['wildcard allowlist', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=*'), 'allowlist_contains_wildcard_or_blank'],
       ['wildcard entry in list', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=111222333,*'), 'allowlist_contains_wildcard_or_blank'],
       ['empty entry', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=111222333,,5'), 'allowlist_has_empty_entry'],
+      ['nonnumeric allowlist', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=alice'), 'allowlist_contains_nonnumeric_id'],
+      ['mixed numeric and nonnumeric ids', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=111222333,alice'), 'allowlist_contains_nonnumeric_id'],
+      ['embedded whitespace', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=111 222'), 'allowlist_contains_nonnumeric_id'],
       ['no allowlist', (e) => e.replace(/^TELEGRAM_ALLOWED_USERS=.*\n/m, ''), 'allowlist_missing_or_empty'],
       ['duplicated allowlist', (e) => e + 'TELEGRAM_ALLOWED_USERS=7\n', 'allowlist_defined_more_than_once'],
       ['destination changed', (e) => e.replace(/^TELEGRAM_HOME_CHANNEL=.*$/m, 'TELEGRAM_HOME_CHANNEL=-100555'), 'destination_fingerprint_mismatch'],
@@ -62,6 +65,8 @@ test('env-boundary: wildcard / empty / missing allowlist, wrong or missing desti
     }
     writeFileSync(sb.envPath, original);
     assert.equal(STATUS(sb.verify(), 'env-boundary'), 'pass');
+    writeFileSync(sb.envPath, original.replace(/^TELEGRAM_ALLOWED_USERS=.*$/m, 'TELEGRAM_ALLOWED_USERS=" 111222333 , 444555666 "'));
+    assert.equal(STATUS(sb.verify(), 'env-boundary'), 'pass', 'surrounding whitespace is tolerated');
     writeFileSync(sb.envPath, original.replace(/^TELEGRAM_HOME_CHANNEL=.*$/m, `TELEGRAM_HOME_CHANNEL="${FAKE.chat}"`));
     assert.equal(STATUS(sb.verify(), 'env-boundary'), 'pass', 'one quote layer is tolerated');
     assert.equal(STATUS(sb.verify({ fp: fingerprint('999') }), 'env-boundary'), 'fail', 'a different expected fingerprint fails');
@@ -74,6 +79,11 @@ test('schedule-single: duplicates, a wrong schedule and a missing entry fail; un
     assert.equal(STATUS(sb.verify(), 'schedule-single'), 'pass');
     assert.equal(STATUS(sb.verify({ schedule: '1 1 * * *' }), 'schedule-single'), 'fail');
     const cronBefore = readFileSync(sb.cronPath, 'utf8');
+    writeFileSync(sb.cronPath, cronBefore.replace(/(\[hstack:founder-brief\]).*/, '$1 changed prompt'));
+    const changedPrompt = sb.verify();
+    assert.equal(STATUS(changedPrompt, 'schedule-single'), 'fail');
+    assert.equal(changedPrompt.kv['check.schedule-single.detail'], 'prompt_differs');
+    writeFileSync(sb.cronPath, cronBefore);
     appendFileSync(sb.cronPath, 'job-50\t0 9 * * *\t[hstack:founder-brief] sneaky duplicate\n');
     const dup = sb.verify();
     assert.equal(STATUS(dup, 'schedule-single'), 'fail');
@@ -106,6 +116,7 @@ test('managed-skills-intact: unknown when nothing is managed, pass when intact, 
 test('unrelated-state-unchanged: a changed unrelated env line, skill or cron entry is detected', () => {
   for (const [what, mutate] of [
     ['env', (sb) => writeFileSync(sb.envPath, sb.env().replace('keep-me-as-is', 'changed'))],
+    ['config', (sb) => writeFileSync(sb.cfgPath, 'changed: true\n')],
     ['skills', (sb) => writeFileSync(join(sb.skillsPath, 'user-skill', 'SKILL.md'), 'tampered\n')],
     ['skills', (sb) => sb.write('.hermes/skills/new-user-skill/SKILL.md', 'x\n')],
     ['cron', (sb) => writeFileSync(sb.cronPath, sb.cron().replace('my own job', 'tampered job'))],
@@ -130,5 +141,30 @@ test('verify needs applying/applied and a valid backup', () => {
     assert.equal(r.status, 3);
     assert.equal(r.kv.error, 'not_applied');
     assert.equal(sb.verify({}, 'nnnn0000mmmm').status, 1);
+  } finally { sb.cleanup(); }
+});
+
+
+test('env-boundary: a permissive live env or a preserved access override cannot be verified', () => {
+  const sb = applied();
+  try {
+    const original = sb.env();
+    chmodSync(sb.envPath, 0o644);
+    assert.equal(sb.verify().kv['check.env-boundary.detail'], 'env_mode_not_600');
+    chmodSync(sb.envPath, 0o600);
+    for (const [setting, detail] of [
+      ['GATEWAY_ALLOW_ALL_USERS=true', 'open_access_switch:GATEWAY_ALLOW_ALL_USERS'],
+      ['TELEGRAM_ALLOW_ALL_USERS="YES"', 'open_access_switch:TELEGRAM_ALLOW_ALL_USERS'],
+      ['  export GATEWAY_ALLOW_ALL_USERS = "true"', 'open_access_switch:GATEWAY_ALLOW_ALL_USERS'],
+      ['  TELEGRAM_ALLOW_ALL_USERS = true', 'open_access_switch:TELEGRAM_ALLOW_ALL_USERS'],
+      ['TELEGRAM_GROUP_ALLOWED_CHATS=-100123', 'group_wide_access_enabled'],
+    ]) {
+      writeFileSync(sb.envPath, original + setting + '\n');
+      const r = sb.verify();
+      assert.equal(STATUS(r, 'env-boundary'), 'fail', setting);
+      assert.equal(r.kv['check.env-boundary.detail'], detail, setting);
+    }
+    writeFileSync(sb.envPath, original + '  export GATEWAY_ALLOW_ALL_USERS = false\n TELEGRAM_ALLOW_ALL_USERS = off\nTELEGRAM_GROUP_ALLOWED_CHATS=""\n');
+    assert.equal(STATUS(sb.verify(), 'env-boundary'), 'pass');
   } finally { sb.cleanup(); }
 });

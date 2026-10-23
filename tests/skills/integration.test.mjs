@@ -71,11 +71,11 @@ for (const v of VENDORS) {
           assert.equal(c.status, "200");
           assert.equal(Number(c.token_len), NEW.length, "the stub saw an empty or wrong token");
         }
-        // writes: the secret via config set, MCP registered, gateway cycled with stop + run (never restart)
+        // writes: the secret via config set, MCP registered, gateway cycled with stop + ensure (never restart)
         const writes = writeEvents(run);
         assert.ok(writes.includes(`hermes config set ${v.var}`));
         assert.ok(writes.includes(`hermes mcp add ${v.mcp}`));
-        assert.ok(idx(writes, /gateway stop/) < idx(writes, /gateway run/));
+        assert.ok(idx(writes, /gateway stop/) < idx(writes, /gateway ensure/));
         assert.ok(!run.sb.hermesCalls().some((c) => c[0] === "gateway" && c[1] === "restart"));
         // storage
         const env = run.sb.read(".hermes/.env");
@@ -162,7 +162,7 @@ for (const v of VENDORS) {
     // Failures at every later step must roll back to the identical state.
     for (const [label, knob, extra] of [
       ["config set fails", `fail.set.${v.var}`, /FAIL: could not write/],
-      ["mcp add fails", "fail.mcp.add", /FAIL: hermes mcp add/],
+      ["mcp add fails", "fail.mcp.add", /FAIL: hermes -p default mcp add/],
       ["gateway run fails", "fail.gateway.run", /FAIL: gateway did not start/],
       ["no registration in the logs", "fail.logs", /not in logs after 30s/],
     ]) {

@@ -146,8 +146,9 @@ gated("transaction: inspect is read-only; stage..verify over real ssh reaches ve
   assert.equal(JSON.stringify(receipt).includes(FAKE.chat), false, "the raw chat id is never in a receipt");
 
   // the helper really ran on the target through ssh, and the stub's outbox (the Telegram double) got ONE message
-  assert.ok(t.wrapperCalls().some((c) => c.includes("hstack-target.sh put-env")), "put-env ran through ssh");
-  assert.ok(sampled.includes("hstack-target.sh"), "the sampler observed the transaction's own target-side processes");
+  const reviewedHelper = `hstack-target-${receipt.artifacts.script_sha256}.sh`;
+  assert.ok(t.wrapperCalls().some((c) => c.includes(`${reviewedHelper} put-env`)), "put-env ran through ssh using the reviewed helper");
+  assert.ok(sampled.includes(reviewedHelper), "the sampler observed the transaction's reviewed target-side helper");
   const outbox = await t.outboxLines();
   assert.equal(outbox.length, 1);
   assert.match(outbox[0], new RegExp(`^to=${FAKE.chat} `));
@@ -522,8 +523,19 @@ gated("telegram skill: FORCE=1 rerun with a forced gateway failure rolls back; t
   assert.equal(await tgValue(t, "TELEGRAM_BOT_TOKEN"), TG.good, "the previous working token is back");
   assert.equal(await t.fileSha('"$HOME/.hermes/config.yaml"'), configShaBefore, "config.yaml restored too");
   assert.equal(await userState(), stateBefore, "the whole ~/.hermes user state is as before the failed rewire");
-  assert.equal(await t.fileSha('"$HOME/.hermes/.hstack-backup/platform-telegram.prev/.env"'), envShaBefore, "the kept undo copy is the pre-rewire .env");
+  assert.equal(await t.fileSha('"$HOME/.hermes/.hstack-backup/platform-telegram/.env"'), envShaBefore, "failed gateway recovery retains the active pre-rewire snapshot");
   assert.equal((await t.ssh('stat -c %a "$HOME/.hermes/.env"')).stdout.trim(), "600");
-  assert.equal((await t.ssh('test ! -e "$HOME/.hermes/.hstack-backup/platform-telegram" && echo cleared')).stdout.trim(), "cleared");
+  assert.equal((await t.ssh('test -d "$HOME/.hermes/.hstack-backup/platform-telegram" && echo retained')).stdout.trim(), "retained");
   assert.equal(t.wrapperCalls().join("\n").includes(TG.next), false);
+
+  // Once the gateway fault is cleared, retry only the documented recovery helper.
+  const recovered = await runSkill(t, {
+    token: TG.good,
+    mutate: (code, heading) => heading.startsWith("Step 0") ? `${code}\nrollback || exit 1\nexit 0` : "",
+  });
+  assert.equal(recovered.code, 0, recovered.output);
+  assert.match(recovered.output, /rollback: restored/);
+  assert.equal(await t.fileSha('"$HOME/.hermes/.hstack-backup/platform-telegram.prev/.env"'), envShaBefore, "successful retry retires the verified recovery point");
+  assert.equal(await t.fileSha('"$HOME/.hermes/.env"'), envShaBefore);
+  assert.equal((await t.ssh('test ! -e "$HOME/.hermes/.hstack-backup/platform-telegram" && echo cleared')).stdout.trim(), "cleared");
 });

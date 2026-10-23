@@ -11,7 +11,7 @@ import test, { describe } from "node:test";
 
 import { validateReceipt } from "../../packages/acceptance/receipt.js";
 import { IllegalTransition } from "../../packages/acceptance/states.js";
-import { opReload } from "../../packages/acceptance/ops.js";
+import { bindHelper, opReload } from "../../packages/acceptance/ops.js";
 import { deriveExecutionGraph, planHash } from "../../packages/acceptance/untrusted.js";
 import {
   ALL_SECRET_STRINGS, FAKE, OPERATOR, SCRIPT_SKIP, SECRET_VALUES, Target, assertReceiptClean, contract, driveToApplied, fingerprint,
@@ -104,7 +104,7 @@ gated("case 2: restart, simulated reboot and rerun leave exactly one managed cro
   assert.deepEqual(unrelatedBefore, ["job-0\t30 2 * * *\tunrelated nightly job"]);
 
   // restart: stop then run, never `restart`
-  const restart = await t.transport().exec(opReload({ txn: first.tx.txnId }));
+  const restart = await t.transport().exec(bindHelper(opReload({ txn: first.tx.txnId }), first.tx.receipt.artifacts.script_sha256));
   assert.equal(restart.code, 0, restart.stdout);
   assert.equal(readFileSync(t.gatewayPath, "utf8").trim(), "running");
   const argv = t.stubCalls().map((call) => call.join(" "));

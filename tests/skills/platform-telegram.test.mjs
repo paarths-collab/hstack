@@ -52,8 +52,8 @@ describe("platform-telegram: good run", { concurrency: 6 }, () => {
       assert.match(run.sb.read(".hermes/config.yaml"), /^platforms\.telegram\.enabled: true$/m);
       assert.ok(!run.sb.read(".hermes/config.yaml").includes(GOOD));
       // gateway: stop+run twice (initial + nudge), never restart
-      const gw = run.sb.events().filter((e) => /^hermes gateway (stop|run)/.test(e));
-      assert.deepEqual(gw, ["hermes gateway stop", "hermes gateway run", "hermes gateway stop", "hermes gateway run"]);
+      const gw = run.sb.events().filter((e) => /^hermes gateway (stop|ensure)/.test(e));
+      assert.deepEqual(gw, ["hermes gateway stop", "hermes gateway ensure", "hermes gateway stop", "hermes gateway ensure"]);
       assert.ok(!text.includes("TELEGRAM_ENABLED") && !text.includes("ALLOWED_CHATS"));
       assert.match(run.out, /Token OK: bot is @fake_test_bot/);
       assert.ok(run.sb.exists(".hermes/.hstack-backup/platform-telegram.prev"));
@@ -91,6 +91,39 @@ describe("platform-telegram: good run", { concurrency: 6 }, () => {
       assert.equal(run.code, 0);
       assert.match(run.out, /already wired/i);
       assert.ok(!run.completed);
+      assertStateIdentical(run);
+      assert.equal(run.sb.curlCalls().length, 0);
+    });
+  });
+  for (const [label, lines, mode] of [
+    ["wildcard after a numeric ID", "TELEGRAM_ALLOWED_USERS=111,*\n"],
+    ["malformed user ID", "TELEGRAM_ALLOWED_USERS=111,alice\n"],
+    ["duplicate allowlist", "TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_ALLOWED_USERS=222\n"],
+    ["gateway open-access override", "TELEGRAM_ALLOWED_USERS=111\nGATEWAY_ALLOW_ALL_USERS=true\n"],
+    ["group-wide authorization", "TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_GROUP_ALLOWED_CHATS=-100123456\n"],
+    ["exported open-access override", "TELEGRAM_ALLOWED_USERS=111\nexport TELEGRAM_ALLOW_ALL_USERS=1\n"],
+    ["duplicate token", `TELEGRAM_ALLOWED_USERS=111\nTELEGRAM_BOT_TOKEN=${OLD}\n`],
+    ["world-readable env", "TELEGRAM_ALLOWED_USERS=111\n", 0o644],
+  ]) {
+    it(`already wired with ${label}: aborts before reporting success, no vendor call or write`, async () => {
+      const seed = { env: `TELEGRAM_BOT_TOKEN=${OLD}\n${lines}`, envMode: mode ?? 0o600 };
+      await scenario({ name: "tg-idem-unsafe", seed, valid: [GOOD], script: flow(), env: env() }, async (run) => {
+        assert.equal(run.code, 1, run.out);
+        assert.match(run.out, /stored Telegram setup is unsafe/);
+        assert.ok(!run.out.includes("already wired"));
+        assertStateIdentical(run);
+        assert.deepEqual(writeEvents(run), []);
+        assert.equal(run.sb.curlCalls().length, 0);
+        assertSecretsNotPrinted(run, [OLD, GOOD]);
+      });
+    });
+  }
+
+  it("stored quoted allowlist and explicit off switches retain the safe idempotency path", async () => {
+    const seed = { env: `TELEGRAM_BOT_TOKEN="${OLD}"\nTELEGRAM_ALLOWED_USERS='111,222'\nGATEWAY_ALLOW_ALL_USERS=false\n` };
+    await scenario({ name: "tg-idem-quoted", seed, valid: [GOOD], script: flow(), env: env() }, async (run) => {
+      assert.equal(run.code, 0, run.out);
+      assert.match(run.out, /already wired/i);
       assertStateIdentical(run);
       assert.equal(run.sb.curlCalls().length, 0);
     });
@@ -179,12 +212,23 @@ describe("platform-telegram: hard gate", { concurrency: 6 }, () => {
   }
 
   // Open-access switches already in the VPS .env make the allowlist meaningless.
-  for (const line of ["TELEGRAM_ALLOW_ALL_USERS=true", "GATEWAY_ALLOW_ALL_USERS=1", "TELEGRAM_ALLOW_ALL_USERS=yes", "GATEWAY_ALLOW_ALL_USERS=TRUE", 'GATEWAY_ALLOW_ALL_USERS="true"', "TELEGRAM_ALLOW_ALL_USERS='yes'", "TELEGRAM_ALLOW_ALL_USERS=anything-else"]) {
+  for (const line of ["TELEGRAM_ALLOW_ALL_USERS=true", "GATEWAY_ALLOW_ALL_USERS=1", "TELEGRAM_ALLOW_ALL_USERS=yes", "GATEWAY_ALLOW_ALL_USERS=TRUE", 'GATEWAY_ALLOW_ALL_USERS="true"', "TELEGRAM_ALLOW_ALL_USERS='yes'", "TELEGRAM_ALLOW_ALL_USERS=anything-else", "export GATEWAY_ALLOW_ALL_USERS=true", "export TELEGRAM_ALLOW_ALL_USERS=1", " GATEWAY_ALLOW_ALL_USERS = true"]) {
     it(`pre-existing ${line} aborts before any write`, async () => {
       const seed = { env: `FOO=bar\n${line}\n` };
       await scenario({ name: "tg-open", seed, valid: [GOOD], script: flow(), env: env() }, async (run) => {
         assert.equal(run.code, 1, run.out);
         assert.match(run.out, /turns on open access \((TELEGRAM|GATEWAY)_ALLOW_ALL_USERS\)/);
+        assertStateIdentical(run);
+        assert.deepEqual(writeEvents(run), []);
+        assert.equal(run.sb.curlCalls().length, 0);
+      });
+    });
+  }
+  for (const line of ["TELEGRAM_GROUP_ALLOWED_CHATS=-100123456", "export TELEGRAM_GROUP_ALLOWED_CHATS='-100123456'"]) {
+    it(`a forced rewire refuses pre-existing group-wide grant ${line}`, async () => {
+      await scenario({ name: "tg-group", seed: { ...oldState, env: oldState.env + line + "\n" }, valid: [GOOD], script: flow(), env: env({ FORCE: "1" }) }, async (run) => {
+        assert.equal(run.code, 1, run.out);
+        assert.match(run.out, /turns on open access \(TELEGRAM_GROUP_ALLOWED_CHATS\)/);
         assertStateIdentical(run);
         assert.deepEqual(writeEvents(run), []);
         assert.equal(run.sb.curlCalls().length, 0);
@@ -212,6 +256,20 @@ describe("platform-telegram: hard gate", { concurrency: 6 }, () => {
 });
 
 describe("platform-telegram: failure after the snapshot rolls back byte-for-byte", { concurrency: 6 }, () => {
+  for (const [label, logs] of [
+    ["disconnected", "telegram disconnected\n"],
+    ["failed after connecting", "telegram connected\ntelegram webhook failed\n"],
+  ]) {
+    it(`logs reporting ${label} cannot finish setup`, async () => {
+      await scenario({ name: "tg-negative-log", seed: oldState, valid: [GOOD, OLD], script: flow(), env: env({ FORCE: "1" }), files: { "logs.txt": logs } }, async (run) => {
+        assert.equal(run.code, 1, run.out);
+        assert.match(run.out, /did not appear in gateway logs/);
+        assert.ok(!run.out.includes("OK: Telegram connected"));
+        assertStateIdentical(run);
+      });
+    });
+  }
+
   const cases = [
     ["gateway run fails", { "fail.gateway.run": true }, /gateway did not start/],
     ["config set TELEGRAM_ALLOWED_USERS fails", { "fail.set.TELEGRAM_ALLOWED_USERS": true }, /could not write TELEGRAM_ALLOWED_USERS/],
@@ -230,7 +288,20 @@ describe("platform-telegram: failure after the snapshot rolls back byte-for-byte
         assertStateIdentical(run);
         assert.equal(run.sb.read(".hermes/.env"), oldState.env);
         assert.equal(run.sb.read(".hermes/config.yaml"), oldState.config);
+        if (knobs["fail.gateway.run"]) {
+          assert.ok(run.sb.exists(".hermes/.hstack-backup/platform-telegram"), "an unconfirmed gateway recovery keeps the active snapshot");
+          assert.ok(!run.sb.exists(".hermes/.hstack-backup/platform-telegram.prev"));
+          const retry = assemble([
+            { skill: "platform-telegram", ids: ["step0#1"] },
+            'rm "$HSTACK_FAKE/knobs/fail.gateway.run"\nrollback || exit 1\necho RECOVERED\n',
+          ]);
+          const recovered = await run.sb.run(retry);
+          assert.equal(recovered.code, 0, recovered.out);
+          assert.match(recovered.out, /RECOVERED/);
+          assert.equal(run.sb.read(".hermes/.env"), oldState.env);
+        }
         assert.ok(run.sb.exists(".hermes/.hstack-backup/platform-telegram.prev"));
+        assert.ok(!run.sb.exists(".hermes/.hstack-backup/platform-telegram"));
         assert.ok(writeEvents(run).some((e) => e.startsWith("hermes config set")) || /open access/.test(msg) === false, "a write must have happened for the rollback to be meaningful");
       });
     });
@@ -247,7 +318,9 @@ describe("platform-telegram: failure after the snapshot rolls back byte-for-byte
 
   it("rollback says so when the gateway does not come back", async () => {
     await scenario({ name: "tg-rb-gw", seed: oldState, valid: [GOOD], knobs: { "fail.gateway.run": true }, script: flow(), env: env({ FORCE: "1" }) }, async (run) => {
-      assert.match(run.out, /files restored, but the gateway did NOT come back/);
+      assert.match(run.out, /restoration failed; active snapshot retained/);
+      assert.ok(run.sb.exists(".hermes/.hstack-backup/platform-telegram"));
+      assert.ok(!run.sb.exists(".hermes/.hstack-backup/platform-telegram.prev"));
       assertStateIdentical(run);
     });
   });

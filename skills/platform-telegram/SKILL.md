@@ -35,7 +35,7 @@ looks like a silent crash. This skill refuses to write anything until at least o
 user ID is supplied, and writes the allowlist BEFORE the token.
 
 **The post-setup nudge:** First-time Telegram setup typically requires one extra
-`gateway stop && gateway run` cycle after enabling. Hermes registers the bot, then needs to
+`gateway stop && gateway ensure --json --timeout 60` cycle after enabling. Hermes registers the bot, then needs to
 fully reload its event loop before the first message routes correctly. This skill bakes
 that in.
 
@@ -47,14 +47,16 @@ docs/`main`, not from a 0.15.2 build. Everything else this skill relies on is
 
 - the claim that `TELEGRAM_BOT_TOKEN` alone enables the platform (read from upstream source);
 - the `platforms.telegram.enabled` config key (Step 6);
-- `hermes config set KEY -- value` (upstream documents `<key> <value> [--force]`; the `--`
+- `hermes -p default config set KEY -- value` (upstream documents `<key> <value> [--force]`; the `--`
   that protects negative chat IDs is unverified);
-- `hermes logs gateway -n N` (Steps 8 and 9);
+- `hermes -p default logs gateway -n N` (Steps 8 and 9);
 - the allow-all switch names `TELEGRAM_ALLOW_ALL_USERS` and `GATEWAY_ALLOW_ALL_USERS`, which
   the Step 3 gate refuses to run alongside (if the real names differ, that check cannot see them).
 
 This skill never sets a group-wide allowlist: upstream's `TELEGRAM_GROUP_ALLOWED_CHATS`
 authorizes every member of the listed groups, a wider grant than a per-user allowlist.
+An existing non-empty group-wide allowlist is refused too; remove it before proceeding
+with a private per-user setup.
 
 ---
 
@@ -94,49 +96,115 @@ remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local
 snapshot() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
 set -e
-d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
-# A leftover snapshot means an earlier run wrote something and never finished or rolled
-# back. Snapshotting now would capture that half-written state as "known good".
-if [ -d "$d" ]; then
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
   echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-mkdir -p "$d" && chmod 700 "$HOME/.hermes/.hstack-backup" "$d"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
 for f in .env config.yaml; do
-  rm -f "$d/$f" "$d/$f.absent"
-  if [ -f "$HOME/.hermes/$f" ]; then cp -p "$HOME/.hermes/$f" "$d/$f"; else : > "$d/$f.absent"; fi
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
 done
-chmod 600 "$d"/* 2>/dev/null || true
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
 REMOTE
 }
-
 # rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
 # fails puts the previous working value back), then reload the gateway.
 rollback() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
 d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
 [ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 0; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
 for f in .env config.yaml; do
-  if [ -f "$d/$f" ]; then cp -p "$d/$f" "$HOME/.hermes/$f"
-  elif [ -f "$d/$f.absent" ]; then rm -f "$HOME/.hermes/$f"; fi
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
 done
 [ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
-rm -rf "$d.prev"; mv "$d" "$d.prev"
-hermes gateway stop || true; sleep 2; hermes gateway run --daemon || true
+hermes -p default gateway stop
+sleep 2
+hermes -p default gateway ensure --json --timeout 60 >/dev/null
 sleep 3
-st=$(hermes gateway status 2>&1 || true)
-if printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
+status_rc=0
+st=$(hermes -p default gateway status 2>&1) || status_rc=$?
+if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes gateway start) and check hermes logs"
+  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
   exit 1
 fi
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
 echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
 REMOTE
 }
 
 # finish: mark the run successful; keep the snapshot as .prev for a manual undo.
 finish() {
-  remote "d=\$HOME/.hermes/.hstack-backup/$SKILL_NAME; rm -rf \"\$d.prev\"; [ -d \"\$d\" ] && mv \"\$d\" \"\$d.prev\"; true"
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 
 # tg_username: read a Telegram getMe JSON body on stdin; print the bot username,
@@ -166,7 +234,13 @@ Rules used below: failures BEFORE `snapshot` (Steps 1–4) just `exit 1` with
 "Nothing was written" and never call `rollback`. Every failure AFTER `snapshot`
 (Steps 5–8) does `rollback; exit 1`.
 
-**Unverified CLI surface.** Upstream's CLI docs list `hermes gateway run|start|stop|restart|status|install`. `hermes gateway run --daemon` is NOT in those docs: they are this repo's declared adapter surface, unverified against upstream. If a call fails with "unknown option/command", check `hermes gateway --help` on the VPS and adapt; the hard-gate and rollback logic does not depend on the exact flags.
+Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
+This candidate lifecycle recipe assumes the exclusive default profile and its one host gateway. Inspect other profiles and live work first: the current gateway can serve multiple profiles, so stop/start is not isolated to one bot. Do not use `--force`, `--all` or `--yes` to evade a refusal. Named-profile and shared-host deployment remain outside this recipe.
+
+
+**Tagged native gateway lifecycle.** v0.22.5 supports `gateway stop` and
+`gateway ensure --json --timeout 60`; `gateway run` is foreground and has no
+`--daemon` flag. Parser checks do not prove target runtime readiness.
 
 ---
 
@@ -178,7 +252,7 @@ This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on 
 ```bash
 remote 'command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   echo "Using: $(command -v hermes)"
-  hermes --version' \
+  hermes -p default --version' \
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
 ```
 
@@ -188,18 +262,59 @@ Expected: `0.15.x` or `0.17.x`.
 
 ## Step 2 — idempotency check (skip if already wired)
 
-Upstream enables Telegram from the token alone, so "wired" means a token plus a non-empty
-allowlist are already in `~/.hermes/.env`. The check prints counts only, never values.
+Upstream enables Telegram from the token alone. Skip setup only when the stored token and
+numeric user allowlist are each defined once, the file is private, and no allow-all switch
+or group-wide allowlist is on. An unsafe existing setup aborts before the idempotency return; it must never be
+reported as already wired. The check prints a status only, never stored values.
 
 ```bash
-STATE=$(remote 'f=$HOME/.hermes/.env
-  t=$(grep -cE "^TELEGRAM_BOT_TOKEN=.?[0-9]+:" "$f" 2>/dev/null)
-  a=$(grep -cE "^TELEGRAM_ALLOWED_USERS=.?[0-9]" "$f" 2>/dev/null)
-  echo "${t:-0} ${a:-0}"; true') || STATE="0 0"
-read -r HAS_TOKEN HAS_ALLOW <<<"$STATE"
-if [ "${HAS_TOKEN:-0}" -ge 1 ] && [ "${HAS_ALLOW:-0}" -ge 1 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Telegram already wired. Set FORCE=1 to rewire."
-  exit 0
+if [ "${FORCE:-0}" != "1" ]; then
+  STATE=$(remote 'bash -s' <<'REMOTE'
+f=$HOME/.hermes/.env
+if [ ! -e "$f" ] && [ ! -L "$f" ]; then echo needs_setup; exit 0; fi
+[ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || { echo unsafe; exit 0; }
+mode=$(stat -c %a "$f" 2>/dev/null) || mode=$(stat -f %Lp "$f" 2>/dev/null) || exit 1
+[ "$mode" = 600 ] || { echo unsafe; exit 0; }
+awk '
+  function value(s) {
+    sub(/^[^=]*=/, "", s)
+    sub(/\r$/, "", s)
+    if (length(s) >= 2) {
+      q = substr(s, 1, 1)
+      if (q == substr(s, length(s), 1) && (q == "\"" || q == "\047")) s = substr(s, 2, length(s)-2)
+    }
+    return s
+  }
+  {
+    line = $0
+    sub(/^[[:space:]]*/, "", line)
+    sub(/^export[[:space:]]+/, "", line)
+    sub(/[[:space:]]*=[[:space:]]*/, "=", line)
+    if (line ~ /^TELEGRAM_BOT_TOKEN=/) { tokens++; token = value(line) }
+    if (line ~ /^TELEGRAM_ALLOWED_USERS=/) { lists++; users = value(line) }
+    if (line ~ /^TELEGRAM_GROUP_ALLOWED_CHATS=/) {
+      v = value(line); gsub(/[[:space:]]/, "", v)
+      if (v != "") open_access = 1
+    }
+    if (line ~ /^(TELEGRAM_ALLOW_ALL_USERS|GATEWAY_ALLOW_ALL_USERS)=/) {
+      v = tolower(value(line)); gsub(/[[:space:]]/, "", v)
+      if (v != "" && v != "false" && v != "0" && v != "no" && v != "off") open_access = 1
+    }
+  }
+  END {
+    if (tokens == 0 || lists == 0) print "needs_setup"
+    else if (open_access || tokens > 1 || lists > 1) print "unsafe"
+    else if (token !~ /^[0-9]+:[A-Za-z0-9_-]+$/ || length(substr(token, index(token, ":") + 1)) < 30) print "needs_setup"
+    else if (users !~ /^[0-9]+(,[0-9]+)*$/) print "unsafe"
+    else print "safe"
+  }' "$f"
+REMOTE
+) || { echo "ABORT: could not check the stored Telegram setup. Nothing was written."; exit 1; }
+  case "$STATE" in
+    safe) echo "Telegram already wired. Set FORCE=1 to rewire."; exit 0 ;;
+    needs_setup) ;;
+    *) echo "ABORT: the stored Telegram setup is unsafe (check file mode, duplicate keys, numeric allowlist and access overrides). Nothing was written."; exit 1 ;;
+  esac
 fi
 ```
 
@@ -248,23 +363,34 @@ if [ -n "$TELEGRAM_HOME_CHANNEL" ] && [ "$TELEGRAM_HOME_CHANNEL" != "${TELEGRAM_
   echo "ABORT: TELEGRAM_HOME_CHANNEL takes ONE chat ID. Nothing was written."; exit 1
 fi
 
-# Open-access switches already present on the VPS would make the allowlist meaningless.
+# Open-access switches or group-wide grants on the VPS defeat a private per-user allowlist.
 # open_access_names prints NAMES only (never values). Fail-closed: any value other than an
 # explicit false/0/no/off counts as on, and an unreadable .env aborts.
 open_access_names() {
   remote 'bash -s' <<'REMOTE'
 f="$HOME/.hermes/.env"
-[ -f "$f" ] || exit 0
-for n in TELEGRAM_ALLOW_ALL_USERS GATEWAY_ALLOW_ALL_USERS; do
-  v=$(sed -n "s/^[[:space:]]*$n=//p" "$f" | tail -n1 | tr -d "\"' \r" | tr 'A-Z' 'a-z')
-  case "$v" in ""|false|0|no|off) ;; *) echo "$n" ;; esac
-done
+if [ ! -e "$f" ] && [ ! -L "$f" ]; then exit 0; fi
+[ -f "$f" ] && [ ! -L "$f" ] && [ -r "$f" ] || exit 1
+awk '
+  {
+    line = $0
+    sub(/^[[:space:]]*/, "", line)
+    sub(/^export[[:space:]]+/, "", line)
+    sub(/[[:space:]]*=[[:space:]]*/, "=", line)
+    if (line !~ /^(TELEGRAM_ALLOW_ALL_USERS|GATEWAY_ALLOW_ALL_USERS|TELEGRAM_GROUP_ALLOWED_CHATS)=/) next
+    n = line; sub(/=.*/, "", n)
+    v = line; sub(/^[^=]*=/, "", v)
+    gsub(/[\"\047[:space:]]/, "", v); v = tolower(v)
+    if (n == "TELEGRAM_GROUP_ALLOWED_CHATS") { if (v != "") on[n] = 1 }
+    else if (v != "" && v != "false" && v != "0" && v != "no" && v != "off") on[n] = 1
+  }
+  END { for (n in on) print n }' "$f"
 REMOTE
 }
 OPEN_NAMES=$(open_access_names) \
   || { echo "ABORT: could not read ~/.hermes/.env on the VPS to check for allow-all switches. Nothing was written."; exit 1; }
 if [ -n "$OPEN_NAMES" ]; then
-  echo "ABORT: ~/.hermes/.env turns on open access ($(echo $OPEN_NAMES)), so ANYONE could use the bot. Remove it (or ask the user to), then re-run. Nothing was written."
+  echo "ABORT: ~/.hermes/.env turns on open access ($(echo $OPEN_NAMES)), so users outside the per-user allowlist could use the bot. Remove it (or ask the user to), then re-run. Nothing was written."
   exit 1
 fi
 
@@ -295,12 +421,12 @@ USERS_N=$(printf '%s' "$TELEGRAM_ALLOWED_USERS" | tr ',' '\n' | grep -c .)
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   0. Snapshot ~/.hermes/.env and config.yaml (restored automatically if anything below fails)
-  1. Write TELEGRAM_ALLOWED_USERS ($USERS_N user(s)) via 'hermes config set' (value sent over ssh stdin)
+  1. Write TELEGRAM_ALLOWED_USERS ($USERS_N user(s)) via 'hermes -p default config set' (value sent over ssh stdin)
   2. Write TELEGRAM_HOME_CHANNEL (${TELEGRAM_HOME_CHANNEL:-none}) if supplied
   3. Write TELEGRAM_BOT_TOKEN (length ${#TELEGRAM_BOT_TOKEN}, bot @$USERNAME) LAST, over ssh stdin
   4. chmod 600 ~/.hermes/.env; verify the keys landed (counts only)
   5. Set platforms.telegram.enabled true in config.yaml (the token alone enables Telegram upstream)
-  6. Reload gateway: hermes gateway stop && hermes gateway run (NOT restart)
+  6. Reload gateway: hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60 (NOT restart)
   7. POST-SETUP NUDGE: a second stop+run cycle 10s later (Telegram quirk on first wire-up)
   8. Smoke test: read the token back from ~/.hermes/.env on the VPS, call getMe, scan logs
  9. Live test: allowlisted user DMs the bot; expect reply within 5s
@@ -319,7 +445,7 @@ The allowlist goes in before the token, because the token is what makes Hermes t
 on. Each value travels as ONE line on ssh stdin and is read by `read -r` on the VPS. The `--`
 keeps values that start with `-` (negative chat IDs) from being parsed as options (that
 `--` syntax is unverified against upstream, see the list at the top). The output of
-`hermes config set` is discarded so Hermes can never echo a value into chat.
+`hermes -p default config set` is discarded so Hermes can never echo a value into chat.
 
 ```bash
 snapshot || { echo "ABORT: could not snapshot ~/.hermes state (or an earlier unfinished run left one: run rollback, then re-run). Nothing was written."; exit 1; }
@@ -327,7 +453,7 @@ snapshot || { echo "ABORT: could not snapshot ~/.hermes state (or an earlier unf
 # put KEY VALUE — KEY is a fixed name from this skill; VALUE goes over stdin only.
 put() {
   printf '%s\n' "$2" \
-    | remote "IFS= read -r v && hermes config set $1 -- \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+    | remote "IFS= read -r v && hermes -p default config set $1 -- \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
 }
 
 put TELEGRAM_ALLOWED_USERS "$TELEGRAM_ALLOWED_USERS" \
@@ -382,7 +508,7 @@ Upstream turns Telegram on from the token alone, **unless** `config.yaml` explic
 to `true` removes that trap. It is the only `config.yaml` edit, and it is covered by the snapshot.
 
 ```bash
-remote "hermes config set platforms.telegram.enabled true && chmod 600 ~/.hermes/.env" \
+remote "hermes -p default config set platforms.telegram.enabled true && chmod 600 ~/.hermes/.env" \
   || echo "WARN: could not set platforms.telegram.enabled (the key itself is unverified). This is a WARN on purpose: upstream enables Telegram from the token alone unless config.yaml disables it, and Step 8 will tell if Telegram is not connected."
 ```
 
@@ -392,18 +518,18 @@ remote "hermes config set platforms.telegram.enabled true && chmod 600 ~/.hermes
 
 ```bash
 # Initial reload
-remote "hermes gateway stop || true"
+remote "hermes -p default gateway stop" || { echo "FAIL: gateway stop refused; preserving recovery point."; rollback; exit 1; }
 sleep 2
-remote "hermes gateway run --daemon" \
+remote "hermes -p default gateway ensure --json --timeout 60 >/dev/null" \
   || { echo "FAIL: gateway did not start. Rolling back."; rollback; exit 1; }
 sleep 10
 
 # Post-setup nudge — many first-time setups need a second cycle for the bot
 # event loop to fully register. Cheap insurance.
 echo "Post-setup nudge: cycling gateway once more (Telegram first-wire-up quirk)."
-remote "hermes gateway stop || true"
+remote "hermes -p default gateway stop" || { echo "FAIL: gateway stop refused; preserving recovery point."; rollback; exit 1; }
 sleep 2
-remote "hermes gateway run --daemon" \
+remote "hermes -p default gateway ensure --json --timeout 60 >/dev/null" \
   || { echo "FAIL: gateway did not restart. Rolling back."; rollback; exit 1; }
 sleep 5
 ```
@@ -428,8 +554,18 @@ fi
 # Hermes log scan
 CONNECTED=0
 for i in $(seq 1 6); do
-  if remote "hermes logs gateway -n 200 2>&1" \
-       | grep -qiE 'telegram.*(connected|ready|long.?poll|webhook)'; then
+  LOG_STATUS=0
+  PLATFORM_LOG=$(remote "hermes -p default logs gateway -n 200 2>&1") || LOG_STATUS=$?
+  # Use the latest status-bearing Telegram line: disconnected/failed is not connected,
+  # and an older success must not mask a later connection failure.
+  if [ "$LOG_STATUS" = 0 ] && printf '%s\n' "$PLATFORM_LOG" | awk '
+    {
+      line = tolower($0)
+      if (line !~ /(^|[^[:alnum:]_])telegram([^[:alnum:]_]|$)/) next
+      if (line ~ /not[[:space:]_-]+(connected|ready)|(^|[^[:alnum:]_])(disconnected|failed|error|stopped)([^[:alnum:]_]|$)/) connected = 0
+      else if (line ~ /(^|[^[:alnum:]_])(connected|ready|long.?poll|webhook)([^[:alnum:]_]|$)/) connected = 1
+    }
+    END { exit !connected }'; then
     CONNECTED=1
     echo "OK: Telegram connected (bot @$USERNAME)."
     break
@@ -438,7 +574,7 @@ for i in $(seq 1 6); do
 done
 [ "$CONNECTED" = "1" ] || { echo "FAIL: Telegram did not appear in gateway logs within 30s. Rolling back."; rollback; exit 1; }
 
-finish
+finish || exit 1
 ```
 
 ---
@@ -456,11 +592,11 @@ SMOKE TEST — from the allowlisted Telegram user ($FIRST_USER):
 If silent on first message:
   - Sometimes the first message is dropped during long-poll initialization
   - Send a second message — it should land
-  - If still silent: 'hermes gateway status' on the VPS; confirm the user ID is numeric
+  - If still silent: 'hermes -p default gateway status' on the VPS; confirm the user ID is numeric
 EOF
 
 # Redact first: a log line can contain the Bot API URL, which embeds the token.
-remote "hermes logs gateway -n 50 2>&1" | sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot<redacted>#g' | grep -i telegram | tail -20 || true
+remote "hermes -p default logs gateway -n 50 2>&1" | sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot<redacted>#g' | grep -i telegram | tail -20 || true
 ```
 
 ---
@@ -469,9 +605,9 @@ remote "hermes logs gateway -n 50 2>&1" | sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot
 
 `rollback` is defined once, in **Step 0**. It restores the exact pre-run `~/.hermes/.env`
 and `config.yaml` from `~/.hermes/.hstack-backup/platform-telegram/` (byte-for-byte), then
-reloads the gateway (and checks `hermes gateway status`: if the gateway is not reported running it
+reloads the gateway (and checks `hermes -p default gateway status`: if the gateway is not reported running it
 prints `files restored, but the gateway did NOT come back` and exits non-zero, so start it by hand with
-`hermes gateway start`). So a failed `FORCE=1` re-run puts the previous working token and
+`hermes -p default gateway start`). So a failed `FORCE=1` re-run puts the previous working token and
 allowlist back; a failed first run removes the files this skill created. Failures in Steps
 1–4 happen before the snapshot and change nothing.
 
@@ -481,7 +617,7 @@ longer need the undo:
 
 ```bash
 # Manual undo of the last successful run, then reload:
-remote "d=\$HOME/.hermes/.hstack-backup/platform-telegram.prev; cp -p \"\$d/.env\" ~/.hermes/.env && chmod 600 ~/.hermes/.env && hermes gateway stop; sleep 2; hermes gateway run --daemon"
+remote "d=\$HOME/.hermes/.hstack-backup/platform-telegram.prev; cp -p \"\$d/.env\" ~/.hermes/.env && chmod 600 ~/.hermes/.env && hermes -p default gateway stop; sleep 2; hermes -p default gateway ensure --json --timeout 60"
 # Forget the backup (it contains the previous secrets):
 remote 'rm -rf ~/.hermes/.hstack-backup/platform-telegram.prev'
 ```
@@ -490,7 +626,7 @@ To remove Telegram entirely instead (destructive, only if the user asks):
 
 ```bash
 remote 'sed -i "/^TELEGRAM_BOT_TOKEN=/d;/^TELEGRAM_ALLOWED_USERS=/d;/^TELEGRAM_HOME_CHANNEL=/d" ~/.hermes/.env && chmod 600 ~/.hermes/.env'
-remote "hermes config set platforms.telegram.enabled false; hermes gateway stop; sleep 2; hermes gateway run --daemon"
+remote "hermes -p default config set platforms.telegram.enabled false; hermes -p default gateway stop; sleep 2; hermes -p default gateway ensure --json --timeout 60"
 ```
 
 ---
@@ -505,7 +641,7 @@ remote "hermes config set platforms.telegram.enabled false; hermes gateway stop;
 | 4 | First message dropped after enable | Long-poll initializer not warm yet | Step 7 nudge (second stop+run cycle); Step 9 says "send a second message" |
 | 5 | Group ID without leading `-` (or missing `-100` prefix for supergroups) | Telegram sends from groups as negative IDs; matcher fails | Add @userinfobot to the group → it sends the correct negative ID; `TELEGRAM_HOME_CHANNEL` accepts `^-?[0-9]+$` |
 | 6 | `gateway restart` instead of `stop`+`run` | Restart does NOT reliably re-read `.env` | Always `stop` + `run` (Step 7) |
-| 7 | `echo >> .env` | Merge risk on missing trailing newline | Always `hermes config set` (Step 5), or the stdin upsert shown there |
+| 7 | `echo >> .env` | Merge risk on missing trailing newline | Always `hermes -p default config set` (Step 5), or the stdin upsert shown there |
 | 8 | Token in `config.yaml` | Often checked into git; tokens exposed | Only `~/.hermes/.env`, `chmod 600` |
 | 9 | Token revoked in @BotFather without redeploy | Old token in `.env` keeps failing on `getMe` | Rotate token → re-run with `FORCE=1`; if the new run fails, `rollback` restores the OLD working values |
 | 10 | Bot username doesn't end in `bot` | @BotFather rejects username; user gets stuck before this skill runs | Tell user up front; @BotFather error is self-explanatory |
@@ -515,7 +651,7 @@ remote "hermes config set platforms.telegram.enabled false; hermes gateway stop;
 | 14 | Looking for a `TELEGRAM_ENABLED` switch | It is not an upstream variable; the token enables the platform, and only `platforms.telegram.enabled: false` in `config.yaml` overrides that | Step 6 sets the `config.yaml` flag; do not write `TELEGRAM_ENABLED` |
 | 15 | A crashed earlier run left `~/.hermes/.hstack-backup/platform-telegram/` behind | `snapshot` refuses to run so a half-written state is never captured as known-good | Run `rollback` (restores the pre-crash files), then re-run the skill |
 | 16 | `TELEGRAM_ALLOW_ALL_USERS` / `GATEWAY_ALLOW_ALL_USERS` on in `.env`, or a `*` in the allowlist (`555,*`) | Anyone can use the bot regardless of the allowlist | Step 3 aborts before any write and Step 5 re-checks after it (names only, values never printed); never set them with this skill; remove them if present |
-| 17 | `hermes config set KEY value` puts the value in the `hermes` process argv on the VPS while it runs | Anyone who can read `/proc` or `ps` there at that moment sees it (the local ssh argv stays clean because values travel over stdin) | Accepted for the primary path; the stdin `upsert` fallback in Step 5 avoids it. Output of the write is discarded so Hermes can never echo a value into chat |
+| 17 | `hermes -p default config set KEY value` puts the value in the `hermes` process argv on the VPS while it runs | Anyone who can read `/proc` or `ps` there at that moment sees it (the local ssh argv stays clean because values travel over stdin) | Accepted for the primary path; the stdin `upsert` fallback in Step 5 avoids it. Output of the write is discarded so Hermes can never echo a value into chat |
 | 18 | Pasting gateway logs into chat | A log line can contain the Bot API URL, which embeds the bot token | Step 9 pipes logs through `sed -E 's#bot[0-9]+:[A-Za-z0-9_-]+#bot<redacted>#g'`; do the same for any log you show |
 
 ---

@@ -28,7 +28,7 @@ const base = { MODEL_PROVIDER: "openrouter", MODEL_API_KEY: PROVIDERS[0].key, HE
 
 describe("hermes-model: provider key names and transport", { concurrency: 6 }, () => {
   for (const p of PROVIDERS) {
-    it(`${p.name}: ${p.keyvar} + model.provider=${p.id}, key over stdin, never in argv/config/output`, async () => {
+    it(`${p.name}: ${p.keyvar} + model.provider=${p.id}, key over stdin, never in ssh/curl argv, config or output`, async () => {
       await scenario({ name: `model-${p.name}`, script: flow(), env: { MODEL_PROVIDER: p.name, MODEL_API_KEY: p.key, HERMES_MODEL: p.model } }, async (run) => {
         assert.equal(run.code, 0, run.out);
         assert.ok(run.completed);
@@ -40,14 +40,14 @@ describe("hermes-model: provider key names and transport", { concurrency: 6 }, (
         const cfg = run.sb.read(".hermes/config.yaml");
         assert.match(cfg, new RegExp(`^model\\.provider: ${p.id}$`, "m"));
         assert.match(cfg, new RegExp(`^model\\.default: ${p.model.replace(/[.]/g, "\\.")}$`, "m"));
-        assert.match(cfg, /^prompt_caching\.enabled: true$/m);
+        assert.ok(!/^prompt_caching\.enabled: true$/m.test(cfg), "model setup must not silently enable unrelated caching");
         assert.ok(!cfg.includes(p.key), "key in config.yaml");
         // the key travelled on stdin: the ssh command line carries the variable NAME, never the value
-        assert.ok(run.sb.sshCalls().some((c) => c.includes(`hermes config set ${p.keyvar} "$v"`)));
+        assert.ok(run.sb.sshCalls().some((c) => c.includes(`hermes -p default config set ${p.keyvar} "$v"`)));
         assertNoSecretInArgv(run, [p.key]);
         assertSecretsNotPrinted(run, [p.key]);
         const calls = run.sb.hermesCalls();
-        assert.ok(calls.some((c) => c[0] === "setup" && c[1] === "--non-interactive"));
+        assert.ok(!calls.some((c) => c[0] === "setup"), "bounded config must not rerun the setup wizard");
         assert.ok(!calls.some((c) => c.includes("--portal")), "--portal hangs a headless run");
         assert.ok(!calls.some((c) => c[0] === "gateway" && c[1] === "restart"));
         assert.match(run.out, /OK: model .* responded/);
@@ -65,25 +65,23 @@ describe("hermes-model: provider key names and transport", { concurrency: 6 }, (
     });
   });
 
-  it("capability check reports vision/web/compression degraded when no OpenRouter key exists", async () => {
-    const p = PROVIDERS[1];
-    await scenario({ name: "model-cap", script: flow(), env: { MODEL_PROVIDER: p.name, MODEL_API_KEY: p.key, HERMES_MODEL: p.model } }, async (run) => {
-      assert.match(run.out, /vision\s+: DEGRADED \(missing OPENROUTER_API_KEY\)/);
-    });
-    await scenario({ name: "model-cap2", script: flow(), env: base }, async (run) => {
-      assert.match(run.out, /vision\s+: active/);
-    });
+  it("reports auxiliary capabilities as unverified instead of inferring them from key presence", async () => {
+    for (const p of [PROVIDERS[0], PROVIDERS[1]]) {
+      await scenario({ name: "model-cap", script: flow(), env: { MODEL_PROVIDER: p.name, MODEL_API_KEY: p.key, HERMES_MODEL: p.model } }, async (run) => {
+        assert.equal(run.code, 0, run.out);
+        assert.match(run.out, /Unverified: auxiliary tools and messaging delivery/);
+        assert.ok(!run.out.includes("vision           : active"));
+      });
+    }
   });
 
-  it("Path A failing falls back to Path B, which rewrites the model: block and keeps the rest", async () => {
+  it("native config refusal rolls back instead of bypassing validation through manual YAML", async () => {
     const seed = { env: oldState.env, config: "model:\n  default: old/model\n  provider: openrouter\nother_setting: 1\n" };
-    await scenario({ name: "model-pathb", seed, knobs: { "fail.set.model.provider": true }, script: flow(), env: { ...base, FORCE: "1" } }, async (run) => {
-      assert.equal(run.code, 0, run.out);
-      assert.match(run.out, /Path A failed; trying Path B/);
-      const cfg = run.sb.read(".hermes/config.yaml");
-      assert.ok(cfg.includes("other_setting: 1"));
-      assert.match(cfg, /^model:\n  default: anthropic\/claude-sonnet-4\n  provider: openrouter$/m);
-      assert.ok(!cfg.includes("old/model"));
+    await scenario({ name: "model-native-refusal", seed, knobs: { "fail.set.model.provider": true }, script: flow(), env: { ...base, FORCE: "1" } }, async (run) => {
+      assert.equal(run.code, 1, run.out);
+      assert.match(run.out, /FAIL: could not apply model config/);
+      assertStateIdentical(run);
+      assert.ok(!run.out.includes("Path A failed; trying Path B"));
     });
   });
 
@@ -153,6 +151,10 @@ describe("hermes-model: a bad or inconclusive inference test rolls back", { conc
   const replies = [
     ["401 (key rejected)", "Error: provider rejected request, 401 unauthorized\n", /FAIL: API key rejected/],
     ["403 (quota/billing)", "error: forbidden, billing quota exceeded\n", /FAIL: key valid but no quota/],
+    ["401 echoing OK", "HTTP 401: invalid API key. Request prompt: reply with the single word OK\n", /FAIL: API key rejected/],
+    ["403 echoing OK", "HTTP 403: billing quota exceeded; requested reply OK\n", /FAIL: key valid but no quota/],
+    ["599: prompt echo", "reply with the single word OK\n", /could not confirm the key works/],
+    ["599: negated OK", "The provider is not OK\n", /could not confirm the key works/],
     ["599: unrecognisable reply", "banana split\n", /could not confirm the key works/],
     ["599: connection error", "connection reset by peer\n", /could not confirm the key works/],
     ["599: empty reply", "\n", /could not confirm the key works/],
@@ -171,9 +173,26 @@ describe("hermes-model: a bad or inconclusive inference test rolls back", { conc
     });
   }
 
+  it("a nonzero inference command that prints exactly OK still rolls back", async () => {
+    await scenario({
+      name: "model-nonzero-ok", seed: oldState, script: flow(), env: { ...base, FORCE: "1" },
+      setup: (sb) => {
+        const stub = sb.read(".local/bin/hermes");
+        const changed = stub.replace("event -z; inject infer", "event -z; inject infer\n    echo OK; exit 1");
+        assert.notEqual(changed, stub, "the nonzero inference control must change the stub");
+        sb.write(".local/bin/hermes", changed, 0o755);
+      },
+    }, async (run) => {
+      assert.equal(run.code, 1, run.out);
+      assert.match(run.out, /could not confirm the key works/);
+      assert.match(run.out, /rollback: restored/);
+      assertStateIdentical(run);
+    });
+  });
+
   for (const [label, knobs, msg] of [
     ["config set of the key fails", { "fail.set.OPENROUTER_API_KEY": true }, /could not write OPENROUTER_API_KEY/],
-    ["hermes setup fails in both paths", { "fail.setup": true }, /could not apply model config/],
+    ["native model selection fails", { "fail.set.model.default": true }, /could not apply model config/],
     ["gateway run fails", { "fail.gateway.run": true }, /gateway did not start/],
     ["gateway never reports the model", { "fail.logs": true }, /did not report model in logs/],
   ]) {

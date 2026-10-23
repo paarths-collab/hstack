@@ -9,14 +9,15 @@
 
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { REPO_ROOT, contractHash, runtimeVersionSupported } from "./contract.js";
+import { readTargetScript } from "./artifacts.js";
 import {
-  buildSkillsTar, describeOp, opApply, opBackup, opCommit, opHelperVerify, opInspect, opInstallHelper,
+  HELPER_PATH, bindHelper, buildSkillsTar, describeOp, opApply, opBackup, opCommit, opHelperVerify, opInspect, opInspectInstalled, opInstallHelper,
   opPurge, opPutEnv, opReload, opRestore, opSkillsSync, opStageCheck, opVerify, skillsTreeHash,
 } from "./ops.js";
 import {
@@ -145,6 +146,8 @@ export function buildReview({ blueprint, contract, operator, txnId, scriptBody =
   const placeholderValue = "PLACEHOLDER";
   const script = scriptBody ?? "";
   const scriptOps = (build) => (scriptBody ? build(script) : null);
+  const scriptSha = scriptBody ? sha256Hex(scriptBody) : null;
+  const pinned = (op) => scriptSha ? bindHelper(op, scriptSha) : op;
   const keys = contract.managed_env_keys;
   const prevEnv = (key) => (inspection ? (inspection.env_keys.includes(key) ? "present" : "absent") : "unknown (target not inspected)");
   const prevSkill = (name) => {
@@ -159,7 +162,7 @@ export function buildReview({ blueprint, contract, operator, txnId, scriptBody =
 
   const ops = [];
   const add = (op_id, phase, op, expected_previous) => {
-    const described = op ? describeOp(op) : { op: "(target script unavailable)", remote: "(unavailable)", stdin: null, mutates: "unknown" };
+    const described = op ? describeOp(pinned(op)) : { op: "(target script unavailable)", remote: "(unavailable)", stdin: null, mutates: "unknown" };
     ops.push({ op_id, phase, ...described, expected_previous });
   };
 
@@ -169,7 +172,7 @@ export function buildReview({ blueprint, contract, operator, txnId, scriptBody =
   add("backup:create", "staging", opBackup({ txn: txnId, keys }), "no recovery point yet; a refusal if another transaction is incomplete");
   for (const key of keys) {
     const staged = opPutEnv({ txn: txnId, key, allow: keys, value: placeholderValue });
-    ops.push({ op_id: `env:${key}`, phase: "staging", ...describeOp({ ...staged, redactedStdin: "<STDIN secret len=?>" }), expected_previous: prevEnv(key) });
+    ops.push({ op_id: `env:${key}`, phase: "staging", ...describeOp(pinned({ ...staged, redactedStdin: "<STDIN secret len=?>" })), expected_previous: prevEnv(key) });
   }
   add("stage:check", "staging", opStageCheck({ txn: txnId }), "staged copy only");
   let tar = null;
@@ -244,17 +247,20 @@ export class Transaction {
   #inspection = null;
   #secrets = new Map();
   #evidenceSeq = 0;
-  #inspectedScript = null;
   #preApplyRestoreAllowed = false;
   #cronStatus = "unknown";
   #approved = null;
+  #helperReady = false;
+  #operation = null;
 
   constructor(options) {
     const { blueprint, contract, operator, transport, receiptDir } = options ?? {};
     if (!blueprint || !contract || !transport || !receiptDir) {
       throw new TypeError("Transaction requires blueprint, contract, operator, transport and receiptDir");
     }
-    this.#contract = contract;
+    // Contract JSON is caller-owned unless loaded through loadContract(). Keep our own
+    // snapshot so later caller edits cannot change commands the operator approved.
+    this.#contract = structuredClone(contract);
     this.#blueprint = blueprint;
     this.#operator = validateOperatorInput(contract, operator);
     if (!["ssh", "sandbox", "recording"].includes(transport.kind)) {
@@ -335,7 +341,7 @@ export class Transaction {
 
   #scriptBody() {
     if (!existsSync(this.#scriptPath)) throw new TargetScriptMissing(this.#scriptPath);
-    return readFileSync(this.#scriptPath, "utf8");
+    return readTargetScript(this.#scriptPath);
   }
 
   #evidence(label, text) {
@@ -390,8 +396,50 @@ export class Transaction {
     if (!ok) throw new TransactionError("write_ahead_violation", `refusing live op '${op.op}': applied_unverified has not been persisted`);
   }
 
+  async #runOperation(name, operation) {
+    if (this.#operation !== null) {
+      throw new TransactionError("operation_in_progress", `cannot ${name} while ${this.#operation} is in progress`);
+    }
+    this.#operation = name;
+    try {
+      return await operation();
+    } finally {
+      this.#operation = null;
+    }
+  }
+
+  #pinOp(op) {
+    const usesHelper = op.remote.includes(HELPER_PATH) || op.remote.includes(HELPER_PATH.replace(/^~/, "$HOME"));
+    if (!usesHelper) return op;
+    if (!this.#approved?.script_sha256) throw new TransactionError("helper_unreviewed", "no reviewed helper digest is available");
+    return bindHelper(op, this.#approved.script_sha256);
+  }
+
+  async #ensureReviewedHelper() {
+    if (this.#helperReady) return;
+    const expected = this.#approved.script_sha256;
+    const measure = () => this.#exec(bindHelper(opHelperVerify(), expected));
+    const matches = (res) => res.code === 0 && res.stdout.trim().split(/\s+/)[0] === expected;
+    if (matches(await measure())) {
+      this.#helperReady = true;
+      return;
+    }
+    // Old receipts may have only the former shared helper on the target. Reinstall ONLY
+    // bytes matching their reviewed digest; never execute an unreviewed compatibility helper.
+    const script = this.#scriptBody();
+    this.#assertArtifactUnchanged("target script", expected, sha256Hex(script));
+    const install = await this.#exec(opInstallHelper(script));
+    if (install.code !== 0 || !matches(await measure())) {
+      throw new TransactionError("helper_integrity", "the reviewed helper could not be installed and verified");
+    }
+    this.#helperReady = true;
+  }
+
   async #exec(op) {
     if (op.mutates === "live" && !this.#preApplyRestoreAllowed) this.#assertWriteAhead(op);
+    const pinned = this.#pinOp(op);
+    if (pinned !== op && op.op !== "helper-verify") await this.#ensureReviewedHelper();
+    op = pinned;
     let result;
     try {
       result = await this.#transport.exec(op);
@@ -419,6 +467,10 @@ export class Transaction {
 
   /** Structural gate (real Python validator) + execution-graph derivation. Writes the first receipt. */
   async validate() {
+    return this.#runOperation("validate", () => this.#validate());
+  }
+
+  async #validate() {
     this.#requireState("validate", ["start"]);
     if (existsSync(this.receiptPath)) throw new TransactionError("txn_exists", "a receipt for this transaction id already exists");
     const structural = await this.#validator(this.#blueprint);
@@ -475,9 +527,12 @@ export class Transaction {
 
   /** Strictly read-only inspection of the target. Blocked outcomes leave `state` unchanged. */
   async inspect() {
+    return this.#runOperation("inspect", () => this.#inspect());
+  }
+
+  async #inspect() {
     this.#requireState("inspect", ["validated"]);
     const script = this.#scriptBody();
-    this.#inspectedScript = script;
     const res = await this.#exec(opInspect(script));
     const evidence = this.#evidence("inspect", res.stdout);
     const kv = res.kv;
@@ -584,7 +639,7 @@ export class Transaction {
       contract: this.#contract,
       operator: this.#operator,
       txnId: this.txnId,
-      scriptBody: existsSync(this.#scriptPath) ? readFileSync(this.#scriptPath, "utf8") : null,
+      scriptBody: existsSync(this.#scriptPath) ? readTargetScript(this.#scriptPath) : null,
       skillsRoot: this.#skillsRoot,
       inspection: this.#inspection,
     });
@@ -595,6 +650,10 @@ export class Transaction {
    * On success the state becomes change_reviewed.
    */
   async reviewChanges(approve) {
+    return this.#runOperation("reviewChanges", () => this.#reviewChanges(approve));
+  }
+
+  async #reviewChanges(approve) {
     this.#requireState("reviewChanges", ["inspected"]);
     if (typeof approve !== "function") throw new ApprovalError();
     const review = this.previewChanges();
@@ -608,6 +667,7 @@ export class Transaction {
     this.#save((next) => {
       next.artifacts = structuredClone(artifacts);
       this.#setCheck(next, "change-review", "pass", "operator", `operator approved plan_hash ${review.plan_hash.slice(0, 12)}`);
+      this.#setCheck(next, "backup-create", "skipped", "local-state", "no recovery-point request has been sent to the target");
       this.#move(next, "change_reviewed");
     }, "change_reviewed");
     return review;
@@ -641,6 +701,10 @@ export class Transaction {
 
   /** Install helper, take the recovery point, stage secrets (stdin only) in a copy, and check the staged copy. */
   async stage(values) {
+    return this.#runOperation("stage", () => this.#stage(values));
+  }
+
+  async #stage(values) {
     this.#requireState("stage", ["change_reviewed"]);
     const contract = this.#contract;
     const secrets = this.#validateValues(values);
@@ -671,8 +735,24 @@ export class Transaction {
       return failStage("stage_failed:helper-integrity", "installed helper hash does not match the shipped script");
     }
 
+    this.#helperReady = true;
+
+    // Persist the expected recovery point BEFORE sending backup. A lost reply (or a crash
+    // after the remote rename) must not make abandon() assume that staging never began.
+    this.#save((next) => {
+      next.recovery.backup_ref = `bk_${txn}`;
+      this.#setCheck(next, "backup-create", "unknown", "target-state", "recovery point requested; target outcome not yet confirmed");
+    });
     const backup = await this.#exec(opBackup({ txn, keys }));
     if (backup.code !== 0) {
+      // These target-side refusals occur before creating this transaction. In particular,
+      // txn_exists may refer to an older finished transaction: never restore that one.
+      if ([2, 4].includes(backup.code) && backup.kv.error) {
+        this.#save((next) => {
+          next.recovery.backup_ref = null;
+          this.#setCheck(next, "backup-create", "fail", "target-state", "target refused to create the recovery point");
+        });
+      }
       if (backup.code === 4) {
         const reason = backup.kv.error === "incomplete_transaction"
           ? `incomplete_transaction:${/^[a-z0-9]{8,32}$/.test((backup.kv.detail ?? "").split(",")[0]) ? backup.kv.detail.split(",")[0] : "unknown"}`
@@ -686,7 +766,7 @@ export class Transaction {
     }
     backupMade = true;
     this.#save((next) => {
-      next.recovery.backup_ref = `bk_${txn}`;
+      this.#setCheck(next, "backup-create", "pass", "target-state", "target confirmed the expected recovery point");
     });
 
     const previous = {};
@@ -716,7 +796,8 @@ export class Transaction {
     this.#preApplyRestoreAllowed = true;
     try {
       const res = await this.#exec(opRestore({ txn: this.txnId }));
-      return { ok: res.code === 0, res };
+      const confirmed = res.code === 0 && (res.kv.restore_verified === "1" || res.kv.already_restored === "1");
+      return { ok: confirmed, res };
     } catch {
       return { ok: false, res: null };
     } finally {
@@ -731,9 +812,16 @@ export class Transaction {
    * carries the exact manual command.
    */
   async abandon() {
+    return this.#runOperation("abandon", () => this.#abandon());
+  }
+
+  async #abandon() {
     this.#requireState("abandon", ["change_reviewed", "staged"]);
-    const manualCommand = `${opRestore({ txn: this.txnId }).remote}   # then: ${opPurge({ txn: this.txnId }).remote}`;
-    if (this.#receipt.recovery.backup_ref === null) {
+    const manualCommand = `${this.#pinOp(opRestore({ txn: this.txnId })).remote}   # then: ${this.#pinOp(opPurge({ txn: this.txnId })).remote}`;
+    const backupCheck = this.#receipt.checks.find((check) => check.id === "backup-create");
+    // A legacy receipt with no backup check cannot distinguish "never requested" from
+    // a lost backup reply. Reconcile it on the target instead of trusting a null ref.
+    if (this.#receipt.recovery.backup_ref === null && ["skipped", "fail"].includes(backupCheck?.status)) {
       this.#save((next) => {
         next.blocked_reason = "abandoned";
         this.#setCheck(next, "abandon", "pass", "target-state", "no recovery point had been taken, so nothing was staged on the target");
@@ -759,6 +847,10 @@ export class Transaction {
 
   /** Write-ahead, then skills-sync -> apply -> reload. A definite failure moves to rollback_required. */
   async apply() {
+    return this.#runOperation("apply", () => this.#apply());
+  }
+
+  async #apply() {
     this.#requireState("apply", ["staged"]);
     const contract = this.#contract;
     const graph = this.#graph;
@@ -805,6 +897,14 @@ export class Transaction {
         return { ok: false, state: this.state, failed_op: step.op.op, detail: this.#safeText(detail) };
       }
       const cronStatus = res.kv[`cron_${cron.id}`];
+      if (step.op.op === "reload" && res.kv.reloaded !== "1") {
+        this.#save((next) => {
+          step.ids.forEach((id) => this.#setOp(next, id, "unknown"));
+          this.#setCheck(next, "apply", "unknown", "target-state", "reload exited 0 without reloaded=1; gateway reload could not be confirmed", evidence);
+          this.#move(next, "rollback_required");
+        }, "rollback_required");
+        return { ok: false, state: this.state, failed_op: "reload", detail: "gateway reload did not confirm" };
+      }
       if (step.op.op === "apply" && (res.kv.applied !== "1" || !["created", "unchanged", "updated"].includes(cronStatus))) {
         this.#save((next) => {
           step.ids.forEach((id) => this.#setOp(next, id, "failed"));
@@ -827,6 +927,10 @@ export class Transaction {
 
   /** Target-state checks + runtime version + injected delivery observer. Never "verified" on unknowns. */
   async verify() {
+    return this.#runOperation("verify", () => this.#verify());
+  }
+
+  async #verify() {
     this.#requireState("verify", ["applied_unverified"]);
     const contract = this.#contract;
     const graph = this.#graph;
@@ -858,7 +962,7 @@ export class Transaction {
 
     // runtime version, re-measured now
     try {
-      const again = await this.#exec(opInspect(this.#inspectedScript ?? this.#scriptBody()));
+      const again = await this.#exec(opInspectInstalled());
       const version = again.code === 0 && again.kv.hermes_present === "1" ? normaliseVersion(again.kv.runtime_version) : "unknown";
       const evidence = this.#evidence("runtime", again.stdout);
       if (version === "unknown") set("runtime-version", "unknown", "target-state", "runtime version could not be measured after apply", evidence);
@@ -948,10 +1052,13 @@ export class Transaction {
     }
 
     const commit = await this.#exec(opCommit({ txn: this.txnId }));
-    if (commit.code !== 0) {
+    if (commit.code !== 0 || commit.kv.committed !== "1") {
       this.#save((next) => {
         record(next);
-        this.#setCheck(next, "commit", "fail", "target-state", `commit exited ${commit.code}: ${commit.kv.error ?? ""}`);
+        const confirmedFailure = commit.code !== 0;
+        this.#setCheck(next, "commit", confirmedFailure ? "fail" : "unknown", "target-state", confirmedFailure
+          ? `commit exited ${commit.code}: ${commit.kv.error ?? ""}`
+          : "commit exited 0 without committed=1; target closure could not be confirmed");
         next.unresolved = ["commit"];
       });
       return { ok: false, state: this.state, failed: [], unresolved: ["commit"] };
@@ -969,6 +1076,10 @@ export class Transaction {
 
   /** Restore from the recovery point. Conflicts and missing backups end in manual_recovery_required, never an overwrite. */
   async rollback() {
+    return this.#runOperation("rollback", () => this.#rollback());
+  }
+
+  async #rollback() {
     this.#requireState("rollback", ["applied_unverified", "rollback_required"]);
     if (this.state === "applied_unverified") {
       this.#save((next) => {
@@ -1029,6 +1140,10 @@ export class Transaction {
 
   /** Explicit retention: remove this transaction's backup on the target. Only after verified / restored_verified. */
   async purge() {
+    return this.#runOperation("purge", () => this.#purge());
+  }
+
+  async #purge() {
     this.#requireState("purge", ["verified", "restored_verified"]);
     const res = await this.#exec(opPurge({ txn: this.txnId }));
     return { ok: res.code === 0, detail: this.#safeText(res.kv.error ?? "") };

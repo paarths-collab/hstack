@@ -53,49 +53,115 @@ remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local
 snapshot() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
 set -e
-d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
-# A leftover snapshot means an earlier run wrote something and never finished or rolled
-# back. Snapshotting now would capture that half-written state as "known good".
-if [ -d "$d" ]; then
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
   echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-mkdir -p "$d" && chmod 700 "$HOME/.hermes/.hstack-backup" "$d"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
 for f in .env config.yaml; do
-  rm -f "$d/$f" "$d/$f.absent"
-  if [ -f "$HOME/.hermes/$f" ]; then cp -p "$HOME/.hermes/$f" "$d/$f"; else : > "$d/$f.absent"; fi
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
 done
-chmod 600 "$d"/* 2>/dev/null || true
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
 REMOTE
 }
-
 # rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
 # fails puts the previous working value back), then reload the gateway.
 rollback() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
 d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
 [ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 0; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
 for f in .env config.yaml; do
-  if [ -f "$d/$f" ]; then cp -p "$d/$f" "$HOME/.hermes/$f"
-  elif [ -f "$d/$f.absent" ]; then rm -f "$HOME/.hermes/$f"; fi
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
 done
 [ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
-rm -rf "$d.prev"; mv "$d" "$d.prev"
-hermes gateway stop || true; sleep 2; hermes gateway run --daemon || true
+hermes -p default gateway stop
+sleep 2
+hermes -p default gateway ensure --json --timeout 60 >/dev/null
 sleep 3
-st=$(hermes gateway status 2>&1 || true)
-if printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
+status_rc=0
+st=$(hermes -p default gateway status 2>&1) || status_rc=$?
+if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes gateway start) and check hermes logs"
+  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
   exit 1
 fi
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
 echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
 REMOTE
 }
 
 # finish: mark the run successful; keep the snapshot as .prev for a manual undo.
 finish() {
-  remote "d=\$HOME/.hermes/.hstack-backup/$SKILL_NAME; rm -rf \"\$d.prev\"; [ -d \"\$d\" ] && mv \"\$d\" \"\$d.prev\"; true"
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
@@ -112,7 +178,13 @@ Rules for calling them (every skill follows these):
   second `rollback()` later in the file and never use `bash <(declare -f rollback)` (that
   defines the function in a child shell and runs nothing).
 
-**Unverified CLI surface.** Upstream's CLI docs list `hermes gateway run|start|stop|restart|status|install`. `hermes gateway run --daemon` and `hermes mcp add|remove|list` are NOT in those docs: they are this repo's declared adapter surface, unverified against upstream. If a call fails with "unknown option/command", check `hermes gateway --help` / `hermes mcp --help` on the VPS and adapt; the hard-gate and rollback logic does not depend on the exact flags.
+Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
+This candidate lifecycle recipe assumes the exclusive default profile and its one host gateway. Inspect other profiles and live work first: the current gateway can serve multiple profiles, so stop/start is not isolated to one bot. Do not use `--force`, `--all` or `--yes` to evade a refusal. Named-profile and shared-host deployment remain outside this recipe.
+
+
+**Tagged native gateway lifecycle.** v0.22.5 supports `gateway stop` and
+`gateway ensure --json --timeout 60`; `gateway run` is foreground and has no
+`--daemon` flag. Parser checks do not prove target runtime readiness. Connector registration syntax in this legacy recipe remains separately unverified; prefer native connector/MCP setup when supported.
 
 ---
 
@@ -122,9 +194,9 @@ Rules for calling them (every skill follows these):
 remote '
   set -e
   if command -v hermes >/dev/null 2>&1; then
-    hermes --version
+    hermes -p default --version
   elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    docker exec "$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)" hermes --version
+    docker exec "$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)" hermes -p default --version
   else
     echo "FAIL: hermes not found on host or in container"; exit 1
   fi
@@ -138,7 +210,7 @@ Expected: a version string like `0.15.x` or `0.17.x`.
 ## Step 2 — idempotency check (skip if already wired)
 
 ```bash
-ALREADY=$(remote "hermes mcp list 2>/dev/null | grep -ci '<skill-name>' || true")
+ALREADY=$(remote "hermes -p default mcp list 2>/dev/null | grep -ci '<skill-name>' || true")
 if [ "${ALREADY:-0}" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
   echo "Already wired. Re-run with FORCE=1 to rewire."
   exit 0
@@ -199,9 +271,9 @@ cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   0. (already passed) credential format + live <vendor> preflight, nothing written yet
   1. Snapshot ~/.hermes/.env and config.yaml to ~/.hermes/.hstack-backup/$SKILL_NAME
-  2. Write <SECRET_NAME> (length: ${#<SECRET>}) to ~/.hermes/.env via 'hermes config set', chmod 600
-  3. Register MCP: hermes mcp add <skill-name> --url <URL> --auth ...
-  4. Reload gateway: hermes gateway stop && hermes gateway run
+  2. Write <SECRET_NAME> (length: ${#<SECRET>}) to ~/.hermes/.env via 'hermes -p default config set', chmod 600
+  3. Register MCP: hermes -p default mcp add <skill-name> --url <URL> --auth ...
+  4. Reload gateway: hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60
   5. Verify in logs: grep "registered.*<skill-name>"
   6. Smoke test with the value read back from ~/.hermes/.env on the VPS
   Any failure after step 1 restores the snapshot.
@@ -220,7 +292,7 @@ declines: `echo "ABORT: user declined. Nothing was written."; exit 1`.
 ```bash
 snapshot || { echo "ABORT: snapshot failed (if it says a previous run did not finish, run rollback first, then re-run). Nothing was written."; exit 1; }
 printf '%s\n' "$<SECRET>" \
-  | remote 'IFS= read -r v && hermes config set <SECRET_NAME> "$v" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env' \
+  | remote 'IFS= read -r v && hermes -p default config set <SECRET_NAME> "$v" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env' \
   || { echo "FAIL: could not write <SECRET_NAME>."; rollback; exit 1; }
 ```
 
@@ -245,9 +317,9 @@ WROTE=$(remote "grep -c '^<SECRET_NAME>=' ~/.hermes/.env || true")
 ## Step 6 — register the MCP server (or REST endpoint if no MCP exists)
 
 ```bash
-if [ "${FORCE:-0}" = "1" ]; then remote "hermes mcp remove <skill-name> >/dev/null 2>&1 || true"; fi
-remote "hermes mcp add <skill-name> --url '<MCP_URL>' --auth-header 'Authorization' --auth-scheme 'Bearer' --placeholder-token 'placeholder'" \
-  || { echo "FAIL: hermes mcp add."; rollback; exit 1; }
+if [ "${FORCE:-0}" = "1" ]; then remote "hermes -p default mcp remove <skill-name> >/dev/null 2>&1 || true"; fi
+remote "hermes -p default mcp add <skill-name> --url '<MCP_URL>' --auth-header 'Authorization' --auth-scheme 'Bearer' --placeholder-token 'placeholder'" \
+  || { echo "FAIL: hermes -p default mcp add."; rollback; exit 1; }
 # Swap the placeholder for the ${VAR} indirection. \$ keeps the braces literal on the
 # remote side — config.yaml must hold the text ${<SECRET_NAME>}, never the secret, and
 # never an unset remote variable expanded to an empty string.
@@ -265,14 +337,14 @@ remote 'v=$(sed -n "s/^<SECRET_NAME>=//p" ~/.hermes/.env | tail -n1); v=${v#\"};
 
 ---
 
-## Step 7 — reload the gateway (stop + run, NOT restart)
+## Step 7 — reload through the native gateway lifecycle
 
 `gateway restart` does NOT re-read `.env` reliably. Use stop + run.
 
 ```bash
-remote "hermes gateway stop || true"
+remote "hermes -p default gateway stop" || { echo "FAIL: gateway stop refused; preserving recovery point."; rollback; exit 1; }
 sleep 2
-remote "hermes gateway run --daemon" || { echo "FAIL: gateway did not start."; rollback; exit 1; }
+remote "hermes -p default gateway ensure --json --timeout 60 >/dev/null" || { echo "FAIL: gateway did not start."; rollback; exit 1; }
 sleep 5
 ```
 
@@ -283,7 +355,7 @@ sleep 5
 ```bash
 REGISTERED=0
 for i in 1 2 3 4 5 6; do
-  if remote "hermes logs 2>&1 | tail -200" \
+  if remote "hermes -p default logs 2>&1 | tail -200" \
        | grep -qiE "registered .* '<skill-name>'|MCP server.*<skill-name>.*ok"; then
     REGISTERED=1; echo "OK: <skill-name> registered."; break
   fi
@@ -310,7 +382,7 @@ REMOTE
 )
 [ "$CODE" = "200" ] || { echo "FAIL: smoke test returned HTTP ${CODE:-none} (401 = bad token, 403 = scope missing)."; rollback; exit 1; }
 echo "OK: <vendor> reachable with the token stored on the VPS."
-finish
+finish || exit 1
 ```
 
 `finish` keeps the pre-skill state as `~/.hermes/.hstack-backup/<skill-name>.prev` for a
@@ -329,9 +401,9 @@ Defined once, in Step 0. It runs automatically (`rollback; exit 1`) on every fai
   value back);
 - `.env` is set to `chmod 600`;
 - the snapshot moves to `<skill-name>.prev` and the gateway is reloaded with stop + run, then
-  `hermes gateway status` is checked. If the gateway is not reported running, `rollback` prints
+  `hermes -p default gateway status` is checked. If the gateway is not reported running, `rollback` prints
   `files restored, but the gateway did NOT come back` and exits non-zero: start it by hand
-  (`hermes gateway start`) and check `hermes logs`.
+  (`hermes -p default gateway start`) and check `hermes -p default logs`.
 
 Failures before `snapshot` (format check, live preflight, declined dry run) wrote nothing,
 so there is nothing to roll back.
@@ -350,7 +422,7 @@ fi
 ```
 
 If your Hermes build keeps MCP registrations outside `config.yaml`, also run
-`hermes mcp remove <skill-name>` on the VPS. The `.prev` folder holds the previous `.env`
+`hermes -p default mcp remove <skill-name>` on the VPS. The `.prev` folder holds the previous `.env`
 (including old secrets) at mode 600; delete it once you no longer need the undo.
 
 ---
@@ -360,7 +432,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
 | 1 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Use `stop` + `run` |
-| 2 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` (or the documented `grep -v` + `printf` fallback) |
+| 2 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes -p default config set` (or the documented `grep -v` + `printf` fallback) |
 | 3 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`; `config.yaml` holds `${VAR}` only |
 | 4 | Injecting the secret with `sed 's/.../'"$VAR"'/'` | Tokens contain `/+=`; and `'\"\$VAR\"'` expands an unset REMOTE variable to an empty string | Never inject the value. Use the remote-literal `\${VAR}` with the `\|` delimiter |
 | 5 | Container vs host confusion | Skill assumed wrong layer | Always check `whoami; hostname` first |
@@ -373,7 +445,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 | 12 | GNU-only flags in LOCAL commands | macOS ships bash 3.2 / BSD tools: `base64 -w0`, `sed -i` on local files, `readlink -f`, `date -d` fail | Keep GNU flags inside `remote` strings only (the VPS is Linux) |
 | 13 | Re-running after a crashed or interrupted run | A leftover `~/.hermes/.hstack-backup/<skill>` means that run wrote something and never finished; snapshotting again would record its half-written files as "known good" | `snapshot` refuses and aborts. Run `rollback` first (restores the state from before that run), then re-run |
 | 14 | Bare `hermes` over ssh: `hermes: command not found` | Non-login ssh shells do not have `~/.local/bin` on PATH, where the Hermes installer puts the binary | `remote()` (Step 0) exports `PATH="$HOME/.local/bin:$PATH"` for every call; never bypass it with a raw `ssh` for hermes commands |
-| 15 | `hermes config set KEY value` puts the value in the `hermes` process argv on the VPS while it runs | Anyone who can read `/proc` or `ps` on the VPS during that moment sees it (the local ssh argv stays clean because the value travels over stdin) | Accepted for the primary path; the documented `grep -v` + `printf` fallback avoids it entirely. Output of the write is discarded so Hermes can never echo the value into chat |
+| 15 | `hermes -p default config set KEY value` puts the value in the `hermes` process argv on the VPS while it runs | Anyone who can read `/proc` or `ps` on the VPS during that moment sees it (the local ssh argv stays clean because the value travels over stdin) | Accepted for the primary path; the documented `grep -v` + `printf` fallback avoids it entirely. Output of the write is discarded so Hermes can never echo the value into chat |
 | 16 | <integration-specific pitfall> | <why> | <fix> |
 
 ---
@@ -388,7 +460,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 - [ ] Snapshot taken before the first write; no write happened before the live preflight passed
 - [ ] Secret written to `~/.hermes/.env` over stdin, file is `chmod 600`
 - [ ] `config.yaml` holds only `${<SECRET_NAME>}`; secret NOT in `config.yaml` and NOT echoed in chat
-- [ ] MCP registered via `hermes mcp add`; gateway reloaded with stop+run
+- [ ] MCP registered via `hermes -p default mcp add`; gateway reloaded with stop+run
 - [ ] Logs show `registered N tool(s) for '<skill-name>'` within 30s
 - [ ] Live smoke test (value read back from `~/.hermes/.env`) returned `200`
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml` (a failed `FORCE=1` re-run keeps the old working value)

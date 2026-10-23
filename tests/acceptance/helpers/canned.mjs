@@ -27,7 +27,7 @@ export function cannedResponder({ scriptBody, txn, overrides = {} }) {
         "check.managed-skills-intact": "pass", "check.managed-skills-intact.detail": "ok",
         "check.unrelated-state-unchanged": "pass", "check.unrelated-state-unchanged.detail": "ok",
       }) };
-      case "commit": return {};
+      case "commit": return { stdout: kv({ committed: 1 }) };
       case "restore": return { stdout: kv({ restore_verified: 1 }) };
       case "purge": return {};
       default: return { code: 99, stderr: "unexpected op" };

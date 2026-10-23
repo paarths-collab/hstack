@@ -1,5 +1,17 @@
 # @hstack/acceptance — a reversible acceptance transaction for ONE workflow
 
+For the runnable deterministic GitHub-to-Telegram report packs, use
+[`packages/founder-brief/`](../founder-brief/README.md). This package is the older
+experimental control-plane transaction: its injected observer and scheduled generic
+prompt do not implement repository collection or establish fresh real delivery.
+
+The default contract remains a legacy 0.15.2 offline fixture baseline. Current
+Hermes 0.22.5 is an **explicit, unpromoted compatibility candidate**, with a
+separate contract and native adapter. See [compatibility and promotion](../../compatibility/README.md)
+for its exact commit, exclusive-default-profile scope and missing live evidence.
+Neither baseline nor candidate has been established by these tests as a working
+real-server deployment.
+
 This package puts a versioned, reviewable, reversible, receipt-producing transaction around exactly one
 workflow:
 
@@ -72,6 +84,35 @@ Rules the code enforces:
   archive (shown as the digests in the redacted stdin descriptions). `stage()` and `apply()` recompute them and
   refuse with `artifact_changed` (nothing sent to the target) if either differs. The receipt records the
   script digest, the archive digest and a per-skill digest for **all** managed skills in `artifacts`.
+  Helpers are published atomically at `~/.hermes/.hstack/bin/hstack-target-<script_sha256>.sh` and are
+  never replaced by another helper version. Every transaction operation, including resumed recovery,
+  uses its reviewed digest. The `Transaction` API binds this automatically; low-level transport callers
+  must use `bindHelper(op, scriptSha)` after `opInstallHelper(scriptBody)` rather than execute an unbound
+  builder against the former shared path.
+  Caller-supplied contracts are snapshotted on construction; changing the original object later cannot
+  change the reviewed execution plan.
+- **The live credential boundary is checked.** Applying staged credentials sets `.env` to mode `0600`,
+  including when the previous file had broader permissions. Staging refuses Telegram allow-all overrides
+  and group-wide access; verification checks those settings again, checks the live file mode, and detects
+  changes to the backed-up `config.yaml`. Verification also requires numeric allowlist entries and the
+  recorded cron schedule and prompt. Exact-file rollback restores the recorded previous mode; when
+  rollback merges managed keys with unrelated user edits, it preserves the current file mode.
+- Target operations acquire the transaction lock before checking mutable lifecycle state, so an operation
+  waiting behind a completed restore cannot apply changes to that restored transaction.
+  Apply also checks each requested managed cron entry against its backup and recorded intent before any
+  live mutation. A user's intervening edit, addition or deletion is a conflict. Once recorded, a cron ID's
+  intent cannot change within the same transaction; use a subsequent transaction for an update. Retrying
+  a completed apply requires its exact recorded cron result; an interrupted apply may resume its known
+  partial replacement state.
+- Successful exit status alone does not confirm a reload or commit. Apply requires `reloaded=1`, and
+  verification requires `committed=1`. A missing commit acknowledgement leaves `applied_unverified` with
+  an unresolved commit check, so verification can safely retry the idempotent commit.
+- A `Transaction` instance rejects overlapping operations with `operation_in_progress`; callers must await
+  each operation before starting the next. This prevents concurrent staging calls from corrupting its receipt.
+- Managed skill signatures include file and directory permissions, empty directories, content and link
+  targets. A permission-only edit is a conflict, not permission to remove or replace that skill. Older
+  content-only manifest signatures are conservatively treated as modified and require manual reconciliation;
+  the transaction cannot infer their original permissions safely.
 - `validate-receipt` always prints `transport_used`, warns `SIMULATED target — not evidence about a real
   server` for sandbox/recording receipts, and notes that the adapter surface is declared-unverified.
 - Things that cannot be undone (a Telegram message already delivered) are listed in
@@ -101,22 +142,29 @@ timeout) is an *unknown outcome*: it throws `TransportError` and never advances 
 
 **Crash between stage and apply.** `Transaction.resume` also accepts `change_reviewed` and `staged`
 receipts (the reviewed digests are re-read from the receipt). From `staged` you may `apply()` or `abandon()`;
-from `change_reviewed` you may `stage()` (only if no recovery point was taken) or `abandon()`. `abandon()` runs
+from `change_reviewed` you may `stage()` (only if no recovery point was requested) or `abandon()`.
+The expected `recovery.backup_ref` is saved before sending the backup request; the `backup-create` check
+distinguishes a request with an unknown outcome from a confirmed backup. A lost reply requires target
+reconciliation. A missing backup after an unknown outcome does not confirm cleanup, because a delayed
+remote request could still be running. `abandon()` runs
 the target-side pre-apply `restore`, which removes the staged secrets and closes the transaction, leaves
 `state` unchanged, sets `blocked_reason: abandoned` with `changes_applied:false`, and kills the transaction
 object (every later call is `IllegalTransition`). If the cleanup cannot be confirmed it returns `ok:false`
 and the exact manual commands, which you can also run yourself on the target:
 
 ```
-~/.hermes/.hstack/bin/hstack-target.sh restore '<txn>'     # closes it; nothing was applied
-~/.hermes/.hstack/bin/hstack-target.sh purge '<txn>'       # optional: deletes that txn directory
+~/.hermes/.hstack/bin/hstack-target-<script_sha256>.sh restore '<txn>'
+~/.hermes/.hstack/bin/hstack-target-<script_sha256>.sh purge '<txn>'
 ```
+
+Use `artifacts.script_sha256` from the reviewed receipt for the filename; `abandon()` also returns the
+exact recovery command. Restore closes the unapplied transaction; purge optionally removes its directory.
 
 `verify`: all required checks `pass` -> `verified` (and the target transaction is committed); any required
 check `fail` -> `rollback_required`; otherwise (`unknown`) it stays `applied_unverified` with
 `unresolved:[check ids]`. `rollback`: the target `restore` must exit 0 **and** print `restore_verified=1`
-(exit 0 alone, or `already_restored=1`, is not enough); then the gateway is reloaded (`stop`, then
-`run --daemon`, never `restart`) because the running process may still hold the new environment, and a
+(exit 0 alone, or `already_restored=1`, is not enough); then the gateway is reloaded through the
+selected adapter's service operations because the running process may still hold the new environment, and a
 `gateway-reloaded` check is recorded. Only restore verified **and** reload confirmed -> `restored_verified`.
 A conflict, a missing backup, an unconfirmed restore or a failed/unknown reload -> `manual_recovery_required`
 (with the detail in the `restoration` / `gateway-reloaded` checks), never an overwrite.
@@ -169,7 +217,7 @@ and user, runs the structural gate, and prints the reviewable op list; it never 
 
 ## Simulated versus live
 
-Everything verified in this repository is **simulated**:
+This package's Hermes and Telegram tests use **test doubles**:
 
 - `tests/acceptance/stubs/hermes` is a bash **test double** of an adapter surface *declared* in the contract.
   It is not Hermes and is not evidence about Hermes.
@@ -180,6 +228,11 @@ Everything verified in this repository is **simulated**:
 - Golden SSH command fixtures (`tests/acceptance/golden/`) pin the exact command text of every op.
 - A gated Docker target with a real `sshd` (`HSTACK_DOCKER=1`) is a separate deliverable; it still uses the
   stub `hermes`.
+
+The separate [Founder Brief suite](../founder-brief/README.md) also exercises actual
+loopback SSH and HTTP, and its production collector has been checked against public
+GitHub. Those checks still use a native CLI fixture and do not establish a real
+Hermes/Telegram deployment. See the [validation record](../../compatibility/VALIDATION.md).
 
 **Live validation is the operator's job and is not claimed anywhere here:** a real Hermes at the declared
 version, a real bot token and chat, and a real GitHub token, on a real VPS. Until a live run exists, treat
@@ -218,10 +271,11 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
 
 ## Limits
 
-- One workflow, one Linux target, one Hermes version, one Telegram destination. No other platform, source,
+- One workflow, one Linux target, one Hermes version per contract, one Telegram destination. No other platform, source,
   or runtime is accepted by the contract.
-- The Hermes CLI surface is declared, not verified against real Hermes. `cron list` is assumed to print one
-  job per line (`id TAB schedule TAB prompt`).
+- The legacy adapter assumes `cron list` prints one job per line (`id TAB schedule TAB prompt`); that is a
+  fixture protocol, not the current native CLI. The 0.22.5 candidate reads structured native job snapshots
+  and changes jobs through the native CLI. Both remain unverified against a real running installation.
 - Delivery evidence is only as good as the injected observer. The package ships no production observer: an
   operator must supply one (for example a second Telegram client or bot that confirms receipt). Without one
   the best outcome is `applied_unverified`.
@@ -232,9 +286,9 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
   backup as a conflict. If real Hermes rewrites `config.yaml` on its own (for example on gateway start or
   `config set`), every rollback would end in `manual_recovery_required`. This has not been checked against a
   real Hermes; the stub does not rewrite it.
-- The adapter surface lists `gateway run --daemon` explicitly because that is the exact call the target
-  script makes. Upstream's documented gateway commands do not include `--daemon`; like the rest of the
-  surface it is declared, unverified (see the note in `skills/hermes-deploy/SKILL.md`).
+- The legacy adapter retains `gateway run --daemon` for old fixture/recovery behavior. That flag is not
+  supported by the 0.22.5 gateway parser. The candidate uses checked native service operations and
+  readiness evidence, restricted to an exclusive default-profile Linux target.
 - Receipts are unsigned and not tamper-evident (see above).
 - `skills:sync` installs the shipped `skills/<name>` directories; a pre-existing unmanaged directory with a
   managed name is a collision and blocks the transaction.
@@ -242,9 +296,11 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
   unknown format that appears in free text would not be recognised; the code therefore never places target
   output or secret values in a receipt unredacted.
 
-## Open decision (not ours to fix here)
+## Version promotion
 
-`VERSIONS.txt` pins `HERMES_VERSION=0.15.2`, but the upstream project has **no `v0.15.2` tag**. The contract
-reads the pin from `VERSIONS.txt` and a test asserts they agree; whether the pin should change, or upstream
-should be asked to tag it, is an open decision for the maintainers. Until it is resolved, "runtime-version
-pass" means "the target reports the string the repository pins", not "this is a known upstream release".
+Hermes 0.15.2 was published under upstream tag `v2026.5.29.2`. The default contract and its fixture pin
+remain separate from the explicit 0.22.5 candidate. Reporting a matching version proves only the measured
+string; it does not prove compatible job storage, service behavior, credentials, or delivery. Promotion
+requires the live evidence recorded in [compatibility and promotion](../../compatibility/README.md),
+including seven consecutive real-target golden-path days. No source review or passing stub suite silently
+changes that policy.

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { CRON_SPEC, TXN, TXN2, sandbox } from './helpers/sandbox.mjs';
 
 const MARK = '[hstack:founder-brief]';
@@ -35,6 +36,119 @@ test('apply twice (same txn) => exactly one marked entry; unrelated entries byte
     assert.match(id, /^job-\d+$/);
     assert.equal(sched, '0 9 * * *');
     assert.ok(prompt.startsWith(MARK + ' '), 'marker is prefixed when the prompt lacks it');
+  } finally { sb.cleanup(); }
+});
+
+test('managed cron edits, additions and deletions since backup block apply before any mutation', () => {
+  const original = `job-4\t15 6 * * *\t${MARK} original\n`;
+  for (const change of ['prompt', 'schedule', 'added', 'deleted']) {
+    const sb = seeded();
+    try {
+      if (change !== 'added') appendFileSync(sb.cronPath, original);
+      sb.stageAll();
+      const edited = change === 'prompt' ? original.replace('original', 'user edit')
+        : change === 'schedule' ? original.replace('15 6', '30 7')
+          : change === 'deleted' ? '' : original;
+      writeFileSync(sb.cronPath, UNRELATED + edited);
+      const before = sb.hash();
+      const r = sb.apply(TXN, [CRON_SPEC]);
+      assert.equal(r.status, 3, `${change}: ${r.stdout}`);
+      assert.equal(r.kv.error, 'changed_since_backup', change);
+      assert.equal(r.kv.conflict, 'cron:founder-brief', change);
+      assert.equal(sb.hash(), before, `${change}: conflict must preserve all target state`);
+    } finally { sb.cleanup(); }
+  }
+});
+
+test('retry refuses a user-edited managed cron entry without replacing it', () => {
+  const sb = seeded();
+  try {
+    sb.stageAll();
+    assert.equal(sb.apply(TXN, [CRON_SPEC]).status, 0);
+    writeFileSync(sb.cronPath, sb.cron().replace('Send the founder brief', 'User-edited brief'));
+    const before = sb.hash();
+    const r = sb.apply(TXN, [CRON_SPEC]);
+    assert.equal(r.status, 3, r.stdout);
+    assert.equal(r.kv.conflict, 'cron:founder-brief');
+    assert.equal(sb.hash(), before);
+  } finally { sb.cleanup(); }
+});
+
+test('a completed apply refuses later cron deletion, reversion and duplication on retry', () => {
+  const original = `job-4\t15 6 * * *\t${MARK} original\n`;
+  for (const change of ['deleted', 'reverted', 'duplicated']) {
+    const sb = seeded();
+    try {
+      appendFileSync(sb.cronPath, original);
+      sb.stageAll();
+      assert.equal(sb.apply(TXN, [CRON_SPEC]).status, 0);
+      const intended = marked(sb)[0];
+      const edited = change === 'deleted' ? '' : change === 'reverted' ? original
+        : `${intended}\n${intended.replace(/^job-\d+/, 'job-99')}\n`;
+      writeFileSync(sb.cronPath, UNRELATED + edited);
+      const before = sb.hash();
+      const r = sb.apply(TXN, [CRON_SPEC]);
+      assert.equal(r.status, 3, `${change}: ${r.stdout}`);
+      assert.equal(r.kv.conflict, 'cron:founder-brief', change);
+      assert.equal(sb.hash(), before, change);
+    } finally { sb.cleanup(); }
+  }
+});
+
+test('an interrupted later apply clears completion and can retry its newly requested cron replacement', () => {
+  const sb = seeded();
+  const nextSpec = 'weekly|30 7 * * 1|New weekly prompt';
+  try {
+    appendFileSync(sb.cronPath, 'job-4\t15 6 * * 1\t[hstack:weekly] original weekly\n');
+    sb.stageAll();
+    assert.equal(sb.apply(TXN, [CRON_SPEC]).status, 0);
+    assert.ok(existsSync(join(sb.txnPath(), 'applied')));
+    const partial = sb.run(['apply', TXN, '--cron', CRON_SPEC, '--cron', nextSpec], {
+      env: { HSTACK_STUB_FAIL: 'cron-remove' },
+    });
+    assert.equal(partial.kv.error, 'cron_remove_failed');
+    assert.equal(existsSync(join(sb.txnPath(), 'applied')), false, 'incomplete attempt must clear old completion');
+    assert.equal(sb.cron().split('\n').filter((l) => l.includes('[hstack:weekly]')).length, 2);
+    const retry = sb.apply(TXN, [CRON_SPEC, nextSpec]);
+    assert.equal(retry.status, 0, retry.stdout);
+    assert.equal(sb.cron().split('\n').filter((l) => l.includes('[hstack:weekly]')).length, 1);
+    assert.equal(sb.restore().status, 0);
+    assert.ok(sb.cron().includes('[hstack:weekly] original weekly'));
+    assert.equal(marked(sb).length, 0);
+  } finally { sb.cleanup(); }
+});
+
+test('recorded cron intent cannot change within a transaction and rollback remains possible', () => {
+  const sb = seeded();
+  try {
+    sb.stageAll();
+    assert.equal(sb.apply(TXN, [CRON_SPEC]).status, 0);
+    const before = sb.hash();
+    const r = sb.run(['apply', TXN, '--cron', 'founder-brief|30 7 * * *|Changed intent'], {
+      env: { HSTACK_STUB_FAIL: 'cron-remove' },
+    });
+    assert.equal(r.status, 3, r.stdout);
+    assert.equal(r.kv.error, 'cron_intent_changed');
+    assert.equal(sb.hash(), before, 'the first intended signature and live job remain intact');
+    assert.equal(sb.restore().status, 0);
+    assert.equal(sb.cron(), UNRELATED);
+  } finally { sb.cleanup(); }
+});
+
+test('retry after an interrupted cron replacement accepts the recorded prior/post mixture', () => {
+  const sb = seeded();
+  try {
+    appendFileSync(sb.cronPath, `job-4\t15 6 * * *\t${MARK} original\n`);
+    sb.stageAll();
+    const first = sb.run(['apply', TXN, '--cron', CRON_SPEC], { env: { HSTACK_STUB_FAIL: 'cron-remove' } });
+    assert.equal(first.kv.error, 'cron_remove_failed');
+    assert.equal(marked(sb).length, 2);
+    const retry = sb.apply(TXN, [CRON_SPEC]);
+    assert.equal(retry.status, 0, retry.stdout);
+    assert.equal(marked(sb).length, 1);
+    assert.equal(sb.restore().status, 0);
+    assert.equal(marked(sb).length, 1);
+    assert.ok(marked(sb)[0].includes('original'));
   } finally { sb.cleanup(); }
 });
 

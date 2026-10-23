@@ -1,287 +1,201 @@
 ---
 name: hermes-update
-description: Safely update Hermes on a remote VPS over SSH — back up first, bump the pinned version, reload the gateway, then re-verify each wired platform. Use when upgrading Hermes versions from Claude Code, Codex, Cursor, Hermes itself, or Gemini CLI.
+description: Inspect and explicitly opt into Hermes's native stable updater on an existing source installation, keeping an exact private backup and reporting version, runtime and delivery verification honestly.
 ---
 
-# /hermes-update — safe in-place Hermes update (SSH-first)
+# /hermes-update — use the installation owner's updater
 
-You are the engineer updating a self-hosted Hermes agent on the user's VPS. The agent
-(Hermes, Claude Code, Codex, Cursor, Gemini CLI — whichever ran you) talks to the VPS
-over SSH as root. Every command in this skill runs on the VPS, not on the local machine.
+Hermes v0.22.5 source installations use tested stable releases and PM dependency
+generations. Use `hermes -p default update`; do not install a PyPI package over its launcher,
+run `git reset`, or replace it with an installer tracking `main`. Desktop packages,
+Store installs and Docker images have their own update owners and must use them.
 
-Do everything autonomously; stop only for things a machine cannot do (confirm a destructive
-bump across a minor version, or re-mint a token that the new version invalidates).
+This is an **opt-in compatibility-candidate workflow**, not promotion of hstack's
+legacy runtime pin. Stable is an upstream release channel, not a promise to remain
+on v0.22.5. Review the native plan and release notes before authorizing a channel update.
+If an exact immutable version is required, do not pretend the updater has a `--version`
+flag: use an explicitly reviewed fresh source installation and migration plan instead.
 
-**Honest version picture (verified 2026-06):** Hermes ships from two channels — a pinned
-PyPI package (`hermes-agent==<version>`) and a moving `install.sh` that tracks `main`.
-The pinned path is reproducible and safe to roll back; the curl path is not. The Docker
-image `v2026.4.23` has a UID-perms regression — **never** pin to it. The current stable
-default is `v0.15.2`; `0.17.x` is the latest with new gateway flags. Config keys can change
-between minors, so we **re-verify every wired platform** after the bump.
+## Before you start — gather once
 
----
+| Variable | Meaning |
+|---|---|
+| `VPS_IP`, `VPS_USER` | Target and installation owner |
+| `CANDIDATE_ACKNOWLEDGED=1` | Acknowledge unpromoted current-Hermes compatibility work |
+| `ALLOW_STABLE_UPDATE=1` | Explicitly authorize the native stable-channel update after reviewing its plan |
 
-## Before you start — gather (ask once, in one batch)
-
-Required from the user (skip any already in env):
-
-| Variable | What it is | How to get it |
-|----------|------------|---------------|
-| `$VPS_IP` | IP or hostname of the VPS running Hermes | Their hosting dashboard |
-| `$VPS_USER` | SSH user, usually `root` | Their hosting dashboard |
-| `$TARGET_VERSION` | Hermes version to install (e.g. `0.15.2`, `0.17.0`) | <https://pypi.org/project/hermes-agent/#history> — avoid `v2026.4.23` |
-| `$UPDATE_METHOD` | `pip` (default, pinned, reproducible) or `installer` (curl, moving) | Default `pip` unless user insists |
-
-Confirm SSH access before doing anything:
+## Step 0 — validate the target and define the remote helper
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
+[ "${CANDIDATE_ACKNOWLEDGED:-0}" = 1 ] \
+  || { echo "ABORT: current-Hermes compatibility candidate not acknowledged. Nothing was written."; exit 1; }
+[[ "$VPS_IP" =~ ^[A-Za-z0-9._:-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+  || { echo "ABORT: malformed SSH target. Nothing was written."; exit 1; }
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
 ```
 
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-Detect host vs container layer first — updating inside a container that's about to be
-recreated wastes work.
+## Step 1 — inspect before mutation
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  whoami; hostname
-  if command -v hermes >/dev/null 2>&1; then
-    HERMES="$HOME/.local/bin/hermes"
-    [ -x "$HERMES" ] || HERMES="$(command -v hermes)"
-    "$HERMES" --version
-    echo "LAYER=host"
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-    echo "LAYER=container AGENT=$AGENT"
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: native updater inspection failed. Preserve this installation and inspect its upgrade path."; exit 1; }
+set -e
+whoami; hostname
+H="$HOME/.local/bin/hermes"
+[ -x "$H" ] && [ -d "$HOME/.hermes/hermes-agent/.git" ] \
+  || { echo "ABORT: this recipe requires the default POSIX source installation; use the actual package/image owner." >&2; exit 1; }
+"$H" -p default --version
+"$H" -p default update --plan
+"$H" -p default update --channel stable --check
+REMOTE
 ```
 
-Expected: a version string like `0.15.x` or `0.17.x`, plus the layer marker.
+Older versions may not support these flags. That is a migration boundary, not permission
+to fall back to pip or a destructive reinstall. Inspect the official release-specific
+upgrade path first. Do not force a downgrade or interrupt live work to get past a refusal.
 
----
+## Step 2 — dry run and authorization gate
 
-## Step 2 — idempotency check (skip if already on target version)
+Explain that the native updater owns code/dependency preparation and fleet restart;
+back up first, follow stable for this run, and verify afterwards. Stable may advance
+beyond v0.22.5. Its selection does not promote that version into hstack's support matrix.
 
 ```bash
-CURRENT=$(ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes --version 2>/dev/null | awk '{print \$NF}'" || echo unknown)
-if [ "$CURRENT" = "$TARGET_VERSION" ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Already on $TARGET_VERSION. Set FORCE=1 to reinstall."
-  exit 0
-fi
-echo "Will update: $CURRENT -> $TARGET_VERSION"
+[ "${ALLOW_STABLE_UPDATE:-0}" = 1 ] \
+  || { echo "ABORT: review the native plan and authorize ALLOW_STABLE_UPDATE=1 before applying. Nothing was changed by hstack."; exit 1; }
 ```
 
----
-
-## Step 3 — DRY RUN preview (always show before writing)
+## Step 3 — keep an exact private recovery artifact, then update
 
 ```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. hermes backup            (config + sessions snapshot to ~/.hermes/backups/)
-  2. Capture current MCP list and platform wiring for re-verify
-  3. Install Hermes $TARGET_VERSION via $UPDATE_METHOD
-     - pip:       pip install --upgrade "hermes-agent==$TARGET_VERSION"
-     - installer: curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup
-  4. hermes --version          (confirm new version)
-  5. hermes gateway stop && hermes gateway run --daemon  (NOT restart)
-  6. hermes -z 'reply with OK' (reachability smoke test)
-  7. Re-verify each wired platform still responds
-
-No secrets are read or printed. Backup is local to the VPS at ~/.hermes/backups/.
-EOF
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: update not confirmed. Keep the private update recovery directory and native updater diagnostics; no automatic downgrade was attempted."; exit 1; }
+set -e
+umask 077
+H="$HOME/.local/bin/hermes"
+p="$HOME/.hermes/.hstack-backup"
+mkdir -p "$p"; chmod 700 "$p"
+d=$(mktemp -d "$p/update-XXXXXX")
+"$H" -p default --version > "$d/version-before.txt"
+"$H" -p default backup --output "$d/pre-update.zip" --keep 0
+[ -s "$d/pre-update.zip" ]; chmod 600 "$d/pre-update.zip"
+printf 'Recovery artifact: %s\n' "$d/pre-update.zip"
+"$H" -p default update --channel stable --backup --yes
+"$H" -p default --version > "$d/version-after.txt"
+"$H" -p default pm status
+"$H" -p default doctor
+"$H" -p default gateway ensure --json --timeout 60
+printf 'Update command completed. Review version and live workflow checks before marking supported.\n'
+cat "$d/version-after.txt"
+REMOTE
 ```
 
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+`--channel stable` is a transient override; it does not silently change a custom install's
+persisted channel. `--yes` handles the updater's migration prompts; it is not a force flag
+and must not be combined with `--force-venv` to bypass its process guards.
 
----
-
-## Step 4 — back up FIRST, then capture the pre-update state
-
-The backup is the rollback. Don't proceed without it.
+## Step 4 — verify inference and the actual workflow
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  HERMES="$HOME/.local/bin/hermes"
-  "$HERMES" backup
-  ls -1t ~/.hermes/backups/ | head -1
-' || { echo "FAIL: backup did not produce an artifact. Aborting before any change."; exit 1; }
-
-# Capture the pre-update wiring so Step 8 can re-verify the same set
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes mcp list 2>/dev/null" > /tmp/hermes-mcp-before.txt
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes platform list 2>/dev/null || true" > /tmp/hermes-platform-before.txt
+REPLY=$(remote "hermes -p default -z 'reply with the single word OK'") \
+  || { echo "FAIL: inference command failed. Preserve the update recovery artifact."; exit 1; }
+[ "$(printf '%s' "$REPLY" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')" = OK ] \
+  || { echo "UNVERIFIED: inference did not return exact OK. Preserve the update recovery artifact."; exit 1; }
 ```
 
-Sanity-check `.env` is `chmod 600` before any restart — a botched permission now would
-fail the gateway run silently after the bump.
+Recheck each configured connector's real read-only operation and each intended private
+messaging destination. A version banner, plugin list, or gateway log is not proof that a
+scheduled result arrived. Keep the update unverified until the relevant observed canary
+passes; never claim that a changed wiring list alone proves delivery.
 
-```bash
-ssh "$VPS_USER@$VPS_IP" "stat -c '%a' ~/.hermes/.env" | grep -q '^600$' \
-  || ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
+## Rollback — preserve native recovery state
 
----
+Native update owns staging, dependency validation and interrupted-update recovery. If it
+refuses, retain its diagnostic and backup. A full data restore uses `hermes -p default import
+/path/to/pre-update.zip`; inspect its overwrite prompt and stop live writers first. It is
+not `hermes restore`, and restoring data does not restore the prior executable. Do not
+blindly import the newest unrelated backup, force an old code version, or report
+"rolled back" unless code, data and the actual workflow have been rechecked.
 
-## Step 5 — install the target version
 
-Pick the method the user chose. Default is `pip` (pinned, reproducible, rollback-safe).
+## Step 5 — classify the result before normal scheduling resumes
 
-### Path A (preferred) — pinned pip install
+Use the narrowest status supported by the evidence:
 
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  pip install --upgrade --no-input \"hermes-agent==$TARGET_VERSION\"
-  \$HOME/.local/bin/hermes --version
-"
-```
+| Result | Meaning | Next action |
+|---|---|---|
+| Plan/check failed | Native update path is not established | Preserve the install and inspect its owner/version |
+| Backup failed | No checked recovery artifact exists | Abort before updating |
+| Updater refused | A guard or unsupported migration blocked the change | Resolve the named condition without bypassing it |
+| Code updated, doctor failed | Installation health is unresolved | Keep recovery state; use native diagnostics |
+| Runtime ready, inference failed | The configured provider is not confirmed | Check provider identity/credentials without printing secrets |
+| Inference passed, canary missing | Real workflow delivery is unknown | Keep scheduled activation under review |
+| Intended canary observed | The tested workflow completed on this version | Record its actual scope; do not generalize to all integrations |
 
-### Path B (fallback) — official installer (tracks moving `main`)
+An uncertain result does not justify deleting the backup or automatically retrying sends.
+An update can change behavior even when the version banner looks correct.
+Verify that the gateway is running code from the updated installation, not a stale process.
+Native ensure/readiness is useful evidence but does not replace the workflow canary.
+If multiple profiles share the gateway, include all affected owners in the plan review.
+Do not run a second profile-specific dispatcher to work around a shared-host conflict.
 
-Use only if the user insists or the pinned wheel is unavailable for the target.
+### Before restoring a data backup
 
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --skip-setup
-  \$HOME/.local/bin/hermes --version
-"
-```
+Confirm the artifact path belongs to this update attempt.
+Confirm its file exists, is private, and has not been substituted by another run.
+Confirm which account and data root the restore will affect.
+Stop live writers through their actual supervisor first.
+Read the native importer's overwrite prompt and scope.
+Do not assume restoring user data also installs the previous application code.
+Do not assume an older binary can read data migrated by a newer version.
+Do not force a downgrade solely because a smoke check is inconclusive.
+Keep the recovery artifact until the user accepts the reverified state.
+If the state cannot be proven restored, report the remaining uncertainty plainly.
 
-Verify the binary actually moved (don't trust pip's exit code alone):
+### Package and channel boundaries
 
-```bash
-NEW=$(ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes --version 2>/dev/null | awk '{print \$NF}'")
-[ "$NEW" = "$TARGET_VERSION" ] || { echo "FAIL: still on $NEW, expected $TARGET_VERSION. Rolling back."; rollback; exit 1; }
-```
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env` or refreshed binaries — use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify the gateway came up cleanly (poll up to 30s)
-
-```bash
-HEALTHY=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes logs 2>&1 | tail -200" \
-       | grep -qiE "gateway.*(ready|started|listening)|MCP server.*ok"; then
-    HEALTHY=1
-    echo "OK: gateway healthy on $TARGET_VERSION."
-    break
-  fi
-  sleep 5
-done
-[ "$HEALTHY" = "1" ] || { echo "FAIL: gateway did not come up in 30s. Rolling back."; rollback; exit 1; }
-```
-
----
-
-## Step 8 — live reachability smoke test + re-verify wired platforms
-
-First, the agent-loop smoke test (the original one-liner, hardened):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes -z 'reply with OK'" \
-  | grep -qi 'OK' \
-  || { echo "FAIL: agent loop did not reply OK after update. Rolling back."; rollback; exit 1; }
-echo "OK: agent loop responsive after update."
-```
-
-Then re-verify every MCP and platform that was wired before the bump still is:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes mcp list 2>/dev/null"      > /tmp/hermes-mcp-after.txt
-ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes platform list 2>/dev/null || true" > /tmp/hermes-platform-after.txt
-
-diff -u /tmp/hermes-mcp-before.txt      /tmp/hermes-mcp-after.txt      || echo "WARN: MCP list changed across update — re-run the relevant /integration-* skill."
-diff -u /tmp/hermes-platform-before.txt /tmp/hermes-platform-after.txt || echo "WARN: platform list changed — re-run the relevant /platform-* skill."
-```
-
-Any drift is a real signal (config keys often change between minors). Re-run the affected
-skill rather than hand-editing `config.yaml`.
-
-Exit codes the smoke test can return:
-
-- `0` = updated + reachable + wiring intact
-- `1` (after rollback) = update failed; system is back on the previous version
-- `0` with `WARN` lines = updated + reachable but a wired integration drifted; re-run that skill
-
----
-
-## Rollback (auto-runs on any failure above)
-
-The backup from Step 4 is the rollback point. Re-pin the previous version and restore.
-
-```bash
-rollback() {
-  ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes gateway stop || true"
-  ssh "$VPS_USER@$VPS_IP" "pip install --no-input \"hermes-agent==$CURRENT\" 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "
-    LATEST_BACKUP=\$(ls -1t ~/.hermes/backups/ 2>/dev/null | head -1)
-    [ -n \"\$LATEST_BACKUP\" ] && \$HOME/.local/bin/hermes restore \"~/.hermes/backups/\$LATEST_BACKUP\" || true
-  "
-  sleep 2
-  ssh "$VPS_USER@$VPS_IP" "\$HOME/.local/bin/hermes gateway run --daemon"
-  echo "Rolled back to $CURRENT. Verify with: hermes --version && hermes -z 'reply with OK'"
-}
-```
-
----
+A Windows Store installation updates through the Store.
+A sealed Desktop package uses its package updater.
+A Docker deployment changes its reviewed image through the deployment owner.
+This source-install recipe does not mutate any of those owners.
+A custom checkout/channel remains custom unless explicitly changed.
+`--channel stable` chooses stable only for the current native update invocation.
+`--set-channel stable` persists a channel change and is a separate user decision.
+The native updater has no generic exact-version install flag in this checked parser.
+Do not invent `--version`, `--tag`, or a pip fallback to simulate one.
+A compatibility candidate is distinct from the repository's promoted runtime pin.
 
 ## Pitfalls
 
 | # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Using the curl `install.sh` path for production | Tracks moving `main` — not reproducible, not rollback-safe | Pin via `pip install "hermes-agent==<version>"` |
-| 2 | Pinning Docker image `v2026.4.23` | UID-perms regression — gateway can't read `.env` | Pin a known-good release; `v0.15.2` is the current stable default |
-| 3 | Skipping `hermes backup` before the bump | No rollback artifact; broken update is unrecoverable | Step 4 hard-aborts if backup fails |
-| 4 | Not re-verifying platforms after update | Config keys can change between minors — silently broken integrations | Step 8 diffs pre/post wiring lists |
-| 5 | `gateway restart` to pick up the new binary | Restart does NOT reliably re-read env or refreshed binary | Always `stop` + `run --daemon` |
-| 6 | `echo >> ~/.hermes/.env` to patch new keys | Can merge onto a prior line lacking trailing newline | Always `hermes config set` |
-| 7 | Secret in `config.yaml` instead of `.env` | New version may relocate config; world-readable | Only `~/.hermes/.env`, `chmod 600` |
-| 8 | sed with `/` delimiter when fixing tokens | Tokens contain `/+=` | Use `\|` delimiter |
-| 9 | Updating inside a Docker container that gets recreated | Work lost on next `docker compose up` | Step 1 detects layer (`whoami; hostname`); update on the host |
-| 10 | Assuming command-line flags are stable | Flags evolve across minors | Re-check `hermes <cmd> --help` if behaviour changes |
-| 11 | Running the update during active platform traffic | In-flight messages drop during the stop window | Pause platforms or schedule during quiet window |
+|---|---|---|---|
+| 1 | Updating with ambient pip | It bypasses native PM ownership | Use the installation owner's updater |
+| 2 | Selecting the newest backup by filename | Another run may own it | Record the exact artifact path before mutation |
+| 3 | Using nonexistent `hermes restore` | It can leave recovery incomplete | Inspect native `hermes -p default import` semantics |
+| 4 | Treating `--yes` as universal authorization | It only answers specific updater prompts | Review the native plan before allowing the update |
+| 5 | Bypassing process guards | Live runtimes can hold managed files | Resolve the owner/process conflict |
+| 6 | Forced downgrade after a weak smoke test | New data may not be backward compatible | Keep evidence and plan recovery explicitly |
+| 7 | Counting `OK` inside an error as success | Diagnostic text can repeat the prompt | Require command success and exact output |
+| 8 | Assuming install success proves delivery | Platform routing may still be wrong | Observe the intended private canary |
+| 9 | Calling every integration supported | Only a bounded workflow was tested | Report version, target and tested operations |
+| 10 | Assuming stable means hstack-promoted | Upstream and local promotion are separate | Keep candidate status and evidence explicit |
 
----
+## Step 6 — evidence to report
+
+Report the native update's before/after version and installation owner.
+Report whether the private backup was verified before the change.
+Report native PM, doctor and runtime readiness outcomes.
+Report inference and workflow delivery outcomes separately.
+Preserve unresolved errors and the exact recovery artifact.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on VPS pre-update; layer (host vs container) identified
-- [ ] Idempotency check passed (or `FORCE=1` overrode the same-version skip)
-- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
-- [ ] `hermes backup` produced an artifact in `~/.hermes/backups/` before any change
-- [ ] `.env` re-checked at `chmod 600`; no secret echoed in chat
-- [ ] Target version installed; `hermes --version` matches `$TARGET_VERSION`
-- [ ] Gateway reloaded with `stop` + `run --daemon` (NOT `restart`)
-- [ ] Logs show `gateway ready` / `started` within 30s
-- [ ] Smoke test: `hermes -z 'reply with OK'` returned `OK`
-- [ ] MCP and platform lists diffed pre/post; drift surfaced as `WARN` for re-run
-- [ ] Rollback function defined; backup file exists for one-command revert
+- [ ] Installation owner, native plan and stable-channel choice reviewed
+- [ ] Exact private backup path recorded before update
+- [ ] Native update completed without bypassing process/dependency guards
+- [ ] Version, PM status, doctor and gateway readiness checked
+- [ ] Inference command succeeded with exact expected output
+- [ ] Intended connector and private-message delivery reverified, or explicitly unverified
+- [ ] No pip mutation, moving-main installer, forced downgrade or invented restore command
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+Sources: v0.22.5 [update parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/update.py),
+[backup parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/backup.py),
+[import parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/import_cmd.py).

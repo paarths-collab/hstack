@@ -28,6 +28,14 @@
 #   inject_allowall     after TELEGRAM_BOT_TOKEN is written, GATEWAY_ALLOW_ALL_USERS="true" is appended
 #   status_override     file whose content `gateway status` prints; status_exit holds its exit code
 set -u
+# Profile binding is logged independently; adapter argv/event assertions retain their command shape.
+mkdir -p "$HOME/logs"
+if [ "${1:-}" = -p ] && [ "${2:-}" = default ]; then
+  printf 'default\n' >> "$HOME/logs/hermes-profile.log"
+  shift 2
+else
+  printf 'unbound\n' >> "$HOME/logs/hermes-profile.log"
+fi
 H=$HOME/.hermes
 ENVF=$H/.env
 CFG=$H/config.yaml
@@ -70,7 +78,7 @@ gw_state() { cat "$H/gateway.state" 2>/dev/null || echo stopped; }
 case "${1:-}" in
   --version)
     event --version; inject version
-    echo "hermes 0.15.2" ;;
+    echo "hermes 0.22.5" ;;
   config)
     case "${2:-}" in
       set)
@@ -137,7 +145,11 @@ case "${1:-}" in
     case "${2:-}" in
       stop)    event gateway stop; inject gateway.stop; echo stopped > "$H/gateway.state" ;;
       run)     event gateway run; inject gateway.run; echo running > "$H/gateway.state" ;;
-      start)   event gateway start; echo running > "$H/gateway.state" ;;
+      start)   event gateway start; inject gateway.start; echo running > "$H/gateway.state" ;;
+      ensure)
+        event gateway ensure; inject gateway.ensure; inject gateway.run
+        echo running > "$H/gateway.state"
+        printf '{"state":"ready","reason_code":"ready","endpoint":{}}\n' ;;
       install) event gateway install; inject gateway.install; echo installed >> "$HOME/state/gateway.install" ;;
       status)
         event gateway status; inject gateway.status

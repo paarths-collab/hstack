@@ -13,17 +13,14 @@ YOUR machine (possibly macOS, bash 3.2) and reach the VPS through the `remote` h
 Do everything autonomously; stop only for the one thing a machine cannot do: mint the
 provider API key in the provider's dashboard.
 
-**Honest auth picture (verified 2026-06):** the unattended path requires a real provider
-API key. OpenRouter is easiest; Anthropic, OpenAI and DeepSeek direct keys also work.
-Each provider has its own fixed key name that Hermes reads (`OPENROUTER_API_KEY`,
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY` — see the Hermes docs,
-"Environment Variables" and "AI Providers" pages at hermes-agent.nousresearch.com/docs);
-a key stored under any other name is ignored. Never use `hermes setup --portal` in a
-headless flow — it triggers an interactive OAuth that hangs the SSH session. A missing key
-is NOT caught at config time; it surfaces only at first inference call, so we explicitly
-smoke-test inference at the end. Auxiliary capabilities (vision, web summarization,
-compression) silently degrade when their backing provider isn't keyed — this skill reports
-which capabilities are active vs degraded.
+**Current native surface (v0.22.5 candidate, checked against tagged source).** For
+attended setup, prefer `hermes -p default model` or `hermes -p default setup --portal`. Do not start an
+OAuth wizard in a noninteractive SSH session. This skill keeps a bounded BYOK path
+for OpenRouter, Anthropic, OpenAI and DeepSeek, writes credentials over stdin, and
+uses native `config set` for provider/model state. Native provider switching clears
+stale route settings; do not bypass it with an awk rewrite of YAML. Inference and
+auxiliary tool capabilities must be verified separately; the presence of one
+provider key does not prove vision, browser, compression or web access.
 
 ---
 
@@ -35,7 +32,7 @@ which capabilities are active vs degraded.
 | `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
 | `$MODEL_PROVIDER` | `openrouter` \| `anthropic` \| `openai` \| `deepseek` (default `openrouter`) | User choice |
 | `$MODEL_API_KEY` | API key for that provider; written as `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` (`sk-or-...` OpenRouter, `sk-ant-...` Anthropic). Legacy: `$OPENROUTER_API_KEY` is still accepted for `openrouter`. | <https://openrouter.ai/keys> (or the provider's dashboard) |
-| `$HERMES_MODEL` | Exact model id for that provider — no default, ask the user. Documented forms: vendor-prefixed on OpenRouter (`anthropic/claude-sonnet-4`), bare on Anthropic (`claude-sonnet-4-6`). OpenAI / DeepSeek ids: copy from the provider catalogue (not verified here). **Must be a frontier model with >=64K context** — small/local models hallucinate tool calls and Hermes startup is rejected below 64K. | Provider model catalogue |
+| `$HERMES_MODEL` | Exact model id for that provider — no default, ask the user. Documented forms: vendor-prefixed on OpenRouter (`anthropic/claude-sonnet-4`), bare on Anthropic (`claude-sonnet-4-6`). OpenAI / DeepSeek ids: copy from the provider catalogue (not verified here). Choose a model suitable for the task and available on the selected provider. Hermes also supports native local models; this bounded BYOK recipe does not configure that runtime. | Provider model catalogue |
 
 Confirm SSH access before doing anything:
 
@@ -84,49 +81,115 @@ validate_inputs() {
 snapshot() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
 set -e
-d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
-# A leftover snapshot means an earlier run wrote something and never finished or rolled
-# back. Snapshotting now would capture that half-written state as "known good".
-if [ -d "$d" ]; then
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
   echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-mkdir -p "$d" && chmod 700 "$HOME/.hermes/.hstack-backup" "$d"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
 for f in .env config.yaml; do
-  rm -f "$d/$f" "$d/$f.absent"
-  if [ -f "$HOME/.hermes/$f" ]; then cp -p "$HOME/.hermes/$f" "$d/$f"; else : > "$d/$f.absent"; fi
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
 done
-chmod 600 "$d"/* 2>/dev/null || true
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
 REMOTE
 }
-
 # rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
 # fails puts the previous working value back), then reload the gateway.
 rollback() {
   remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
 d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
 [ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 0; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
 for f in .env config.yaml; do
-  if [ -f "$d/$f" ]; then cp -p "$d/$f" "$HOME/.hermes/$f"
-  elif [ -f "$d/$f.absent" ]; then rm -f "$HOME/.hermes/$f"; fi
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
 done
 [ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
-rm -rf "$d.prev"; mv "$d" "$d.prev"
-hermes gateway stop || true; sleep 2; hermes gateway run --daemon || true
+hermes -p default gateway stop
+sleep 2
+hermes -p default gateway ensure --json --timeout 60 >/dev/null
 sleep 3
-st=$(hermes gateway status 2>&1 || true)
-if printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
+status_rc=0
+st=$(hermes -p default gateway status 2>&1) || status_rc=$?
+if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes gateway start) and check hermes logs"
+  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
   exit 1
 fi
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
 echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
 REMOTE
 }
 
 # finish: mark the run successful; keep the snapshot as .prev for a manual undo.
 finish() {
-  remote "d=\$HOME/.hermes/.hstack-backup/$SKILL_NAME; rm -rf \"\$d.prev\"; [ -d \"\$d\" ] && mv \"\$d\" \"\$d.prev\"; true"
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 
 validate_inputs || exit 1
@@ -137,7 +200,14 @@ user declining the dry run) just `exit 1` with "Nothing was written" — they do
 `rollback`. Every failure **after** `snapshot` does `rollback; exit 1`. `finish` runs after
 the last check.
 
-**Unverified CLI surface.** Upstream's CLI docs list `hermes gateway run|start|stop|restart|status|install`. `hermes gateway run --daemon` is NOT in those docs: they are this repo's declared adapter surface, unverified against upstream. If a call fails with "unknown option/command", check `hermes gateway --help` on the VPS and adapt; the hard-gate and rollback logic does not depend on the exact flags.
+Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
+This candidate lifecycle recipe assumes the exclusive default profile and its one host gateway. Inspect other profiles and live work first: the current gateway can serve multiple profiles, so stop/start is not isolated to one bot. Do not use `--force`, `--all` or `--yes` to evade a refusal. Named-profile and shared-host deployment remain outside this recipe.
+
+
+**Tagged CLI surface.** v0.22.5 supports `gateway ensure --json --timeout 60`;
+`gateway run` is foreground and has no `--daemon` flag. Native `config set` and
+`-z` inference are supported by the tagged parsers. These checks prove syntax,
+not a real target's runtime or provider compatibility.
 
 ---
 
@@ -146,18 +216,16 @@ the last check.
 ```bash
 remote '
   set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first. Nothing was written."; exit 1; }
+  command -v hermes >/dev/null 2>&1 || { echo "FAIL: Hermes is not installed for the host account"; exit 1; }
+  [ ! -e /.dockerenv ] && [ ! -e /run/.containerenv ] || { echo "FAIL: this recipe requires the host installation owner"; exit 1; }
+  v=$(hermes -p default --version)
+  printf "%s\n" "$v" | grep -Eq "(^|[^0-9])0[.]22[.]5([^0-9]|$)" \
+    || { echo "FAIL: this recipe requires the explicit v0.22.5 compatibility candidate"; exit 1; }
+  printf "%s\n" "$v"
+' || { echo "ABORT: candidate host installation not confirmed. Nothing was written."; exit 1; }
 ```
 
-Expected: `0.15.x` or `0.17.x`.
+This candidate recipe targets v0.22.5. A version banner is not evidence that provider inference works.
 
 Also confirm we are on the host, not a container — keys added inside a container are
 invisible to the host's sshd, and `~/.hermes/.env` on a container is ephemeral:
@@ -174,7 +242,7 @@ remote "whoami; hostname"
 
 ```bash
 HAS_KEY=$(remote "grep -c '^$MODEL_KEYVAR=' ~/.hermes/.env 2>/dev/null || true")
-CFG=$(remote 'hermes config show 2>/dev/null || true')
+CFG=$(remote 'hermes -p default config show 2>/dev/null || true')
 if [ "${HAS_KEY:-0}" -gt 0 ] \
    && printf '%s\n' "$CFG" | grep -qwF -- "$HERMES_MODEL" \
    && printf '%s\n' "$CFG" | grep -qwF -- "$PROVIDER_ID" \
@@ -191,13 +259,11 @@ fi
 ```bash
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write $MODEL_KEYVAR (length ${#MODEL_API_KEY}, prefix ${MODEL_API_KEY:0:4}...) via 'hermes config set'
+  1. Write $MODEL_KEYVAR (length ${#MODEL_API_KEY}, prefix ${MODEL_API_KEY:0:4}...) via 'hermes -p default config set'
   2. chmod 600 ~/.hermes/.env
-  3. Set provider + model: hermes config set model.provider $PROVIDER_ID ; model.default $HERMES_MODEL
-  4. Enable prompt caching: hermes config set prompt_caching.enabled true
-  5. Finalize: hermes setup --non-interactive (NEVER --portal in headless mode)
-  6. Reload gateway: hermes gateway stop && hermes gateway run
-  7. Smoke test: hermes -z 'reply with the single word OK' → expect 'OK'
+  3. Set provider + model: hermes -p default config set model.provider $PROVIDER_ID ; model.default $HERMES_MODEL
+  4. Reload gateway: hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60
+  5. Smoke test: hermes -p default -z 'reply with the single word OK' → expect 'OK'
   8. Capability check: report vision / web-summary / compression status
 
 The API key is NEVER printed in plaintext.
@@ -221,7 +287,7 @@ The key travels over ssh **stdin** (never argv, a URL, or a quoted remote string
 snapshot || { echo "ABORT: could not snapshot ~/.hermes state. Nothing was written."; exit 1; }
 
 printf '%s\n' "$MODEL_API_KEY" \
-  | remote "IFS= read -r v && hermes config set $MODEL_KEYVAR \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env" \
+  | remote "IFS= read -r v && hermes -p default config set $MODEL_KEYVAR \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env" \
   || { echo "FAIL: could not write $MODEL_KEYVAR."; rollback; exit 1; }
 ```
 
@@ -244,14 +310,14 @@ WROTE=$(remote "grep -c '^$MODEL_KEYVAR=' ~/.hermes/.env || true")
 
 ---
 
-## Step 5 — apply model + provider config (Path A preferred; Path B fallback)
+## Step 5 — apply model + provider config through the native writer
 
 There is no MCP server to register here — this is a Hermes core config change. Pick the
 path that matches the Hermes build on the VPS. The model id and provider id are not
 secrets; they were validated in Step 0 and are passed as an explicit env prefix (the
 heredoc is quoted, so nothing expands locally).
 
-### Path A (preferred) — `hermes config set` + `hermes setup --non-interactive`
+### Path A (preferred) — native `hermes -p default config set`
 
 `config set` sends dotted names (`model.provider`, `model.default`) to `config.yaml` and
 `UPPER_SNAKE` names to `.env` (Hermes docs, CLI reference).
@@ -260,60 +326,48 @@ heredoc is quoted, so nothing expands locally).
 apply_model_path_a() {
   remote "MODEL_ID=$(printf %q "$HERMES_MODEL") PROVIDER_ID=$(printf %q "$PROVIDER_ID") bash -s" <<'REMOTE'
 set -e
-hermes config set model.provider "$PROVIDER_ID"
-hermes config set model.default "$MODEL_ID"
-hermes config set prompt_caching.enabled true
-hermes setup --non-interactive
+hermes -p default config set model.provider "$PROVIDER_ID"
+hermes -p default config set model.default "$MODEL_ID"
 REMOTE
 }
 ```
 
-`prompt_caching.enabled true` is a free cost win on providers that support it
-(Anthropic, OpenRouter pass-through). Read config back with `hermes config show`
-(read-only; do not parse it for writes).
+Native `config set` performs schema/route handling. Configure prompt caching separately
+only when the current provider/model supports it; this skill does not enable unrelated
+features or rerun the full setup wizard.
 
-### Path B (fallback) — direct edit of `~/.hermes/config.yaml`
+### Path B — retired manual YAML fallback
 
-If the Hermes build rejects `config set` for the `model.*` keys, rewrite the top-level
-`model:` block in the YAML directly (documented keys: `model.default`, `model.provider`).
-The old block is dropped and the new one appended; values are passed with `printf %s`, so
-no sed delimiter issue arises with `/` in model ids:
+A native config failure is a compatibility or configuration error. Preserve the snapshot
+and roll back; do not overwrite YAML to evade the native validator.
 
 ```bash
 apply_model_path_b() {
-  remote "MODEL_ID=$(printf %q "$HERMES_MODEL") PROVIDER_ID=$(printf %q "$PROVIDER_ID") bash -s" <<'REMOTE'
-set -e
-f=$HOME/.hermes/config.yaml
-touch "$f"
-awk '/^model:/{skip=1; next} skip && /^[[:space:]]/{next} {skip=0; print}' "$f" > "$f.new"
-printf 'model:\n  default: %s\n  provider: %s\n' "$MODEL_ID" "$PROVIDER_ID" >> "$f.new"
-cat "$f.new" > "$f"; rm -f "$f.new"
-hermes setup --non-interactive
-REMOTE
+  echo "Manual model YAML fallback is disabled; inspect the native config error." >&2
+  return 1
 }
 ```
 
-Apply (Path A first, Path B only if A fails, rollback if both fail):
+Apply through the native configuration path; roll back on failure:
 
 ```bash
-apply_model_path_a || { echo "Path A failed; trying Path B."; apply_model_path_b; } \
-  || { echo "FAIL: could not apply model config."; rollback; exit 1; }
+apply_model_path_a || { echo "FAIL: could not apply model config."; rollback; exit 1; }
 ```
 
 Never put the API key in `config.yaml` — it goes only in `~/.hermes/.env`. Never use
-`hermes setup --portal` in a headless run; it opens an interactive OAuth flow that
+`hermes -p default setup --portal` in a headless run; it opens an interactive OAuth flow that
 hangs forever over SSH.
 
 ---
 
-## Step 6 — reload the gateway (stop + run, NOT restart)
+## Step 6 — reload through the supported native lifecycle
 
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
+Stop the existing runtime, then let `gateway ensure` resolve its supervisor and wait for readiness. A refusal due to live work or a supervisor conflict must not be bypassed.
 
 ```bash
-remote "hermes gateway stop || true"
+remote "hermes -p default gateway stop" || { echo "FAIL: gateway stop refused; preserving recovery point."; rollback; exit 1; }
 sleep 2
-remote "hermes gateway run --daemon" || { echo "FAIL: gateway did not start."; rollback; exit 1; }
+remote "hermes -p default gateway ensure --json --timeout 60 >/dev/null" || { echo "FAIL: gateway did not start."; rollback; exit 1; }
 sleep 5
 ```
 
@@ -324,7 +378,7 @@ sleep 5
 ```bash
 REGISTERED=0
 for i in $(seq 1 6); do
-  LOG=$(remote "hermes logs 2>&1 | tail -200")
+  LOG=$(remote "hermes -p default logs 2>&1 | tail -200")
   if printf '%s\n' "$LOG" | grep -qiF -- "$HERMES_MODEL" \
      || printf '%s\n' "$LOG" | grep -qiE "gateway.*(ready|started)|provider.*loaded"; then
     REGISTERED=1
@@ -336,20 +390,22 @@ done
 [ "$REGISTERED" = "1" ] || { echo "FAIL: gateway did not report model in logs after 30s. Rolling back."; rollback; exit 1; }
 
 # Also confirm the model the runtime sees matches what we set (catches the billing-mode trap).
-SHOWN=$(remote "hermes config show 2>/dev/null | grep -i '^model'" || echo "")
+SHOWN=$(remote "hermes -p default config show 2>/dev/null | grep -i '^model'" || echo "")
 echo "Runtime config: $SHOWN"
 ```
 
 ---
 
-## Step 8 — live LLM smoke test (the grep-safe end-to-end check)
+## Step 8 — live LLM smoke test (successful command and exact reply)
 
 ```bash
 HTTP=$(remote 'bash -s' <<'REMOTE'
-out=$(hermes -z 'reply with the single word OK' 2>&1)
-if printf '%s' "$out" | grep -qiw 'OK'; then echo 200
-elif printf '%s' "$out" | grep -qiE 'unauthor|invalid.*key|401'; then echo 401
+# A diagnostic can echo the prompt (including OK); only a successful, exact reply counts.
+rc=0
+out=$(hermes -p default -z 'reply with the single word OK' 2>&1) || rc=$?
+if printf '%s' "$out" | grep -qiE 'unauthor|invalid.*key|401'; then echo 401
 elif printf '%s' "$out" | grep -qiE 'forbidden|quota|billing|403'; then echo 403
+elif [ "$rc" = 0 ] && [ "$(printf '%s' "$out" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')" = OK ]; then echo 200
 else echo 599; fi
 REMOTE
 )
@@ -363,24 +419,15 @@ esac
 
 ### Capability check (the #1 silent-failure gotcha)
 
-After the smoke test succeeds, report which auxiliary capabilities are live vs silently
-degraded based on which keys are present:
+After the smoke test succeeds, report exactly what was verified. Provider-key presence
+is not a capability test. Use native `hermes tools` / provider setup when a user wants
+auxiliary features, then test the relevant operation separately.
 
 ```bash
-remote '
-  ENV=~/.hermes/.env
-  has(){ grep -q "^$1=" "$ENV" 2>/dev/null && echo active || echo "DEGRADED (missing $1)"; }
-  echo "vision           : $(has OPENROUTER_API_KEY)"
-  echo "web-summarization: $(has OPENROUTER_API_KEY)"
-  echo "compression      : $(has OPENROUTER_API_KEY)"
-'
-finish
+echo "Verified: configured provider/model completed inference."
+echo "Unverified: auxiliary tools and messaging delivery require their own checks."
+finish || exit 1
 ```
-
-If any are `DEGRADED`, offer to add an OpenRouter key to cover the gaps — these features
-fail silently (no error, just dropped context / blank summaries) when their backing
-provider isn't keyed. Also: the compression/vision aux model's context must be **>= the
-main model's** (and **>=64K**) or summarization silently truncates.
 
 ---
 
@@ -390,13 +437,13 @@ main model's** (and **>=64K**) or summarization silently truncates.
 failure after the snapshot. It restores the exact pre-skill `~/.hermes/.env` and
 `config.yaml` from `~/.hermes/.hstack-backup/hermes-model` (it restores; it does not
 delete, so a failed `FORCE=1` re-run puts the previously working key and model back) and
-reloads the gateway with stop + run, then checks `hermes gateway status`: if the gateway is not
+reloads the gateway with stop + native ensure, then checks `hermes -p default gateway status`: if the gateway is not
 reported running it prints `files restored, but the gateway did NOT come back` and exits
-non-zero (start it by hand with `hermes gateway start` and check `hermes logs`).
+non-zero (start it by hand with `hermes -p default gateway start` and check `hermes -p default logs`).
 
 Manual undo after a successful run: `cp ~/.hermes/.hstack-backup/hermes-model.prev/.env ~/.hermes/.env`
 and `cp ~/.hermes/.hstack-backup/hermes-model.prev/config.yaml ~/.hermes/config.yaml`,
-then `hermes gateway stop && hermes gateway run --daemon`.
+then `hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60`.
 
 ---
 
@@ -404,21 +451,16 @@ then `hermes gateway stop && hermes gateway run --daemon`.
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | `hermes setup --portal` in a headless / SSH run | Triggers an interactive OAuth flow that hangs forever | Always `--non-interactive`; mint the key out-of-band |
-| 2 | Defaulting to a local / small model | They hallucinate tool calls and Hermes rejects models <64K context at startup | Frontier model only; `>=64K` context window |
-| 3 | Aux model (vision / web / compression) context < main model | Summarization silently truncates and drops conversation context | Aux model context must be `>=` main model and `>=64K` |
-| 4 | `/model` slash command used to add a new provider | In-session `/model` only switches **already-configured** providers | Adding a provider requires `hermes config set` in terminal |
-| 5 | Looking for `hermes config get` | The older skills claimed it does not exist; the current Hermes CLI reference lists it, but this skill relies only on `config show` | Use `hermes config show` and grep |
-| 6 | Billing-mode trap | A subscription plan can silently flip to per-token API billing; calls then 403 | Re-check provider dashboard on any 403; capability check in Step 8 |
-| 7 | Missing key not caught at config time | Hermes does not validate the key during `setup`; only first inference call fails | Step 8's `hermes -z` smoke test is mandatory |
-| 8 | Auxiliary capabilities silently degrade | If the provider behind vision/web/compression isn't keyed, calls return nothing — no error | Run the capability check; offer to add OpenRouter to cover gaps |
-| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Use `stop` + `run` |
-| 10 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` (or the stdin fallback in Step 4) |
-| 11 | API key in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600` |
-| 12 | Interpolating the key or model id into a sed script / argv | Keys contain `/+=|&`; model ids contain `/`; a quote breaks the remote command and the key shows in `ps` | Key over ssh stdin; model/provider ids validated locally and passed as an env prefix |
-| 13 | Container vs host confusion | `.env` written inside a container is ephemeral; key invisible to host sshd | Always `whoami; hostname` first |
-| 14 | Writing a generic or invented key name (`openai_API_KEY`, `${PROVIDER}_API_KEY`) | Hermes reads only the fixed names; the key is silently ignored and inference fails at first call | Use the per-provider names in Step 0 (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`) |
-| 15 | Provider id mismatch (`openai` vs `openai-api`) | Hermes documents the direct OpenAI provider as `openai-api`; a made-up id selects nothing | Step 0 maps `openai` to `openai-api`; `anthropic`, `deepseek`, `openrouter` are used as-is |
+| 1 | OAuth wizard in a noninteractive SSH session | It requires human input | Use native attended setup, or the bounded BYOK path |
+| 2 | Assuming local models are unsupported | Current Hermes has managed local models | Use native `hermes -p default model` for local runtime configuration |
+| 3 | Inferring auxiliary capability from one key | Tool Gateway and provider features have separate configuration | Test the actual requested operation |
+| 4 | Manual YAML fallback after native refusal | It bypasses schema, endpoint and route cleanup | Preserve the snapshot and inspect the native error |
+| 5 | Misreporting key persistence as inference | Config writes do not test a provider request | Require a successful exact-response inference command |
+| 6 | Sending a key through SSH argv | Process listings and logs can expose it | Use stdin transport and suppress key-write output |
+| 7 | Starting a second foreground dispatcher | Shared gateway state and tokens can conflict | Use native readiness, respecting the existing owner |
+| 8 | Stopping a shared host gateway casually | Multiple profiles can share one gateway | Require exclusive-default scope and inspect live work |
+| 9 | Printing `config show` indiscriminately | Unexpected custom config can contain sensitive values | Inspect only necessary non-secret fields |
+| 10 | Treating an offline stub as real compatibility | The stub models assumed behavior | Keep tagged-parser and live target evidence separate |
 
 ---
 
@@ -426,18 +468,20 @@ then `hermes gateway stop && hermes gateway run --daemon`.
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
 - [ ] Inputs validated locally (`validate_inputs`): provider allowlist, key format, model id
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
+- [ ] Hermes candidate version inspected; live compatibility remains independently verified
 - [ ] Host vs container confirmed (`whoami; hostname` shows host, not hex container id)
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
 - [ ] Snapshot taken before the first write; `rollback` (Step 0) restores rather than deletes
 - [ ] The provider's key (`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Provider + model set via Path A (`hermes config set model.provider` / `model.default`) or Path B (yaml edit); `prompt_caching.enabled true`
-- [ ] `hermes setup --non-interactive` ran cleanly (no `--portal` used)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
+- [ ] Provider + model set through native `config set`; no manual YAML fallback
+- [ ] No interactive setup wizard or unrelated capability configuration was run
+- [ ] Gateway reloaded with `stop` + `ensure` (NOT restart)
 - [ ] Logs show gateway ready with the configured model within 30s
-- [ ] Smoke test: `hermes -z 'reply with OK'` returned `OK` (HTTP 200 equivalent); a 401, 403 or inconclusive result rolled back
-- [ ] Capability check reported vision / web-summary / compression status; degraded items surfaced to user
+- [ ] Smoke test: `hermes -p default -z 'reply with OK'` returned `OK` (HTTP 200 equivalent); a 401, 403 or inconclusive result rolled back
+- [ ] Auxiliary capabilities reported unverified until tested individually
 - [ ] `finish` called; re-run with `FORCE=1` reconfigures cleanly
 
 See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and provider failure modes.
+
+Source: [v0.22.5 config handler](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/config.py), [gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/gateway.py).

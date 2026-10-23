@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { SshTransport } from "../../../../packages/acceptance/transports.js";
+import { freshStubDeliveries } from "../../helpers/stub-observer.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const DOCKER_DIR = path.resolve(here, "..");
@@ -412,24 +413,23 @@ export class DockerTarget {
   async curlLog() { return this.cat(CURL_LOG_REMOTE); }
   async managedCronLines() { return (await this.cronText()).split("\n").filter((l) => l.includes("[hstack:founder-brief]")); }
 
-  /** Test-side delivery observer: fires the managed cron entry through ssh and reads the stub's outbox. */
+  /** Test observer: successful SSH dispatch plus only fresh, run-correlated stub output. */
   observer({ knobs = {}, secret = null } = {}) {
     const run1 = (remote) => this.ssh(remote, { knobs });
     return {
       delivery: async () => {
         const list = await run1(`${PATH_EXPORT}hermes cron list`);
-        const entry = list.stdout.split("\n").find((l) => l.includes("[hstack:founder-brief]"));
-        if (!entry) return { deliveries: [] };
-        const jobId = entry.split("\t")[0];
+        if (list.code !== 0 || list.transportError) return { deliveries: [] };
+        const entries = list.stdout.split("\n").filter((l) => l.includes("[hstack:founder-brief]"));
+        if (entries.length !== 1) return { deliveries: [] };
+        const jobId = entries[0].split("\t")[0];
         if (!/^[A-Za-z0-9-]+$/.test(jobId)) return { deliveries: [] };
-        await run1(`${PATH_EXPORT}hermes cron run ${jobId}`);
-        const lines = await this.outboxLines();
-        return {
-          deliveries: lines.map((line) => {
-            const to = /^to=(-?[0-9]+)\b/.exec(line)?.[1] ?? "";
-            return { to_fp: sha256(`telegram:${to}`).slice(0, 16), body_has_secret: secret ? line.includes(secret) : false };
-          }),
-        };
+        const before = await this.cat('"$HOME/.hermes/outbox.log"');
+        const runId = randomBytes(16).toString("hex");
+        const dispatched = await run1(`${PATH_EXPORT}HSTACK_STUB_RUN_ID=${runId} hermes cron run ${jobId}`);
+        if (dispatched.code !== 0 || dispatched.transportError) return { deliveries: [] };
+        const after = await this.cat('"$HOME/.hermes/outbox.log"');
+        return { deliveries: freshStubDeliveries(before, after, runId, [secret]) };
       },
     };
   }

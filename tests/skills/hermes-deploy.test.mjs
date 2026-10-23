@@ -12,6 +12,8 @@ import { fake } from "./helpers/tokens.mjs";
 // A Discord-shaped numeric id, built at run time (no id-shaped literal in the repo).
 const DISCORD_ID = "1".repeat(18);
 const SSH_CHECK = "confirm-ssh-access-before-doing-anything#1";
+const ROUTE_GATE = '[ "$PLATFORM" = telegram ] || { echo "ABORT: this compatibility candidate supports Telegram only; other platform recipes still require native lifecycle migration. Nothing was written."; exit 1; }';
+const SSH_ROUTE_GATE = ROUTE_GATE.replace('"$PLATFORM"', '"${PLATFORM:-}"');
 const TG = fake.telegram("G");
 const OR = fake.openrouter("K");
 const OLD_OR = fake.openrouter("O");
@@ -19,6 +21,8 @@ const OLD_TG = fake.telegram("O", "987654321");
 
 const baseEnv = {
   FORCE: "1",
+  HERMES_VERSION: "0.22.5",
+  CANDIDATE_ACKNOWLEDGED: "1",
   MODEL_PROVIDER: "openrouter",
   MODEL_API_KEY: OR,
   HERMES_MODEL: "anthropic/claude-sonnet-4",
@@ -65,6 +69,7 @@ describe("hermes-deploy: composed run", { concurrency: 6 }, () => {
     await scenario({ name: "dep-good", seed, valid: [TG], script: compose(), env: { ...baseEnv, HOME_CHANNEL_ID: "-1001234567890" }, knobs: { strict_negnum: true } }, async (run) => {
       assert.equal(run.code, 0, run.out);
       assert.ok(run.completed);
+        assert.ok(!run.sb.log("hermes-profile.log").includes("unbound"), "all delegated native calls bind the default recovery root");
       assert.match(run.out, /OK: OPENROUTER_API_KEY, telegram credentials and TELEGRAM_ALLOWED_USERS present; TELEGRAM_HOME_CHANNEL set\./);
       const env = run.sb.read(".hermes/.env");
       assert.match(env, new RegExp(`^OPENROUTER_API_KEY=${OR}$`, "m"));
@@ -75,10 +80,8 @@ describe("hermes-deploy: composed run", { concurrency: 6 }, () => {
       assert.deepEqual(keys, ["FOO", "OPENROUTER_API_KEY", "TELEGRAM_ALLOWED_USERS", "TELEGRAM_BOT_TOKEN", "TELEGRAM_HOME_CHANNEL"], "only the names Hermes reads");
       assert.equal(run.sb.mode(".hermes/.env"), 0o600);
       assert.ok(run.sb.hermesCalls().some((c) => c.join(" ") === "config set TELEGRAM_HOME_CHANNEL -- -1001234567890"));
-      // crontab: the old entry survives and the nightly restart is added exactly once
-      const cron = run.sb.read("crontab.store");
-      assert.ok(cron.includes("30 3 * * * oldcron"));
-      assert.equal(cron.split("\n").filter((l) => l.includes("hermes gateway restart")).length, 1);
+      // Native service ownership replaces the unvalidated nightly restart workaround.
+      assert.equal(run.sb.read("crontab.store"), seed.crontab, "unrelated crontab is unchanged");
       assert.ok(run.sb.exists("state/gateway.install"), "gateway install ran");
       // snapshots: deploy's own and the delegated skills' are all finished (.prev) and hold the pre-run files
       for (const s of ["hermes-deploy", "hermes-model", "platform-telegram"]) assert.ok(run.sb.exists(`.hermes/.hstack-backup/${s}.prev`), s);
@@ -164,7 +167,7 @@ describe("hermes-deploy: Step 6 open-bot gate rolls back to the pre-deploy state
   it("other platform (discord): the gate checks DISCORD_ALLOWED_USERS and refuses an empty one", async () => {
     const script = assemble([
       "set +e\n",
-      { skill: "hermes-deploy", ids: [SSH_CHECK, "step0#1", "step1#1", "step2#1", "step3#1", "step4#1"] },
+      { skill: "hermes-deploy", ids: [SSH_CHECK, "step0#1", "step1#1", "step2#1", "step3#1", "step4#1"], replace: [[ROUTE_GATE, ""], [SSH_ROUTE_GATE, ""]] },
       `printf '%s\\n' 'OPENROUTER_API_KEY=x' 'DISCORD_BOT_TOKEN=y' | remote 'cat >> ~/.hermes/.env'\n`,
       `remote 'echo soul > ~/.hermes/SOUL.md'\n`,
       { skill: "hermes-deploy", ids: ["step6#1"] },
@@ -226,7 +229,7 @@ describe("hermes-deploy: composition (deploy + delegated skills in the same shel
     });
   });
 
-  it("failure after the nightly-restart cron was installed (Step 8 logs) restores the old crontab", async () => {
+  it("failure after native service setup preserves the pre-deploy crontab", async () => {
     // Logs stay healthy for the delegated skills and go quiet only once deploy's own Step 8 looks.
     const quiet = `printf 'nothing useful\\n' > "$HSTACK_FAKE/logs.txt"\n`;
     const script = compose().replace('echo ">>> hermes-deploy step8#1"', `${quiet}echo ">>> hermes-deploy step8#1"`);
@@ -243,8 +246,54 @@ describe("hermes-deploy: composition (deploy + delegated skills in the same shel
   it("Step 7 gateway install fails: rollback", async () => {
     await scenario({ name: "dep-install", seed, valid: [TG], script: compose(), env: baseEnv, knobs: { "fail.gateway.install": true } }, async (run) => {
       assert.equal(run.code, 1);
-      assert.match(run.out, /FAIL: autostart\/cron install\. Rolling back\./);
+      assert.match(run.out, /FAIL: native gateway service setup\. Rolling back\./);
       assertStateIdentical(run);
+    });
+  });
+
+  for (const [label, logs] of [
+    ["generic gateway readiness", "gateway ready\nregistered tool github\n"],
+    ["a disconnected target", "gateway ready\ntelegram disconnected\n"],
+    ["a later target failure", "telegram connected\ntelegram connection failed\n"],
+  ]) {
+    it(`Step 8: ${label} cannot prove the selected platform connected`, async () => {
+      const script = assemble([
+        "set +e\n", { skill: "hermes-deploy", ids: ["step0#1"] },
+        "deploy_snapshot || exit 2\n", { skill: "hermes-deploy", ids: ["step8#1"] }, SCRIPT_END,
+      ]);
+      await scenario({ name: "dep-platform-log", seed, script, env: baseEnv, files: { "logs.txt": logs } }, async (run) => {
+        assert.equal(run.code, 1, run.out);
+        assert.match(run.out, /FAIL: gateway\/platform not visible/);
+        assert.ok(!run.out.includes("OK: gateway up, telegram connected"));
+        assertStateIdentical(run);
+      });
+    });
+  }
+
+  it("Step 7: native service setup never reads or rewrites the unrelated crontab", async () => {
+    const script = assemble([
+      "set +e\n", { skill: "hermes-deploy", ids: ["step0#1"] },
+      "deploy_snapshot || exit 2\n",
+      'touch "$HSTACK_FAKE/knobs/refuse-crontab"\n',
+      { skill: "hermes-deploy", ids: ["step7#2"] }, SCRIPT_END,
+    ]);
+    await scenario({
+      name: "dep-native-service", seed, script, env: baseEnv,
+      setup: (sb) => {
+        sb.write("remote_bin/crontab.original", sb.read("remote_bin/crontab"), 0o755);
+        sb.write("remote_bin/crontab", `#!/bin/bash
+if [ -f "$HOME/knobs/refuse-crontab" ]; then
+  echo unexpected-crontab >> "$HOME/logs/events.log"; exit 1
+fi
+exec /bin/bash "$HOME/remote_bin/crontab.original" "$@"
+`, 0o755);
+      },
+    }, async (run) => {
+      assert.equal(run.code, 0, run.out);
+      assert.equal(run.sb.read("crontab.store"), seed.crontab);
+      assert.ok(!run.sb.events().includes("unexpected-crontab"));
+      assert.ok(run.sb.hermesCalls().some(c => c.join(" ") === "gateway install --if-missing --no-start-now"));
+      assert.ok(run.sb.hermesCalls().some(c => c.join(" ") === "gateway ensure --json --timeout 60"));
     });
   });
 
@@ -267,6 +316,21 @@ describe("hermes-deploy: composition (deploy + delegated skills in the same shel
     });
   });
 
+  it("Step 9a: a failed inference command printing OK cannot finish the deploy", async () => {
+    const late = `stub="$HSTACK_FAKE/.local/bin/hermes"
+      awk '/event -z; inject infer/ { print; print "    echo OK; exit 1"; next } {print}' "$stub" > "$stub.new"
+      cat "$stub.new" > "$stub"; rm "$stub.new"
+`;
+    await scenario({ name: "dep-9a-failed-ok", seed, valid: [TG], script: compose({ late }), env: baseEnv }, async (run) => {
+      assert.equal(run.code, 1, run.out);
+      assert.match(run.out, /FAIL: model smoke command failed/);
+      assert.ok(!run.out.includes("ACTION REQUIRED"));
+      assert.match(run.out, /rollback: restored/);
+      assertStateIdentical(run);
+      assert.ok(run.sb.exists(".hermes/.hstack-backup/hermes-deploy.prev"));
+    });
+  });
+
   it("Step 9b: 'not running' does not count as running; rollback", async () => {
     await scenario({ name: "dep-9b", seed, valid: [TG], script: compose({ late: `printf 'Gateway: not running\\n' > "$HSTACK_FAKE/knobs/status_override"\n` }), env: baseEnv }, async (run) => {
       assert.equal(run.code, 1);
@@ -275,11 +339,27 @@ describe("hermes-deploy: composition (deploy + delegated skills in the same shel
     });
   });
 
+  it("Step 9b: a nonzero status command cannot finish deployment despite running text", async () => {
+    const script = assemble([
+      "set +e\n", { skill: "hermes-deploy", ids: ["step0#1"] },
+      "deploy_snapshot || exit 2\n",
+      'printf "gateway running\\n" > "$HSTACK_FAKE/knobs/status_override"\nprintf 1 > "$HSTACK_FAKE/knobs/status_exit"\n',
+      { skill: "hermes-deploy", ids: ["step9#1"] }, SCRIPT_END,
+    ]);
+    await scenario({ name: "dep-status-error", seed, script, env: baseEnv }, async (run) => {
+      assert.equal(run.code, 1, run.out);
+      assert.ok(!run.out.includes("ACTION REQUIRED"));
+      assert.match(run.out, /FAIL: gateway not reported running/);
+      assert.ok(run.sb.exists(".hermes/.hstack-backup/hermes-deploy"));
+      assert.ok(!run.sb.exists(".hermes/.hstack-backup/hermes-deploy.prev"));
+    });
+  });
+
   it("Signal home channel is skipped unless CONFIRM_SIGNAL_HOME_CHANNEL=1", async () => {
     const sig = `SIGNAL_ACCOUNT=+15550001111\\nSIGNAL_HTTP_URL=http://127.0.0.1:8080\\nSIGNAL_ALLOWED_USERS=+15551112222\\nOPENROUTER_API_KEY=x\\n`;
     const mk = (extra) => assemble([
       "set +e\n",
-      { skill: "hermes-deploy", ids: [SSH_CHECK, "step0#1", "step1#1", "step2#1", "step3#1", "step4#1"] },
+      { skill: "hermes-deploy", ids: [SSH_CHECK, "step0#1", "step1#1", "step2#1", "step3#1", "step4#1"], replace: [[ROUTE_GATE, ""], [SSH_ROUTE_GATE, ""]] },
       `remote 'printf "${sig}" >> ~/.hermes/.env; echo soul > ~/.hermes/SOUL.md'\n`,
       { skill: "hermes-deploy", ids: ["step6#1"] }, extra, SCRIPT_END,
     ]);
@@ -337,7 +417,7 @@ describe("hermes-deploy: Step 0 input validation (before any remote call)", { co
     const lines = table.map(([p, h]) => `( PLATFORM='${p}' HOME_CHANNEL_ID='${h}'; if deploy_validate_inputs >/dev/null 2>&1; then echo "RESULT ${p} ${h} OK"; else echo "RESULT ${p} ${h} REJ"; fi )\n`).join("");
     const script = assemble([
       "set +e\n",
-      { skill: "hermes-deploy", ids: ["step0#1"], replace: [["\ndeploy_validate_inputs || exit 1\n", "\n"]] },
+      { skill: "hermes-deploy", ids: ["step0#1"], replace: [["\ndeploy_validate_inputs || exit 1\n", "\n"], [ROUTE_GATE, ""]] },
       lines,
     ]);
     assert.ok(!/^deploy_validate_inputs \|\| exit 1$/m.test(script), "control: the trailing validate call must be removed");

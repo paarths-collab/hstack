@@ -15,7 +15,7 @@ import { EXEC_FOR_TESTS, Transaction, TransactionError } from "../../packages/ac
 import { cannedResponder } from "./helpers/canned.mjs";
 import {
   FAKE, FIXTURE_SKILLS, OPERATOR, SCRIPT_SKIP, SECRET_VALUES, Target, assertReceiptClean, contract, driveToApplied, filesContaining,
-  makeBlueprint, newTransaction, readAllReceiptText, userStateHash,
+  fingerprint, losingTransport, makeBlueprint, newTransaction, readAllReceiptText, userStateHash,
 } from "./helpers/harness.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +24,7 @@ const TXN = "harden000001";
 const check = (receipt, id) => receipt.checks.find((c) => c.id === id);
 
 /** A recorded (canned) transaction with its OWN copies of the script and the skills, so tests can edit them. */
-function recorded({ overrides = {}, observer = null } = {}) {
+function recorded({ overrides = {}, observer = null, contract: suppliedContract = contract } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hstack-harden-"));
   const scriptPath = path.join(dir, "target.sh");
   cpSync(FIXTURE_SCRIPT_PATH, scriptPath);
@@ -33,7 +33,7 @@ function recorded({ overrides = {}, observer = null } = {}) {
   const receiptDir = path.join(dir, "receipts");
   const scriptBody = () => readFileSync(scriptPath, "utf8");
   const recording = new RecordingTransport({ respond: (op, i) => cannedResponder({ scriptBody: scriptBody(), txn: TXN, overrides })(op, i) });
-  const options = { blueprint: makeBlueprint(), contract, operator: OPERATOR, transport: recording, receiptDir, txnId: TXN, skillsRoot, scriptPath, observer };
+  const options = { blueprint: makeBlueprint(), contract: suppliedContract, operator: OPERATOR, transport: recording, receiptDir, txnId: TXN, skillsRoot, scriptPath, observer };
   return { dir, scriptPath, skillsRoot, receiptDir, recording, options, tx: new Transaction(options), cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
@@ -48,6 +48,63 @@ async function toApplied(r) {
   assert.equal((await r.tx.apply()).ok, true);
 }
 const liveCalls = (r) => r.recording.calls.filter((c) => c.mutates === "live").map((c) => c.op);
+
+test("a caller's nested contract edits cannot change approved commands or verification requirements", async () => {
+  const mutable = structuredClone(contract);
+  const observer = { delivery: async () => ({ deliveries: [{ to_fp: fingerprint(OPERATOR.chatId), body_has_secret: false }] }) };
+  const r = recorded({ contract: mutable, observer });
+  try {
+    const review = await toReviewed(r);
+    mutable.schedule.prompt = "An unreviewed changed prompt";
+    mutable.required_checks.splice(0);
+    mutable.runtime.supported_versions.splice(0);
+    await r.tx.stage(SECRET_VALUES);
+    assert.equal((await r.tx.apply()).ok, true);
+    const approvedApply = review.ops.find((op) => op.op === "apply");
+    const actualApply = r.recording.calls.find((op) => op.op === "apply");
+    assert.equal(actualApply.remote, approvedApply.remote, "the exact approved prompt is executed");
+    assert.equal((await r.tx.verify()).ok, true, "verification retains the original supported version and checks");
+    assert.equal(check(r.tx.receipt, "runtime-version").status, "pass");
+    assertReceiptClean(assert, { receipts: r.receiptDir }, r.tx);
+  } finally { r.cleanup(); }
+});
+
+test("apply requires an explicit reload confirmation before it can be verified", async () => {
+  for (const stdout of ["", "reloaded=0\n"]) {
+    const r = recorded({ overrides: { reload: { stdout } } });
+    try {
+      await toReviewed(r);
+      await r.tx.stage(SECRET_VALUES);
+      const outcome = await r.tx.apply();
+      assert.equal(outcome.ok, false);
+      assert.equal(outcome.failed_op, "reload");
+      assert.equal(r.tx.state, "rollback_required");
+      assert.equal(r.tx.receipt.apply.completed, false);
+      assert.equal(r.tx.receipt.apply.ops.find((op) => op.op_id === "gateway:reload").status, "unknown");
+      await assert.rejects(() => r.tx.verify(), IllegalTransition);
+      assert.equal(r.recording.calls.some((op) => op.op === "commit"), false);
+    } finally { r.cleanup(); }
+  }
+});
+
+test("a missing commit acknowledgement stays unverified and a confirmed retry can finish", async () => {
+  for (const stdout of ["", "committed=0\n"]) {
+    const observer = { delivery: async () => ({ deliveries: [{ to_fp: fingerprint(OPERATOR.chatId), body_has_secret: false }] }) };
+    const r = recorded({ overrides: { commit: { stdout } }, observer });
+    try {
+      await toApplied(r);
+      const outcome = await r.tx.verify();
+      assert.equal(outcome.ok, false);
+      assert.deepEqual(outcome.unresolved, ["commit"]);
+      assert.equal(r.tx.state, "applied_unverified");
+      assert.equal(check(r.tx.receipt, "commit").status, "unknown");
+      r.recording.respond = cannedResponder({ scriptBody: readFileSync(r.scriptPath, "utf8"), txn: TXN });
+      assert.equal((await r.tx.verify()).ok, true);
+      assert.equal(r.recording.calls.filter((op) => op.op === "commit").length, 2);
+      assert.equal(check(r.tx.receipt, "commit").status, "pass");
+    } finally { r.cleanup(); }
+  }
+});
 
 // ---- F1: what was reviewed is what runs ---------------------------------------------------------
 
@@ -236,7 +293,7 @@ test("abandon() after a crash between stage and apply: restore-cleanup on the ta
     const outcome = await resumed.abandon();
     assert.equal(outcome.ok, true);
     assert.equal(outcome.blocked_reason, "abandoned");
-    assert.match(outcome.manual_command, /hstack-target\.sh restore 'harden000001'.*purge 'harden000001'/, "the exact manual recovery commands are reported");
+    assert.match(outcome.manual_command, /hstack-target-[0-9a-f]{64}\.sh restore 'harden000001'.*purge 'harden000001'/, "the exact manual recovery commands are reported");
     assert.equal(resumed.state, "staged", "state is unchanged");
     const receipt = assertReceiptClean(assert, { receipts: r.receiptDir }, resumed);
     assert.equal(receipt.blocked_reason, "abandoned");
@@ -281,6 +338,79 @@ test("a crash between review and stage can be abandoned without touching the tar
   } finally { r.cleanup(); }
 });
 
+test("backup intent is persisted before dispatch, so resume reconciles a lost backup reply", async () => {
+  const r = recorded();
+  try {
+    await toReviewed(r);
+    let persistedAtDispatch;
+    r.recording.onExec = (op) => {
+      if (op.op !== "backup") return;
+      persistedAtDispatch = JSON.parse(readFileSync(r.tx.receiptPath, "utf8"));
+      throw new Error("connection lost after dispatch");
+    };
+    await assert.rejects(() => r.tx.stage(SECRET_VALUES), { name: "TransportError" });
+    assert.equal(persistedAtDispatch.state, "change_reviewed");
+    assert.equal(persistedAtDispatch.recovery.backup_ref, `bk_${TXN}`);
+    assert.equal(check(persistedAtDispatch, "backup-create").status, "unknown");
+    const resumed = Transaction.resume({ receiptFile: r.tx.receiptPath, ...r.options });
+    await assert.rejects(() => resumed.stage(SECRET_VALUES), (e) => e.code === "stage_already_started");
+    assert.equal((await resumed.abandon()).ok, true);
+    assert.equal(r.recording.calls.at(-1).op, "restore", "the unacknowledged backup is reconciled on the target");
+    assert.equal(check(resumed.receipt, "abandon").status, "pass");
+  } finally { r.cleanup(); }
+});
+
+test("missing backup after an unknown outcome is not proof that a delayed backup cannot still publish", async () => {
+  const r = recorded({ overrides: {
+    backup: { transportError: true }, restore: { code: 1, stdout: "error=backup_missing\n" },
+  } });
+  try {
+    await toReviewed(r);
+    await assert.rejects(() => r.tx.stage(SECRET_VALUES), { name: "TransportError" });
+    const resumed = Transaction.resume({ receiptFile: r.tx.receiptPath, ...r.options });
+    assert.equal((await resumed.abandon()).ok, false);
+    assert.equal(resumed.receipt.blocked_reason, null);
+    assert.equal(check(resumed.receipt, "abandon").status, "fail");
+  } finally { r.cleanup(); }
+});
+
+test("legacy null-ref receipts reconcile on the target instead of assuming backup was never requested", async () => {
+  const r = recorded();
+  try {
+    await toReviewed(r);
+    const legacy = r.tx.receipt;
+    legacy.checks = legacy.checks.filter((entry) => entry.id !== "backup-create");
+    assert.equal(legacy.recovery.backup_ref, null);
+    const resumed = Transaction.resume({ receipt: legacy, ...r.options });
+    const before = r.recording.calls.length;
+    assert.equal((await resumed.abandon()).ok, true);
+    assert.deepEqual(r.recording.calls.slice(before).map((op) => op.op), ["helper-verify", "restore"]);
+  } finally { r.cleanup(); }
+});
+
+test("abandon does not accept exit zero without a cleanup confirmation", async () => {
+  const r = recorded({ overrides: { restore: { stdout: "something=else\n" } } });
+  try {
+    await toReviewed(r);
+    await r.tx.stage(SECRET_VALUES);
+    assert.equal((await r.tx.abandon()).ok, false);
+    assert.equal(r.tx.receipt.blocked_reason, null);
+    assert.equal(check(r.tx.receipt, "abandon").status, "fail");
+  } finally { r.cleanup(); }
+});
+
+test("a definite backup refusal does not make abandon restore an older target transaction", async () => {
+  const r = recorded({ overrides: { backup: { code: 2, stdout: "error=txn_exists\n" } } });
+  try {
+    await toReviewed(r);
+    assert.equal((await r.tx.stage(SECRET_VALUES)).ok, false);
+    assert.equal(r.tx.receipt.recovery.backup_ref, null);
+    const before = r.recording.calls.length;
+    assert.equal((await r.tx.abandon()).ok, true);
+    assert.equal(r.recording.calls.length, before);
+  } finally { r.cleanup(); }
+});
+
 test("abandon() is only legal before apply, and resume refuses other states", async () => {
   const r = recorded();
   try {
@@ -305,6 +435,27 @@ describe("against the real hstack-target.sh (sandbox)", { concurrency: 3 }, () =
   const gated = (name, fn) => test(name, { skip: SCRIPT_SKIP }, async () => {
     const target = new Target();
     try { await fn(target); } finally { target.cleanup(); }
+  });
+
+  gated("lost backup response: resume and abandon close the actual target transaction and unblock the next run", async (t) => {
+    const before = userStateHash(t);
+    const tx = newTransaction(t, { transport: losingTransport(t.transport(), ["backup"]) });
+    await tx.validate(); await tx.inspect();
+    await tx.reviewChanges((review) => review.plan_hash);
+    await assert.rejects(() => tx.stage(SECRET_VALUES), { name: "TransportError" });
+    assert.equal(tx.receipt.recovery.backup_ref, `bk_${tx.txnId}`);
+    assert.ok(existsSync(path.join(t.statePath, "txn", tx.txnId)), "the remote backup really ran");
+    const resumed = Transaction.resume({
+      receiptFile: tx.receiptPath, blueprint: makeBlueprint(), contract, operator: OPERATOR,
+      transport: t.transport(), receiptDir: t.receipts, skillsRoot: FIXTURE_SKILLS,
+    });
+    assert.equal((await resumed.abandon()).ok, true);
+    assert.ok(existsSync(path.join(t.statePath, "txn", tx.txnId, "restored")));
+    assert.equal(userStateHash(t), before);
+    const next = newTransaction(t);
+    await next.validate();
+    assert.equal((await next.inspect()).ok, true);
+    assertReceiptClean(assert, t, resumed);
   });
 
   gated("crash after stage: resume + abandon removes the staged secrets, leaves the user's state alone, and unblocks the next transaction", async (t) => {

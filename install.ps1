@@ -226,6 +226,7 @@ function Test-HstackTargetOk {
     param([string]$Target)
     if (Test-HstackDstInSource (Join-Path $Target '_')) {
         Write-Warning "Refusing to install into ${Target}: it resolves into the hstack source tree. Nothing was changed there."
+        Add-HstackFailure
         return $false
     }
     return $true

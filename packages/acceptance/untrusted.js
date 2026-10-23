@@ -33,8 +33,8 @@ export class OperatorInputInvalid extends Error {
 export function validateOperatorInput(contract, input) {
   const chatId = input?.chatId;
   const schedule = input?.schedule;
-  if (typeof chatId !== "string" || chatId.length > 24 || !new RegExp(contract.destination.id_pattern).test(chatId)) {
-    throw new OperatorInputInvalid("chatId", "must be a numeric Telegram chat id matching the contract pattern");
+  if (typeof chatId !== "string" || chatId.length > 16 || !/^[1-9][0-9]*$/.test(chatId) || !new RegExp(contract.destination.id_pattern).test(chatId)) {
+    throw new OperatorInputInvalid("chatId", "must be a positive private Telegram chat id; groups and channels are outside this workflow");
   }
   if (typeof schedule !== "string" || schedule.length > 64) {
     throw new OperatorInputInvalid("schedule", "must be a five-field cron expression such as '0 8 * * 1-5'");
@@ -52,6 +52,22 @@ export function validateOperatorInput(contract, input) {
   }
   if (!fields.every((field) => /^[0-9*][0-9*/,-]*$/.test(field))) {
     throw new OperatorInputInvalid("schedule", "each cron field must start with a digit or '*'");
+  }
+  const bounds = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+  for (let index = 0; index < fields.length; index += 1) {
+    const [min, max] = bounds[index];
+    for (const atom of fields[index].split(",")) {
+      const match = /^(\*|[0-9]+(?:-[0-9]+)?)(?:\/([0-9]+))?$/.exec(atom);
+      if (!match || (match[2] !== undefined && (!Number.isSafeInteger(Number(match[2])) || Number(match[2]) < 1))) {
+        throw new OperatorInputInvalid("schedule", "contains an invalid cron list, range or step");
+      }
+      if (match[1] !== "*") {
+        const ends = match[1].split("-").map(Number);
+        if (ends.some((value) => !Number.isSafeInteger(value) || value < min || value > max) || (ends.length === 2 && ends[0] > ends[1])) {
+          throw new OperatorInputInvalid("schedule", "contains an out-of-range or reversed cron field");
+        }
+      }
+    }
   }
   return { chatId, schedule: normalised, destinationFingerprint: destinationFingerprint(chatId) };
 }

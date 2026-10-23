@@ -1,39 +1,90 @@
-# hstack — superpowers for self-hosted AI agents
+# hstack — workflows for self-hosted Hermes agents
 
-**97 superpowers that let your AI coding agent deploy and run a self-hosted Hermes agent on your own server.**
+**Ready-to-use GitHub reports for your own Hermes server.**
 
-Self-hosting an AI agent normally costs you a weekend: SSH keys, a gateway that won't re-read your env vars, MCP endpoints that silently reject the token format you just pasted. hstack hands that entire job to the coding agent you already use.
+hstack packages three deterministic GitHub-to-private-Telegram workflows: repository activity, requested PR reviews and published releases. Select a pack and generate its private configuration and worker without writing source code or JSON. Hermes supplies native scheduling. The repository also includes 97 setup and integration procedures.
 
 Install it once, then say what you want:
 
 > *"Deploy Hermes to my server and connect Notion, GitLab and Telegram."*
 
-Claude Code — or Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself — SSHes into your box, spins up an MCP sidecar container where the vendor needs one, injects the credentials, connects the networks, and tests every key against the live vendor API **before** it writes anything. A working Hermes agent in under an hour instead of a weekend.
+Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself can read the procedures and prepare the selected setup. Prefer native Hermes setup and connectors where they cover the task; custom deployment steps and verification should address a concrete remaining need.
 
-Your server. Your data. No hstack service in the middle, no daemon we operate, no runtime to install.
+**Compatibility:** the default acceptance contract is a legacy 0.15.2 fixture baseline. Hermes 0.22.5 is an explicit, unpromoted candidate with source and offline checks. These checks do not establish live operation, and the catalog has not been re-verified against every vendor. Read [compatibility and promotion](compatibility/README.md) before deployment.
+
+Your server. Your data. No hstack-hosted service. Each pack installs a reviewed Python worker on your existing Hermes target.
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
 ![Superpowers 97](https://img.shields.io/badge/superpowers-97-f59e0b)
 ![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
-![Hermes v0.15.2](https://img.shields.io/badge/hermes-v0.15.2%20pinned-9d6bff)
+![Hermes compatibility candidate 0.22.5](https://img.shields.io/badge/hermes-0.22.5%20candidate-9d6bff)
 
 > Built by Paarth.
 
 ---
 
+## Three workflows you can prepare now
+
+| Pack | What arrives in Telegram |
+|---|---|
+| `activity-brief` | Default-branch commits and issues/PRs updated in your reporting window |
+| `review-queue` | Current open, non-draft PRs with explicit review requests, oldest first |
+| `release-watch` | Versions published in your reporting window, with prereleases labelled |
+
+Choose repositories, a private chat and a daily cutoff. Preparation builds the
+runtime and writes private configuration locally. Hidden terminal prompts capture
+credentials. Preview fetches the actual report before installation or sending.
+
+```bash
+mkdir -p -m 700 "$HOME/.hstack-prepared"
+python3 -I -B packages/founder-brief/prepare.py \
+  --workflow review-queue --repository octo-org/example \
+  --chat-id 123456789 --at 09:00 --timezone Asia/Kolkata \
+  --output "$HOME/.hstack-prepared/review-queue"
+```
+
+Follow the generated `NEXT_STEPS.md` to transfer, preview, review, install and run
+the canary. One selected pack is supported per exclusive default-profile Linux
+target with the exact Hermes 0.22.5 candidate. Setup does not provision that target.
+Reports are bounded and refuse incomplete data; open-PR and release-history
+volume limits are described in the [pack guide](packages/founder-brief/README.md).
+
+The worker validates the private chat, records the Telegram API acknowledgement,
+avoids blind retries after uncertain sends, and supports owned rollback.
+
+| Part | Current status |
+|---|---|
+| Three reports, private preparation, preview, installation, schedule, canary and rollback | Implemented |
+| Combined local suite, including all three comparisons and real loopback SSH/HTTP | **48 top-level tests passed; no failures or skips** |
+| Real Hermes 0.22.5 target and real Telegram delivery | **Pending target and private credential files** |
+| Seven-day live reliability gate | Not started; candidate remains unpromoted |
+
+**Why use it over Hermes alone?** Use a native Hermes scheduled prompt when a
+flexible AI summary is enough. Use a pack when you want these exact reports and
+their tested configuration, delivery and removal behavior supplied together.
+The [executed setup comparison](packages/founder-brief/COMPARISON.md) grants the
+manual baseline the same runtime code: both need three setup invocations, while
+the pack generates the configuration and worker integration. Human setup-time
+savings have not been measured.
+
+Start with the [pack guide](packages/founder-brief/README.md). The skill installer
+below installs procedures; it does not deploy these workers or supply credentials.
+
 ## What a superpower is
 
-A superpower is one Markdown file — a procedure your AI coding agent reads and executes on your server. There is nothing to run and nothing to trust: you can read every one of them before it touches your box.
+A superpower is one Markdown file: a procedure your AI coding agent reads and executes on your server. Review its commands, required credentials, supported runtime and recovery limits before it touches your box.
 
 Install hstack once and your coding agent gains all 97:
 
-1. **Deploy a self-hosted AI agent** — Hermes installed and version-pinned, config written, gateway running, verified. One command.
-2. **Connect 71 services** — Notion, Stripe, Postgres, Supabase, Pinecone, GitHub, Twilio, Salesforce and 63 more. Your agent writes the credential to a locked-down env file, tests it against the real vendor API, registers the MCP server, then reloads Hermes cleanly.
-3. **Wire 8 messaging platforms** — Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat, Mattermost. So your agent messages you first instead of waiting to be asked.
-4. **Keep it alive** — health checks, safe restarts, backups, and failure diagnosis for the traps that actually bite (gateway OOM, provider 429s, stale PIDs).
+1. **Prepare a self-hosted Hermes deployment** — installation, configuration, gateway and verification procedures. The current candidate deploy path supports Telegram on one exclusive default-profile target.
+2. **Find integration guidance for 71 services** — including Notion, Stripe, Postgres, Supabase, Pinecone, GitHub, Twilio and Salesforce. Prefer current native Hermes connectors or plugins where available; the entire catalog has not been re-verified against current vendors.
+3. **Find procedures for 8 messaging platforms** — Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat and Mattermost. The other seven platform recipes remain outside the current-Hermes migration.
+4. **Operate and recover** — health checks, supported gateway lifecycle commands, backups and failure diagnosis, subject to each procedure's runtime scope.
 
-Every superpower is SSH-first, idempotent, dry-run-previewable, and rollback-safe.
+The procedures follow an SSH-first template with preflight, preview and recovery
+steps. Read their scope and validation limits; recovery cannot recall messages or
+undo arbitrary external side effects.
 
 ## Quick start
 
@@ -76,7 +127,9 @@ Then open your agent and run:
 Plugin superpowers are always namespaced (`/hstack:<name>`); script-installed ones are bare.
 Both forms work, and installing both ways is safe — they coexist rather than collide.
 
-It handles install → model → platform → memory → personality → autostart → verify. Stops only for things a machine can't do (bot tokens, WhatsApp QR, the first "hello").
+The current `/hermes-deploy` candidate composes installation, model, Telegram,
+memory, personality, supervised startup and checks. It requires explicit candidate
+selection and the relevant credentials. Other platform paths are refused before SSH.
 
 ### Picking what to install
 
@@ -124,7 +177,9 @@ If you know exactly which one you want, invoke it explicitly. Same 97 superpower
 | **OpenClaw** | `/hermes-deploy` · `/integration-notion` (invokes hstack skills against a Hermes target) |
 | **Hermes itself** | *"Deploy Hermes"* · *"Connect Notion"* (natural language — Hermes reads and self-executes) |
 
-The magical moment either way: type `/hstack:integration-` in your agent and 71 hardened installers autocomplete, or just say "integrate Notion" and your agent grabs the right one. It wires the service into your self-hosted Hermes with SSH-first hardening, live credential pre-flight, and clean rollback. No hstack account, no server in the middle.
+Type `/hstack:integration-` to browse the integration procedures, or ask your agent
+to find the appropriate setup. Review the native Hermes option and the procedure's
+current compatibility before applying it. No hstack account or hosted relay is required.
 
 ## Commands
 
@@ -132,7 +187,7 @@ The magical moment either way: type `/hstack:integration-` in your agent and 71 
 
 | Command | What it does |
 |---|---|
-| `/hermes-deploy` | Full end-to-end deploy. Most people only run this. |
+| `/hermes-deploy` | Opt-in current-Hermes deployment procedure; Telegram-only candidate scope. |
 | `/hermes-integrate` | Wire many integrations at once via a picker. |
 | `/hermes-mcp-add` | The generic MCP-wiring primitive. |
 
@@ -162,8 +217,8 @@ The current runtime routes are intentionally explicit:
 
 | Command | What it does |
 |---|---|
-| `/hermes-install` | Install Hermes (local or over SSH), pinned + PATH-safe. |
-| `/hermes-model` | Configure provider + main/aux models. Covers OpenAI, Anthropic, OpenRouter, Google, Groq, Mistral, Together, Cohere. |
+| `/hermes-install` | Install the opt-in candidate using its immutable official installer, checksum and source commit. |
+| `/hermes-model` | Configure native model/provider settings; the migrated four-provider paths have offline checks, not live provider proof. |
 | `/hermes-skills` | Install a curated starter pack of Hermes's own skills (distinct from hstack superpowers). |
 | `/hermes-memory` | Built-in or an external memory provider. |
 | `/hermes-soul` | Give the agent a name + personality (`SOUL.md`). |
@@ -180,13 +235,13 @@ The current runtime routes are intentionally explicit:
 |---|---|
 | `/hermes-status` | Health check across gateway, platforms, memory, logs. |
 | `/hermes-restart` | Clean restart (stop → clear locks → start). |
-| `/hermes-update` | Safe update with backup + re-verify. |
+| `/hermes-update` | Review the installation owner's native stable update, back up, apply and re-verify. |
 | `/hermes-fix` | Diagnose and repair common failures. |
 | `/hermes-backup` | Back up config, secrets, memory, sessions. |
 
 ## Integrations — 71 services your AI agent can reach
 
-Every superpower probes the vendor's API with your credentials before writing anything, writes secrets to `~/.hermes/.env` with `chmod 600`, registers an MCP server or documents the REST surface, reloads the gateway, and rolls back cleanly on any failure.
+Integration procedures describe credential preflight, private environment files, MCP or REST setup, gateway reload and recovery. Current Hermes connectors and plugins should be preferred where they meet the need. The repaired subset has offline regression coverage; that is not a claim that every integration works against today's vendor API.
 
 **AI-agent-native**
 
@@ -225,37 +280,43 @@ Every superpower probes the vendor's API with your credentials before writing an
 
 Each skill lives at `skills/integration-<name>/SKILL.md`.
 
-## Reliability — Hermes failure modes, pre-solved
+## Reliability and recovery
 
-Every failure mode below is a real, logged trap that hstack pre-solves so you don't hit it:
+The repaired paths check concrete failure modes and preserve recovery evidence:
 
-- **PATH "command not found"** after install → absolute paths + explicit reload.
-- **Gateway memory leak → OOM** ([#25315](https://github.com/NousResearch/hermes-agent/issues/25315)) → pinned version, memory cap, nightly restart, stale-PID clearing.
-- **Provider 429 taking the whole gateway offline** ([#16677](https://github.com/NousResearch/hermes-agent/issues/16677)) → context-window validation and fallback.
-- **Stale PID after crash → systemd restart loop** ([#13655](https://github.com/NousResearch/hermes-agent/issues/13655)) → PID validity check + auto-clear.
-- **No built-in backup** ([#12238](https://github.com/NousResearch/hermes-agent/issues/12238)) → `/hermes-backup`.
-- **Auxiliary-capability drop** (aux model swapped without its key silently kills vision / web / compression) → capability-aware wiring, `auto` defaults, warnings.
-- **Vendor-specific integration traps** (Zendesk `/token` email suffix, Sendbird `Api-Token` header, Notion OAuth-only hosted MCP, R2 `region=auto`, Datadog wrong-site 403) — encoded in each superpower's Pitfalls table.
+- **Runtime/profile mismatch:** explicit default-profile selection and exact candidate readiness checks.
+- **Credential or configuration drift:** private files and reviewed artifact hashes checked before dispatch.
+- **Old messages counted as new delivery:** successful current dispatch and fresh run correlation required by test observers.
+- **Lost send responses:** durable unknown outcomes, with reconciliation required before another attempt for that logical window.
+- **Interrupted install or rollback:** private recovery receipts, kernel locks and ownership checks; user edits cause refusal.
+- **Incomplete source data:** collection failures and pagination limits cannot become a healthy no-activity message.
 
-Full catalogue: [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md).
+Current Hermes provides native backup and update facilities. The candidate uses
+supported service commands and does not add an unconditional nightly restart.
+Historical symptoms in [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md)
+must be checked against the installed release before applying an older workaround.
 
 ## Acceptance transaction (experimental)
 
-[`packages/acceptance/`](packages/acceptance/README.md) wraps one workflow (a read-only GitHub source delivering to one private Telegram destination, on one Linux target) in a reversible transaction that writes a secret-free receipt. It is verified offline only. A real-server run is still required, and the pinned Hermes version has no matching upstream release tag yet. Read its README before relying on it.
+The runnable packs are in [`packages/founder-brief/`](packages/founder-brief/README.md): selected GitHub repositories become an activity report, requested-review queue or release digest, with native Hermes scheduling, a checked private Telegram chat, durable API acknowledgements and recovery. They use a deterministic no-agent worker and private, reviewed configuration. Local HTTP integration tests do not prove real recipient delivery; the Hermes 0.22.5 candidate remains unpromoted.
+
+[`packages/acceptance/`](packages/acceptance/README.md) remains the experimental control-plane transaction and legacy fixture baseline. Installing skill text and creating a generic prompt there is not a complete daily-brief deployment. See [compatibility and promotion](compatibility/README.md) before real-server use.
 
 ## Security defaults
 
-- Localhost binding everywhere. Network exposure is an explicit, warned opt-in.
-- Allowlists enforced. Every platform superpower (WhatsApp, Slack, Signal, Teams, Google Chat) refuses to start with an empty allowlist.
-- Secrets in `~/.hermes/.env` with `chmod 600`, referenced by env-var indirection from `config.yaml`. Never in chat or logs.
-- Live credential verification against the vendor API happens **before** any write. Bad key → clean abort, no half-written state.
-- SSH-first: every action is a reviewable command run on the user's own server, not a hidden daemon operated by hstack.
+- Each pack accepts only a positive private-chat ID and checks its type through Telegram's API before sending.
+- Credentials and configuration are private files under the owned workflow directory. Skill procedures commonly use a private `~/.hermes/.env`; never place real credentials in chat, logs or the repository.
+- Installation reviews and stores the payload; the canary performs the actual GitHub and Telegram checks. Installation alone does not prove credential validity or delivery.
+- Native jobs and reviewed files must still match the installation before the worker performs HTTP or dispatches a canary.
+- Commands run on the user's target. hstack does not operate a hosted daemon, relay or credential service.
 
 ## How it works
 
 Each command is a single `skills/<name>/SKILL.md`. `install.sh` symlinks the same files into each detected agent's skill directory, and falls back to marked copies where symlinks are unavailable; `install.ps1` always copies. Cursor gets converted `.mdc` rules and Gemini CLI gets `@-referenceable` context files.
 
-The agent does everything unattended: runs the installer, writes secrets, seeds memory + SOUL, registers the gateway, runs smoke tests, wires integrations. It stops only for things you must do: minting tokens, OAuth flows, the WhatsApp QR, and the first "hello."
+Agents can execute the selected procedures within their stated scope. Credentials,
+OAuth, destination selection and actual delivery observation still require operator
+input. The report packs share a separate reviewed Python runtime; see their setup guide.
 
 ## Contributing
 
@@ -263,7 +324,7 @@ The value here is the accumulated knowledge of what breaks and what works. **New
 
 1. Fork and branch.
 2. Add or update `skills/<name>/SKILL.md`, or add a row to [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md) (symptom → cause → fix, GitHub issue # if any).
-3. New integrations follow the SSH-first template in [CLAUDE.md](CLAUDE.md) and [templates/SKILL.template.md](templates/SKILL.template.md): SSH check → verify Hermes → idempotency → HARD GATE (format + live pre-flight) → dry-run → `chmod 600` write → MCP or REST doc → `gateway stop && gateway run` → live smoke test → `rollback()`.
+3. New integrations follow the SSH-first template in [CLAUDE.md](CLAUDE.md) and [templates/SKILL.template.md](templates/SKILL.template.md): SSH check → verify supported Hermes → idempotency → credential preflight → preview → private write → native connector or reviewed setup → supported gateway lifecycle → live smoke test → recovery.
 4. Open a PR.
 
 ## License

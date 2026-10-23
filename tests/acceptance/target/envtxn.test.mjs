@@ -47,16 +47,25 @@ test('upsert: duplicates collapse to one, unrelated lines verbatim, lookalike ke
   } finally { sb.cleanup(); }
 });
 
-test('modes: existing 640 stays 640; a brand-new .env is 600; backup and staged copies are 600', () => {
-  for (const [initial, wanted] of [[0o640, '640'], [null, '600']]) {
+test('modes: applied credentials are private; backups/staging are 600 and rollback restores the prior mode', () => {
+  for (const [initial, wanted] of [[0o644, '600'], [0o640, '600'], [null, '600']]) {
     const sb = sandbox();
     try {
-      if (initial !== null) sb.write('.hermes/.env', 'A=1\n', initial);
+      // The 640 case already has the requested bytes: permissions must still be secured.
+      const original = initial === 0o640
+        ? `A=1\nGITHUB_TOKEN=${FAKE.github}\nTELEGRAM_BOT_TOKEN=${FAKE.bot}\nTELEGRAM_ALLOWED_USERS=${FAKE.allowed}\nTELEGRAM_HOME_CHANNEL=${FAKE.chat}\n`
+        : 'A=1\n';
+      if (initial !== null) sb.write('.hermes/.env', original, initial);
       sb.stageAll();
       assert.equal(modeOf(join(sb.txnPath(), 'env.staged')), '600');
       if (initial !== null) assert.equal(modeOf(join(sb.txnPath(), 'env.bak')), '600');
       assert.equal(sb.apply().status, 0);
       assert.equal(modeOf(sb.envPath), wanted);
+      assert.equal(sb.restore().status, 0);
+      if (initial !== null) {
+        assert.equal(modeOf(sb.envPath), initial.toString(8));
+        assert.equal(sb.env(), original);
+      } else assert.equal(existsSync(sb.envPath), false);
     } finally { sb.cleanup(); }
   }
 });
@@ -91,7 +100,7 @@ test('a secret value never reaches stdout/stderr/stub log or any file except .en
     }
     assert.equal(modeOf(join(sb.txnPath(), 'env.bak')), '600');
     assert.ok(!existsSync(join(sb.txnPath(), 'env.staged')));
-    assert.equal(modeOf(sb.envPath), '640');
+    assert.equal(modeOf(sb.envPath), '600');
     // txn dir and state dir are private
     assert.equal(modeOf(sb.txnPath()), '700');
     assert.equal(modeOf(sb.statePath), '700');
@@ -259,4 +268,24 @@ test('config.yaml is never modified by the transaction (apply, restore)', () => 
     assert.equal(sha256(readFileSync(sb.cfgPath)), cfg);
     assert.equal(modeOf(sb.cfgPath), '644');
   } finally { sb.cleanup(); }
+});
+
+test('Telegram access overrides are rejected in staging and before the live credential swap', () => {
+  for (const setting of ['GATEWAY_ALLOW_ALL_USERS=true', '  export GATEWAY_ALLOW_ALL_USERS = "true"', 'TELEGRAM_ALLOW_ALL_USERS=yes', 'TELEGRAM_GROUP_ALLOWED_CHATS=-100123']) {
+    const sb = sandbox();
+    try {
+      const prior = `A=1\n${setting}\n`;
+      sb.write('.hermes/.env', prior, 0o600);
+      assert.equal(sb.backup().status, 0);
+      for (const [key, value] of Object.entries({ GITHUB_TOKEN: FAKE.github, TELEGRAM_BOT_TOKEN: FAKE.bot, TELEGRAM_ALLOWED_USERS: FAKE.allowed, TELEGRAM_HOME_CHANNEL: FAKE.chat })) {
+        assert.equal(sb.put(key, value).status, 0);
+      }
+      const staged = sb.stageCheck();
+      assert.equal(staged.status, 1, setting);
+      assert.match(staged.kv.detail, /^(open_access_switch:|group_wide_access_enabled)/);
+      const applied = sb.apply();
+      assert.equal(applied.status, 1, setting);
+      assert.equal(sb.env(), prior, 'no new credential is written before the access policy passes');
+    } finally { sb.cleanup(); }
+  }
 });

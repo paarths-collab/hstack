@@ -10,6 +10,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { DEFAULT_CONTRACT_PATH, loadContract } from "./contract.js";
+import { readTargetScript } from "./artifacts.js";
 import { validateReceiptText } from "./receipt.js";
 import { SshTransport } from "./transports.js";
 import { DEFAULT_SCRIPT_PATH, buildReview, validateBlueprintStructure } from "./transaction.js";
@@ -90,7 +91,7 @@ export async function main(argv, io = { out: (text) => process.stdout.write(`${t
         for (const error of structural.errors) io.err(`  ${renderUntrustedText(error)}`);
         return 1;
       }
-      const scriptBody = existsSync(DEFAULT_SCRIPT_PATH) ? readFileSync(DEFAULT_SCRIPT_PATH, "utf8") : null;
+      const scriptBody = existsSync(DEFAULT_SCRIPT_PATH) ? readTargetScript(DEFAULT_SCRIPT_PATH) : null;
       const review = buildReview({ blueprint, contract, operator, txnId: "00000000", scriptBody });
       io.out(`recipe: ${review.recipe}`);
       io.out(`plan_hash: ${review.plan_hash}`);

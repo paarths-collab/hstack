@@ -16,7 +16,10 @@ source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
 The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
-targeting **8 messaging platforms**, pinning Hermes **v0.15.2**.
+targeting **8 messaging platforms** in the catalog. The legacy acceptance fixture
+baseline is Hermes **v0.15.2**; the three runnable GitHub report packs are an explicit, unpromoted
+**v0.22.5** candidate. Current compatibility and live-validation status are recorded
+in `compatibility/hermes.json` and `compatibility/VALIDATION.md`.
 
 ## Universal installer (`install.sh` / `install.ps1`)
 
@@ -66,8 +69,10 @@ metrics/                 — clone traffic tracking (update-clone-traffic.mjs + 
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
 acceptance/              — acceptance contract(s) for the reversible transaction
 packages/acceptance/     — acceptance transaction (JS core, target-side script, receipt schema)
+packages/founder-brief/  — activity/review/release packs, private prepare/preview, native schedule and delivery journal
 scripts/                 — skill validators; bash 3.2 compatible (stock macOS)
 tests/                   — recipe tests (tests/recipes), acceptance tests (tests/acceptance, Docker-gated), skill-block tests (tests/skills: run the repaired SKILL.md bash blocks against stub ssh/curl/hermes), installer tests (tests/installer)
+tests/founder-brief/     — pack/CLI/report comparison, loopback HTTP and disposable SSH workflow checks
 ```
 
 ## Integration tier catalog (71 connectors, 20 tiers)
@@ -108,19 +113,19 @@ edit a tier, edit `install.sh` first and mirror it here.
 - **forms** — typeform, tally, calendly, zoom
 - **search** — brave-search, tavily, exa
 
-## Every integration skill guarantees the same shape
+## Integration skill template
 
 The SSH-first hardening template every `integration-*/SKILL.md` follows:
 
 1. **SSH access check** — verify we're on the VPS host, not a container (`whoami; hostname`).
-2. **Verify Hermes** — pinned `v0.15.2`, gateway reachable, `~/.hermes/.env` chmod 600.
+2. **Verify Hermes** — select the declared baseline/candidate from `VERSIONS.txt`, check the procedure's supported scope, gateway and private credential files. A legacy fixture pin is not live compatibility evidence.
 3. **Idempotency check** — abort if the integration is already wired and green.
 4. **HARD GATE (Step 3)** — local format check, then a live read-only vendor call from the VPS with the secret passed as an ssh-stdin curl config. Runs BEFORE the dry run and BEFORE `snapshot`; a failure means `ABORT … Nothing was written.`
 5. **DRY_RUN preview** — print secret length + prefix only, never plaintext.
 6. **Write secrets** — `~/.hermes/.env` with `chmod 600`, `${VAR}` indirection in config.yaml.
 7. **Register MCP or document REST** — MCP endpoint when the vendor ships one, otherwise
    a first-class REST doc under `/opt/data/`.
-8. **Gateway reload** — `hermes gateway stop && hermes gateway run` (never `restart`).
+8. **Gateway lifecycle** — use the selected release's supported service interface. The current candidate uses explicit default-profile service operations and checked readiness; `gateway run --daemon` is a legacy fixture command, not a supported candidate command.
 9. **Verify in logs + live smoke test** — call a real vendor endpoint through Hermes.
 10. **Step 0 helpers `snapshot`/`rollback`/`finish`**, defined before anything can fail. `snapshot` runs just before the first write and refuses to run over a leftover snapshot; every later failure is `rollback; exit 1`, and rollback RESTORES the pre-skill `~/.hermes/.env` and `config.yaml` byte for byte (never just unsets keys). There is no second `rollback()` at the bottom.
 
@@ -239,7 +244,7 @@ Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
 2. **Initialize ≠ auth** — probe `tools/list` without auth; the error message is the spec.
 3. **Placeholder token in CLI** — pipe `placeholder` through `printf | docker exec`; inject real value with `sed`.
 4. **`|` delimiter in sed** — tokens contain `/+= `; use `sed 's|...|...|'` not `sed 's/.../.../'`.
-5. **`gateway stop` + `gateway run`** — not `restart`; env changes need a clean re-read.
+5. **Supported gateway lifecycle** — env changes need a clean re-read; use the reviewed service interface for the selected release and verify readiness. Do not copy legacy `run --daemon` commands onto current Hermes.
 6. **Two `.env` files** — compose `.env` (container-level) vs `/opt/data/.env` (Hermes runtime). MCP secrets go in the Hermes one.
 
 ---
@@ -278,7 +283,17 @@ rejected. Saving them a closed PR is more helpful than submitting one.
 
 It is verified only offline: a sandbox transport, a stub `hermes`, golden SSH command fixtures, and a Docker sshd target gated by `HSTACK_DOCKER=1 node --test tests/acceptance/docker/`. The repo does not claim a real-server run (real Hermes, bot token, chat, GitHub token); that is user-required. A `verified` result also needs an injected delivery observer.
 
-Open decision: the pinned Hermes version v0.15.2 has no upstream release tag. Do not change the pin without a live check.
+Hermes v0.15.2 was released under historical tag `v2026.5.29.2`. Do not promote the
+baseline from source or offline checks alone; the policy requires seven consecutive
+real-target golden-path days and explicit review.
+
+The runnable candidate is `packages/founder-brief/`, a separate reviewed deployment
+with three repository-scoped report packs, private preparation/preview, a native no-agent script schedule, private
+Telegram API acknowledgements and rollback. Its local SSH/HTTP tests pass; a real
+Hermes target and Telegram recipient remain unverified. The acceptance transaction
+above is experimental control-plane coverage, not the runnable packs. Use the dated
+validation record for completion claims and never equate API acknowledgement with
+human recipient observation.
 
 ## Branch / PR conventions
 

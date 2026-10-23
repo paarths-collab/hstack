@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
-  ContractInvalid, DEFAULT_CONTRACT_PATH, DEFAULT_VERSIONS_PATH, KNOWN_ADAPTER_SURFACE, contractHash, loadContract,
+  CANDIDATE_CONTRACT_PATH, ContractInvalid, DEFAULT_CONTRACT_PATH, DEFAULT_VERSIONS_PATH, KNOWN_ADAPTER_SURFACE, NATIVE_ADAPTER_SURFACE, contractHash, loadContract,
   parseVersions, readVersions, runtimeVersionSupported, validateContract,
 } from "../../packages/acceptance/contract.js";
 import { REPO, contract } from "./helpers/harness.mjs";
@@ -53,6 +53,43 @@ test("loading enforces agreement with VERSIONS.txt: a drifted contract is reject
 
 test("parseVersions ignores comments and blanks", () => {
   assert.deepEqual(parseVersions("# c\n\nA=1\n  B=two words \nbad line\n"), { A: "1", B: "two words" });
+});
+
+test("the current-release candidate is explicit and cannot silently promote the legacy baseline", () => {
+  const candidate = loadContract(CANDIDATE_CONTRACT_PATH);
+  const versions = readVersions();
+  assert.equal(candidate.runtime.declared_version, versions.HERMES_CANDIDATE_VERSION);
+  assert.equal(candidate.runtime.versions_source, "VERSIONS.txt#HERMES_CANDIDATE_VERSION");
+  assert.equal(runtimeVersionSupported(contract, candidate.runtime.declared_version), false);
+  assert.equal(runtimeVersionSupported(candidate, contract.runtime.declared_version), false);
+  assert.deepEqual([...candidate.adapter_surface], [...NATIVE_ADAPTER_SURFACE]);
+  assert.equal(candidate.adapter_surface_status, "declared-unverified-against-real-hermes");
+  const record = JSON.parse(readRepo("compatibility", "hermes.json"));
+  assert.equal(record.baseline.version, contract.runtime.declared_version);
+  assert.equal(record.candidate.version, candidate.runtime.declared_version);
+  assert.equal(record.candidate.commit, versions.HERMES_CANDIDATE_COMMIT);
+  assert.equal(record.candidate.installer_url, versions.HERMES_CANDIDATE_INSTALLER_URL);
+  assert.equal(record.candidate.installer_sha256, versions.HERMES_CANDIDATE_INSTALLER_SHA256);
+  assert.equal(record.candidate.contract, path.relative(REPO, CANDIDATE_CONTRACT_PATH).split(path.sep).join("/"));
+  assert.equal(record.candidate.status, "unpromoted");
+  assert.equal(record.candidate.live_verified, false);
+});
+
+test("runtime pin sources cannot be invented or used to mix candidate and legacy CLI surfaces", () => {
+  const candidate = JSON.parse(readFileSync(CANDIDATE_CONTRACT_PATH, "utf8"));
+  const invented = structuredClone(candidate);
+  invented.runtime.versions_source = "VERSIONS.txt#UNREVIEWED_VERSION";
+  assert.ok(validateContract(invented).some((e) => /versions_source/.test(e)));
+  const wrongPin = structuredClone(candidate);
+  wrongPin.runtime.declared_version = contract.runtime.declared_version;
+  wrongPin.runtime.supported_versions = [contract.runtime.declared_version];
+  assert.ok(validateContract(wrongPin, { versions: readVersions() }).some((e) => /HERMES_CANDIDATE_VERSION/.test(e)));
+  const wrongSurface = structuredClone(candidate);
+  wrongSurface.adapter_surface = [...KNOWN_ADAPTER_SURFACE];
+  assert.ok(validateContract(wrongSurface).some((e) => /adapter-surface/.test(e)));
+  const legacy = raw();
+  legacy.adapter_surface = [...NATIVE_ADAPTER_SURFACE];
+  assert.ok(validateContract(legacy).some((e) => /adapter-surface/.test(e)));
 });
 
 test("managed env keys are the exact names the Telegram and GitHub skills use", () => {

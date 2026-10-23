@@ -180,12 +180,15 @@ export class Sandbox {
     return readFileSync(this.log, 'utf8').split('\n').filter(Boolean).map((l) => l.split('\t'));
   }
 
-  run(args, { input, env = {}, home, path = '/usr/bin:/bin' } = {}) {
+  run(args, { input, env = {}, home, path = '/usr/bin:/bin', script = SCRIPT } = {}) {
     const r = spawnSync('env', [
       '-i', `HOME=${home || this.home}`, `PATH=${path}`, `HSTACK_STUB_LOG=${this.log}`,
+      // The legacy TSV test double is explicitly legacy; a candidate version pin must
+      // never make it impersonate the structured native Hermes adapter.
+      'HSTACK_STUB_VERSION=0.15.2',
       'HSTACK_RELOAD_DELAY=0',
       ...Object.entries(env).map(([k, v]) => `${k}=${v}`),
-      BASH, SCRIPT, ...args,
+      BASH, script, ...args,
     ], { input: input === undefined ? '' : input, timeout: 60000 });
     const stdout = r.stdout.toString('utf8');
     const stderr = r.stderr.toString('utf8');

@@ -1,285 +1,204 @@
 ---
 name: hermes-install
-description: Install Hermes Agent reliably over SSH on a VPS (or locally) — pinned to a known-good version, PATH-safe, idempotent, and runnable by any AI agent. Use when Hermes needs to be installed on a machine or VPS.
+description: Install the opt-in Hermes v0.22.5 compatibility candidate on a fresh POSIX host using its official pinned source installer and managed runtime, without ambient pip or deleting existing user state.
 ---
 
-# /hermes-install — install Hermes (SSH-first, pinned, PATH-safe, no sudo)
+# /hermes-install — official source installation over SSH
 
-You are the engineer installing Hermes for the user. The agent running this skill
-(Hermes itself, Claude Code, Codex, Cursor, Gemini CLI — any of them) usually talks
-to a remote VPS over SSH as root. Every command in this skill is written to run on
-the VPS. If the user is installing locally, swap the `ssh "$VPS_USER@$VPS_IP" ...`
-wrappers for direct execution — the body of each command is identical.
+Run the installer as the account that will own Hermes and its gateway. This recipe covers
+a fresh Linux/macOS source installation using the default `~/.hermes` data root and
+`~/.local/bin/hermes` launcher. Packaged Desktop, Docker, custom homes and existing
+source installations must use their native installation/update route instead.
 
-Do everything autonomously; stop only for things a machine cannot do (mint a
-provider key, accept a vendor TOS in a browser).
+**Compatibility candidate, not a promoted pin.** v0.22.5 resolves to commit
+`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Its installer delegates managed Python,
+Node and dependencies to Hermes PM. Tagged-source/parser checks establish the commands
+below; they do not establish a real-server golden path. The promotion gate in
+`VERSIONS.txt` still applies. Do not install the unrelated PyPI package to pin Hermes.
 
-**Honest install picture (verified 2026-06):** the official installer at
-`scripts/install.sh` from `NousResearch/hermes-agent` is the source of truth. Pin
-`hermes-agent==0.15.2` (GitHub tag `v2026.5.29.2` is the same build) for
-reproducibility. The installer edits `~/.bashrc` to add `~/.local/bin` to PATH,
-but the edit does NOT reach the live shell — every later step must use the
-absolute path `$HOME/.local/bin/hermes`. For Hostinger one-click Docker, Hermes
-is already containerized and this skill exits at Step 2.
+## Before you start — gather once
 
----
+| Variable | Meaning |
+|---|---|
+| `VPS_IP`, `VPS_USER` | SSH target and intended service account |
+| `HERMES_VERSION` | Explicitly `0.22.5` for this candidate recipe |
+| `CANDIDATE_ACKNOWLEDGED` | `1` to opt into the unpromoted compatibility candidate |
 
-## Before you start — gather (ask once, in one batch)
+For a local install, run the remote bodies directly as the intended service account.
+Never run the installer under sudo to change accounts.
 
-Required from the user (skip any already in env):
-
-| Variable | What it is | How to get it |
-|----------|------------|---------------|
-| `$VPS_IP` | IP or hostname of the VPS to install on (omit for local) | Their hosting dashboard |
-| `$VPS_USER` | SSH user, usually `root` (omit for local) | Their hosting dashboard |
-| `$HERMES_VERSION` | Pinned version, default `0.15.2` | Optional — leave default unless upgrading |
-
-Confirm SSH access before doing anything:
+## Step 0 — validate the candidate and target before any remote write
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
+[ "${HERMES_VERSION:-}" = 0.22.5 ] && [ "${CANDIDATE_ACKNOWLEDGED:-0}" = 1 ] \
+  || { echo "ABORT: set HERMES_VERSION=0.22.5 and CANDIDATE_ACKNOWLEDGED=1 for this unpromoted candidate. Nothing was written."; exit 1; }
+[[ "$VPS_IP" =~ ^[A-Za-z0-9._:-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
+  || { echo "ABORT: malformed SSH target. Nothing was written."; exit 1; }
+HERMES_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$VPS_USER@$VPS_IP" 'echo ok' \
+  || { echo "ABORT: SSH failed. Run /setup-ssh-keys first."; exit 1; }
 ```
 
----
-
-## Step 1 — confirm host vs container (the #1 source of churn)
-
-SSH keys added inside a container are invisible to the host's sshd, and a
-Hermes install inside a container disappears when the container is recreated.
-Always check before installing.
+## Step 1 — inspect the installation owner and refuse an existing installation
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" '
-  WHO=$(whoami)
-  HOST=$(hostname)
-  echo "user=$WHO host=$HOST"
-  case "$HOST" in
-    *[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
-      echo "WARN: hostname looks like a container hex id. exit the container first." >&2 ;;
-  esac
-'
+remote 'bash -s' <<'REMOTE' || exit 1
+set -e
+whoami; hostname
+case "$(uname -s)" in Linux|Darwin) ;; *) echo "ABORT: use the native installation route for this OS." >&2; exit 1 ;; esac
+[ ! -e /.dockerenv ] && [ ! -e /run/.containerenv ] \
+  || { echo "ABORT: container detected; update its image through its owner." >&2; exit 1; }
+for p in "$HOME/.local/bin/hermes" "$HOME/.hermes/hermes-agent"; do
+  [ ! -e "$p" ] && [ ! -L "$p" ] || { echo "ABORT: an installation already exists; use /hermes-update or native repair. It was preserved." >&2; exit 1; }
+done
+if command -v hermes >/dev/null 2>&1; then echo "ABORT: another Hermes launcher exists; inspect its installation owner." >&2; exit 1; fi
+for cmd in curl git tar; do command -v "$cmd" >/dev/null || { echo "ABORT: administrator must install $cmd first." >&2; exit 1; }; done
+REMOTE
 ```
 
-If the hostname is a readable VPS name (e.g. `root@digitalcrew-vps-1`), proceed.
-If it is a hex string (e.g. `root@dd635306c545`), abort — the user is inside a
-Docker container and must `exit` first.
+The administrator supplies system libraries and build prerequisites. PM owns its pinned
+tools and Python generations; do not probe arbitrary system venvs or install packages
+with ambient `pip`.
 
----
+## Step 2 — dry run
 
-## Step 2 — idempotency check (skip if already installed and healthy)
+Show the target, candidate version and immutable commit. The source installer will use
+`--non-interactive --skip-browser --skip-computer-use`, select the stable update channel,
+and leave provider credentials to `/hermes-model` or native `hermes -p default model`.
+Proceed after the user's existing installation authorization, or `AUTO_APPROVE=1`.
+
+## Step 3 — run the pinned official installer
+
+Download first and check the download succeeded before executing it. Do not pipe a failed
+network response into a shell. This step needs network access on the target when actually run.
 
 ```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" '
-  if [ -x "$HOME/.local/bin/hermes" ]; then
-    "$HOME/.local/bin/hermes" --version 2>/dev/null | grep -c "^"
-  elif command -v hermes >/dev/null 2>&1; then
-    hermes --version 2>/dev/null | grep -c "^"
-  elif docker ps --format "{{.Names}}" 2>/dev/null | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version 2>/dev/null | grep -c "^"
-  else
-    echo 0
-  fi
-' || echo 0)
-
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Hermes is already installed. Re-run with FORCE=1 to reinstall."
-  exit 0
+remote "HERMES_COMMIT='$HERMES_COMMIT' bash -s" <<'REMOTE' || { echo "FAIL: installation incomplete. Preserve ~/.hermes and inspect its logs/install.log; do not delete the launcher or user data."; exit 1; }
+set -e
+umask 077
+t=$(mktemp)
+trap 'rm -f "$t"' EXIT
+curl -fsSL --max-time 60 "https://raw.githubusercontent.com/NousResearch/hermes-agent/$HERMES_COMMIT/scripts/install.sh" -o "$t"
+[ -s "$t" ]
+if command -v sha256sum >/dev/null 2>&1; then
+  digest=$(sha256sum "$t")
+else
+  digest=$(shasum -a 256 "$t")
 fi
+digest=${digest%% *}
+[ "$digest" = 99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674 ]
+env HERMES_REPO_URL=https://github.com/NousResearch/hermes-agent.git \
+  HERMES_INSTALL_DIR="$HOME/.hermes/hermes-agent" HERMES_HOME="$HOME/.hermes" \
+  bash "$t" --commit "$HERMES_COMMIT" --channel stable \
+  --non-interactive --skip-browser --skip-computer-use
+REMOTE
 ```
 
-If a containerized Hostinger build is detected, exit 0 — Hermes is already
-managed by the image and reinstalling it would break the supervisor.
-
----
-
-## Step 3 — DRY RUN preview (always show before installing)
+## Step 4 — verify source identity and managed runtime
 
 ```bash
-cat <<EOF
-DRY RUN — the following will happen on ${VPS_USER:-local}@${VPS_IP:-localhost}:
-  1. Ensure curl + ca-certificates (apt-get install if missing). NEVER sudo the installer itself.
-  2. Run official installer:
-       curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \\
-         | bash -s -- --skip-setup --skip-browser
-  3. Export PATH=\$HOME/.local/bin:\$PATH for THIS shell (rc reload does not happen automatically).
-  4. Pin version: pip install "hermes-agent==${HERMES_VERSION:-0.15.2}"
-  5. Run hermes --version and capture hermes doctor to /tmp/hermes_doctor.log
-  6. NOT touched: ~/.hermes/.env, ~/.hermes/config.yaml (provider keys come via /hermes-model).
-
-The installer is NEVER run with sudo (it would create root-owned files the gateway can't read).
-EOF
+remote "HERMES_COMMIT='$HERMES_COMMIT' bash -s" <<'REMOTE' || { echo "FAIL: candidate identity/runtime not confirmed. Preserve the installation for native repair."; exit 1; }
+set -e
+H="$HOME/.local/bin/hermes"
+[ -x "$H" ]
+[ "$(git -C "$HOME/.hermes/hermes-agent" rev-parse HEAD)" = "$HERMES_COMMIT" ]
+v=$("$H" -p default --version)
+printf '%s\n' "$v" | grep -Eq '(^|[^0-9])0[.]22[.]5([^0-9]|$)'
+"$H" -p default pm status
+"$H" -p default doctor
+REMOTE
 ```
 
-If the user confirms (or `AUTO_APPROVE=1`), proceed to Step 4.
+A failed doctor is an unresolved installation check; report its actual diagnostics rather
+than declaring the install healthy. No inference or platform delivery has been tested yet.
+Native `hermes -p default model` and `hermes -p default gateway setup` perform attended setup; headless BYOK
+configuration is covered by `/hermes-model`.
 
----
+## Rollback — preserve native recovery state
 
-## Step 4 — install prerequisites (curl, ca-certificates) without breaking idempotency
+There is no uninstall-as-rollback step. Hermes PM stages dependency generations; preserve
+its working generation, source checkout, user data and logs after any failure. Use native
+`hermes -p default pm doctor` / `hermes -p default pm repair` or rerun the reviewed installer after inspecting
+the failure. Never remove a pre-existing launcher, `~/.hermes`, or run `pip uninstall`.
 
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  if ! command -v curl >/dev/null 2>&1; then
-    apt-get update && apt-get install -y curl ca-certificates
-  fi
-'
-```
 
-`apt-get` may need `sudo` on a non-root user, but on a typical VPS `$VPS_USER=root`
-so it runs directly. Never `sudo` the installer itself in Step 5.
+## Step 5 — hand off configuration without overstating readiness
 
----
+Installation and useful operation are different checks.
+A working launcher does not prove a model credential is valid.
+A ready local runtime does not prove Telegram can reach the intended chat.
+Do the following in order after this installation gate:
 
-## Step 5 — run the official installer (non-interactive, headless-safe)
+1. Choose provider/model through native attended setup or `/hermes-model`.
+2. Verify one successful inference request with the expected output.
+3. Configure a private platform through native gateway setup or its supported recipe.
+4. Confirm the configured bot identity and numeric access policy.
+5. Observe a real message round trip from an allowed user.
+6. Enable scheduled work only after its intended destination is confirmed.
 
-`--skip-setup` keeps the install non-interactive (provider, model, and keys
-are wired later by `/hermes-model` via `hermes config set`).
-`--skip-browser` avoids the Chromium-deps failure on a headless VPS (the #1
-headless install failure).
+Do not turn on every tool, plugin, connector or platform just because it is available.
+The installer intentionally skipped browser/computer-use tools.
+Native PM can install those tools later if the user needs them.
+Skipping them is a persistent native installation choice, not an installation failure.
 
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
-    | bash -s -- --skip-setup --skip-browser
-'
-```
+### Ownership and migration boundaries
 
-Failure detection:
+The default source launcher belongs to the account that ran the installer.
+A shell running as root and a gateway running as another account read different homes.
+Confirm the intended account before configuring keys or installing a service.
+A readable hostname is not proof that the process is on the host.
+Use the container markers and installation-owner checks rather than a hostname guess.
+Do not update a container's interior when its image/supervisor owns the installation.
+Do not replace a packaged Desktop launcher with a source checkout.
+A pre-existing checkout, even if incomplete, may contain changes worth recovering.
+The fresh-install gate therefore refuses it instead of deleting it.
 
-```bash
-ssh "$VPS_USER@$VPS_IP" 'test -x "$HOME/.local/bin/hermes"' \
-  || { echo "FAIL: installer ran but hermes binary not present. Rolling back."; rollback; exit 1; }
-```
+### When installation fails
 
-> **Windows (native, PowerShell)** — if the target is a Windows machine, run
-> instead: `iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)`.
-> For an always-on agent, prefer a Linux VPS regardless.
-
-> **Attended / manual install** — `hermes setup` runs the interactive wizard for
-> provider, model, and keys. Use it instead of leaving wiring to `/hermes-model`
-> when a human is at the keyboard.
-
----
-
-## Step 6 — make hermes resolvable and pin the version
-
-The rc-file PATH edit does NOT reach the live shell. Every later step in this
-skill (and in every other hstack skill) uses the absolute path
-`$HOME/.local/bin/hermes`.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  export PATH="$HOME/.local/bin:$PATH"
-  HERMES="$HOME/.local/bin/hermes"
-  test -x "$HERMES" || { echo "FAIL: $HERMES not executable"; exit 1; }
-
-  # Pin to a known-good build. GitHub tag v2026.5.29.2 == PyPI 0.15.2.
-  pip install --quiet "hermes-agent=='"${HERMES_VERSION:-0.15.2}"'" 2>/dev/null || \
-    pip install --quiet --user "hermes-agent=='"${HERMES_VERSION:-0.15.2}"'"
-'
-```
-
-The `pip install` may fail harmlessly if the installer already pinned the same
-version — that is fine and the next step verifies the result.
-
----
-
-## Step 7 — verify install (hard gate)
-
-```bash
-VER=$(ssh "$VPS_USER@$VPS_IP" '"$HOME/.local/bin/hermes" --version 2>/dev/null' || echo "")
-case "$VER" in
-  *0.15.*|*0.17.*)
-    echo "OK: Hermes $VER installed." ;;
-  "")
-    echo "FAIL: hermes --version returned nothing. Rolling back."
-    rollback
-    exit 1 ;;
-  *)
-    echo "WARN: Hermes version is $VER — expected 0.15.x or 0.17.x. Continuing."
-    ;;
-esac
-```
-
-Capture `hermes doctor` for the troubleshooting trail — but do NOT gate on its
-exit code; doctor warns about optional components that are normal to be missing
-right after install.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '"$HOME/.local/bin/hermes" doctor 2>&1 | tee /tmp/hermes_doctor.log' \
-  || echo "WARN: hermes doctor returned non-zero — see /tmp/hermes_doctor.log on the VPS."
-```
-
----
-
-## Step 8 — verify the surrounding toolchain (best-effort)
-
-Hermes itself works without these, but the common skills downstream
-(`/hermes-skills`, `/hermes-memory`) expect node and python.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  for cmd in node python3 git; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-      printf "%-8s %s\n" "$cmd" "$($cmd --version 2>&1 | head -1)"
-    else
-      printf "%-8s MISSING (install before /hermes-skills)\n" "$cmd"
-    fi
-  done
-'
-```
-
-Missing tools are a warning, not a failure — `/hermes-skills` will install what
-it needs when it runs.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
-rollback() {
-  ssh "$VPS_USER@$VPS_IP" '
-    pip uninstall -y hermes-agent 2>/dev/null || true
-    rm -f "$HOME/.local/bin/hermes" 2>/dev/null || true
-    # Do NOT touch ~/.hermes — user secrets and config may live there from a prior install.
-  '
-  echo "Rolled back. Hermes binary removed; ~/.hermes preserved."
-}
-```
-
----
+Keep the exact commit and installer exit status in the incident record.
+Inspect the target's `logs/install.log` as the same installation account.
+Do not paste whole logs into chat without checking for credentials or private paths.
+A network failure is not evidence that the user must change provider credentials.
+A dependency-generation failure is not repaired by arbitrary system pip installs.
+A native process guard should be investigated, not bypassed with force flags.
+A doctor warning should be classified against the capabilities the user requested.
+If optional tooling was intentionally skipped, explain that specific limitation.
+If the launcher or managed environment is broken, keep installation unverified.
+If another installation owner is found, stop this recipe and use that owner.
 
 ## Pitfalls
 
 | # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | `hermes: command not found` after successful install | The rc-file PATH edit doesn't reach the live shell | Use absolute `$HOME/.local/bin/hermes`; tell the user to `source ~/.bashrc` or restart the terminal |
-| 2 | Installing inside a Docker container by mistake | Install vanishes when container is recreated; SSH keys invisible to host sshd | Step 1 hostname check; abort on hex hostname |
-| 3 | `sudo curl ... | bash` for the installer | Creates root-owned files the gateway can't read later | NEVER sudo the installer; `sudo rm /usr/local/bin/hermes` if a prior sudo install exists, then reinstall |
-| 4 | Chromium-deps failure on headless VPS | Default install pulls a browser stack | Always pass `--skip-browser` |
-| 5 | Interactive wizard hangs in non-TTY agent shell | Default `install.sh` runs `hermes setup` after install | Always pass `--skip-setup`; wire provider via `/hermes-model` |
-| 6 | Docker UID mismatch on NAS hosts | Tags like `v2026.4.23`, `main`, `latest` ship with the wrong UID | Pin a tagged image; honor `HERMES_UID`/`HERMES_GID`; run CLI + gateway as the same UID |
-| 7 | `echo >>` into `~/.bashrc` to fix PATH | Can merge onto a prior line without trailing newline (same failure class as `authorized_keys`) | Use `printf '\n%s\n'` if you ever edit rc files; better, just use the absolute path |
-| 8 | `gateway restart` after install to "pick up" env | Restart does NOT reliably re-read `.env` — but `/hermes-install` does not run the gateway anyway | The gateway is started by downstream skills (`/hermes-skills`, `/hermes-home`); always `stop` + `run`, never `restart`, in those skills |
-| 9 | Putting provider keys in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `hermes config set` (this skill does NOT write secrets) |
-| 10 | sed with `/` delimiter on tokens later | Tokens contain `/+=`; sed breaks | Use `|` delimiter when editing tokens in downstream skills |
+|---|---|---|---|
+| 1 | Ambient `pip install hermes-agent` | It can target another project/runtime | Use the official immutable source installer |
+| 2 | Installing from moving `main` | It defeats candidate identity | Pin the installer URL and source commit |
+| 3 | Ignoring a failed download | An empty shell pipeline can appear successful | Download to a private file and check its status |
+| 4 | Running under the wrong account | Keys, launcher and service read different homes | Install as the intended service account |
+| 5 | Deleting the launcher on failure | It may destroy a working older installation | Refuse existing installs and preserve recovery state |
+| 6 | Claiming the stable channel pins a version | The channel follows future releases | Distinguish immutable initial commit from update policy |
+| 7 | Treating parser tests as live proof | Parsers do not start services or call providers | Keep runtime and delivery evidence separate |
+| 8 | Guessing old venv paths | PM owns managed generations | Use the published wrapper and native PM diagnostics |
+| 9 | Installing in an ephemeral container | Recreation discards the changes | Update the image through its owner |
+| 10 | Calling installation a complete deployment | No model/platform has been tested | Complete the ordered configuration handoff |
 
----
+## Step 6 — evidence to report
+
+Record the observed version and source commit, not just the requested ones.
+Report whether native PM and doctor completed successfully.
+State which optional tools were intentionally excluded.
+State that provider inference is still unverified at this boundary.
+State that real platform delivery is still unverified at this boundary.
+Retain local recovery diagnostics if any step failed.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working (or running locally)
-- [ ] Host vs container check passed (hostname is not a hex container id)
-- [ ] Idempotency check ran (skipped if already installed, or `FORCE=1` overrode)
-- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
-- [ ] Installer ran NON-interactively with `--skip-setup --skip-browser`, NOT under sudo
-- [ ] `$HOME/.local/bin/hermes` exists and is executable
-- [ ] `hermes --version` reports `0.15.x` or `0.17.x` (pinned to `${HERMES_VERSION:-0.15.2}`)
-- [ ] `hermes doctor` captured to `/tmp/hermes_doctor.log` (not gated on exit code)
-- [ ] Toolchain probe shown (node/python3/git versions or MISSING markers)
-- [ ] No secrets written by this skill (provider keys come via `/hermes-model`)
-- [ ] Rollback function defined: removes binary, preserves `~/.hermes`
+- [ ] Candidate opt-in and exact version/commit were explicit
+- [ ] Installation ownership and fresh-host prerequisites checked before mutation
+- [ ] Official installer completed with managed dependencies and no interactive setup
+- [ ] Source commit, version, PM status and doctor verified
+- [ ] Provider inference and platform delivery are still reported as unverified
+- [ ] Existing installations and user data preserved on refusal/failure
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for install and PATH failure modes.
+Sources checked against v0.22.5: [official installer](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/scripts/install.sh),
+[installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).

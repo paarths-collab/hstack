@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 
 /** Events that change the VPS (reads like `--version`, `mcp list`, `config show`, `logs` are excluded). */
-export const WRITE_EVENT = /^hermes (config set|mcp add|mcp remove|gateway (stop|run|start|install)|setup|cron (create|remove))/;
+export const WRITE_EVENT = /^hermes (config set|mcp add|mcp remove|gateway (stop|run|start|install|ensure)|setup|cron (create|remove))/;
 
 export const writeEvents = (run) => run.sb.events().filter((e) => WRITE_EVENT.test(e));
 export const curlEvents = (run) => run.sb.events().filter((e) => e.startsWith("curl"));

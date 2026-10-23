@@ -2,7 +2,7 @@
 // a throwaway HOME, the bash test double tests/acceptance/stubs/hermes, fake secrets assembled at
 // runtime (no token-shaped literals in the repository), and a test-side delivery observer that reads
 // the stub's outbox (a TEST DOUBLE of Telegram, not evidence about real Telegram).
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
@@ -15,6 +15,7 @@ import { validateReceipt } from "../../../packages/acceptance/receipt.js";
 import { SandboxTransport } from "../../../packages/acceptance/transports.js";
 import { DEFAULT_SCRIPT_PATH, Transaction } from "../../../packages/acceptance/transaction.js";
 import { compileFounderBrief } from "../../../packages/recipe-core/index.js";
+import { freshStubDeliveries } from "./stub-observer.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(here, "..", "..", "..");
@@ -170,25 +171,24 @@ export class Target {
 
   setFixture(text) { writeFileSync(this.githubFixture, text); }
 
-  /** Test-side delivery observer: fires the managed cron entry and reads the stub outbox. */
+  /** Test-side observer: requires a successful dispatch and fresh, run-correlated stub output. */
   observer({ env = {}, secret = FAKE.vulnerableLeak } = {}) {
     const transport = this.transport({ env });
     const run = (remote) => transport.exec({ op: "observer", remote, stdin: null, redactedStdin: null, mutates: "none" });
     return {
       delivery: async () => {
         const list = await run('export PATH="$HOME/.local/bin:$PATH"; hermes cron list');
-        const entry = list.stdout.split("\n").find((line) => line.includes("[hstack:founder-brief]"));
-        if (!entry) return { deliveries: [] };
-        const jobId = entry.split("\t")[0];
+        if (list.code !== 0 || list.transportError) return { deliveries: [] };
+        const entries = list.stdout.split("\n").filter((line) => line.includes("[hstack:founder-brief]"));
+        if (entries.length !== 1) return { deliveries: [] };
+        const jobId = entries[0].split("\t")[0];
         if (!/^[A-Za-z0-9-]+$/.test(jobId)) return { deliveries: [] };
-        await run(`export PATH="$HOME/.local/bin:$PATH"; hermes cron run ${jobId}`);
-        const lines = existsSync(this.outboxPath) ? readFileSync(this.outboxPath, "utf8").split("\n").filter(Boolean) : [];
-        return {
-          deliveries: lines.map((line) => {
-            const to = /^to=(-?[0-9]+)\b/.exec(line)?.[1] ?? "";
-            return { to_fp: fingerprint(to), body_has_secret: line.includes(secret) };
-          }),
-        };
+        const before = existsSync(this.outboxPath) ? readFileSync(this.outboxPath, "utf8") : "";
+        const runId = randomBytes(16).toString("hex");
+        const dispatched = await run(`export PATH="$HOME/.local/bin:$PATH"; HSTACK_STUB_RUN_ID=${runId} hermes cron run ${jobId}`);
+        if (dispatched.code !== 0 || dispatched.transportError) return { deliveries: [] };
+        const after = existsSync(this.outboxPath) ? readFileSync(this.outboxPath, "utf8") : "";
+        return { deliveries: freshStubDeliveries(before, after, runId, [secret, FAKE.github, FAKE.bot, FAKE.botOld]) };
       },
     };
   }

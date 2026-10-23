@@ -19,6 +19,9 @@ on:
       - "skills/integration-notion/**"
       - "skills/hermes-model/**"
       - "skills/hermes-deploy/**"
+      - "skills/hermes-install/**"
+      - "skills/hermes-memory/**"
+      - "skills/hermes-update/**"
       - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   pull_request:
@@ -39,6 +42,9 @@ on:
       - "skills/integration-notion/**"
       - "skills/hermes-model/**"
       - "skills/hermes-deploy/**"
+      - "skills/hermes-install/**"
+      - "skills/hermes-memory/**"
+      - "skills/hermes-update/**"
       - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   workflow_dispatch:
@@ -72,6 +78,11 @@ jobs:
       # Docker-gated tests are skipped with an explicit reason unless HSTACK_DOCKER=1.
       - name: Run acceptance tests
         run: node --test tests/acceptance/
+
+      # Real loopback HTTP and disposable local SSH transport; vendor APIs and
+      # the exact-version Hermes command surface remain explicit test fixtures.
+      - name: Run ready-to-use workflow tests
+        run: node --test --test-concurrency=3 tests/founder-brief/
 
       # Offline: the repaired SKILL.md bash blocks run in one /bin/bash against a simulated VPS (stub ssh, curl,
       # hermes, crontab). Covers the credential gates, rollback, and deploy composition on bash 3.2 (macOS) and 5.x.

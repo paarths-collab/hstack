@@ -14,12 +14,15 @@ Do everything autonomously; stop and ask the user ONLY for the things a machine
 cannot do (mint a token, paste an API key, scan a QR, click OAuth, send the first
 "hello," provision the VPS plan/region).
 
-**Honest deploy picture (verified 2026-06):** Hermes is pinned to **v0.15.2** (the
-current stable). Use the absolute binary path `~/.local/bin/hermes` everywhere —
-PATH is not refreshed in a fresh non-login shell. The gateway has a known memory
-leak (#25315) → a nightly `gateway restart` cron is part of the deploy. NEVER
-default to a local/small model; frontier models only (DeepSeek V4 cheapest good,
-Claude Sonnet / GPT for quality).
+**Compatibility-candidate deployment.** This recipe explicitly opts into v0.22.5,
+not hstack's promoted runtime pin. The official source installer and native gateway
+lifecycle replace the old pip/daemon assumptions. The historical unconditional nightly
+restart workaround is removed: preserve existing cron jobs and review them separately.
+Model selection is the user's choice; current Hermes also supports managed local models,
+while this bounded unattended recipe configures the four BYOK providers listed below.
+Only Telegram and the default, exclusively owned host gateway are in scope.
+Every native call selects `-p default`, regardless of the saved active profile. Installer, service, skill
+and plugin side effects are not all reversed by the four-file deploy recovery point.
 
 ---
 
@@ -28,11 +31,12 @@ Claude Sonnet / GPT for quality).
 | Variable | What it is | How to get it |
 |----------|------------|---------------|
 | `$VPS_IP` | IP/hostname of the target VPS | Hostinger / DigitalOcean / Hetzner dashboard. Default recommendation: **Hostinger** (one-click). |
-| `$VPS_USER` | SSH user (typically `root`) | Hosting dashboard |
+| `$VPS_USER` | Intended installation/service account | Hosting dashboard |
+| `$HERMES_VERSION`, `$CANDIDATE_ACKNOWLEDGED` | Explicitly `0.22.5` and `1` | Unpromoted compatibility-candidate opt-in |
 | `$MODEL_PROVIDER` | `openrouter` \| `anthropic` \| `openai` \| `deepseek` | User choice; recommend DeepSeek for cost or Claude Sonnet for quality |
 | `$MODEL_API_KEY` | API key for the chosen provider (stored as `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` by `/hermes-model`) | Provider dashboard |
 | `$HERMES_MODEL` | Exact model id for that provider (no default — ask; do not guess) | Provider model catalogue. Documented examples: `anthropic/claude-sonnet-4` on `openrouter`, `claude-sonnet-4-6` on `anthropic` |
-| `$PLATFORM` | `telegram` (recommended first), `discord`, `whatsapp`, `slack`, `mattermost`, `teams`, `google-chat`, `signal` | User choice; **Telegram first — fully headless** |
+| `$PLATFORM` | `telegram` only for this candidate route | Other platform recipes require separate native lifecycle migration |
 | `$HOME_CHANNEL_ID` | ID of the home channel for cron + notifications (format depends on `$PLATFORM`; checked in Step 0) | Platform admin UI |
 
 Platform credentials (bot token, app token, allowlist user IDs, ...) are **not** gathered
@@ -48,6 +52,7 @@ The user must also provide (cannot be automated):
 ### Confirm SSH access before doing anything
 
 ```bash
+[ "${PLATFORM:-}" = telegram ] || { echo "ABORT: this compatibility candidate supports Telegram only; other platform recipes still require native lifecycle migration. Nothing was written."; exit 1; }
 ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
     "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
   || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
@@ -145,62 +150,144 @@ deploy_validate_inputs() {
 deploy_snapshot() {
   remote "DEPLOY_SKILL='$DEPLOY_SKILL' bash -s" <<'REMOTE'
 set -e
-d="$HOME/.hermes/.hstack-backup/$DEPLOY_SKILL"
-# A leftover snapshot means an earlier run wrote something and never finished or rolled
-# back. Snapshotting now would capture that half-written state as "known good".
-if [ -d "$d" ]; then
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$DEPLOY_SKILL"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
   echo "snapshot: $d exists — a previous $DEPLOY_SKILL run did not finish. Run deploy_rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-mkdir -p "$d" && chmod 700 "$HOME/.hermes/.hstack-backup" "$d"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $DEPLOY_SKILL snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$DEPLOY_SKILL.XXXXXX")
 for f in .env config.yaml SOUL.md; do
-  rm -f "$d/$f" "$d/$f.absent"
-  if [ -f "$HOME/.hermes/$f" ]; then cp -p "$HOME/.hermes/$f" "$d/$f"; else : > "$d/$f.absent"; fi
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
 done
-rm -f "$d/crontab" "$d/crontab.absent"
-if crontab -l > "$d/crontab" 2>/dev/null; then :; else rm -f "$d/crontab"; : > "$d/crontab.absent"; fi
-chmod 600 "$d"/* 2>/dev/null || true
+if crontab -l > "$t/crontab" 2> "$t/crontab.error"; then
+  chmod 600 "$t/crontab"
+elif grep -qi 'no crontab' "$t/crontab.error"; then
+  rm -f "$t/crontab"; : > "$t/crontab.absent"; chmod 600 "$t/crontab.absent"
+else
+  cat "$t/crontab.error" >&2; exit 1
+fi
+rm -f "$t/crontab.error"
+for f in .env config.yaml SOUL.md crontab; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
 REMOTE
 }
-
 # deploy_rollback: restore the exact pre-deploy .env, config.yaml, SOUL.md and crontab (so a
 # FORCE=1 re-run that fails puts the previous working state back), then reload the gateway.
 deploy_rollback() {
   remote "DEPLOY_SKILL='$DEPLOY_SKILL' bash -s" <<'REMOTE'
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
 d="$HOME/.hermes/.hstack-backup/$DEPLOY_SKILL"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
 [ -d "$d" ] || { echo "rollback: no snapshot for $DEPLOY_SKILL; nothing was written."; exit 0; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml SOUL.md crontab; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
 for f in .env config.yaml SOUL.md; do
-  if [ -f "$d/$f" ]; then cp -p "$d/$f" "$HOME/.hermes/$f"
-  elif [ -f "$d/$f.absent" ]; then rm -f "$HOME/.hermes/$f"; fi
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
 done
 [ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
-if [ -f "$d/crontab" ]; then crontab "$d/crontab"
-elif [ -f "$d/crontab.absent" ]; then crontab -r 2>/dev/null || true; fi
+if [ -f "$d/crontab" ]; then
+  crontab "$d/crontab"
+  restored_crontab=$(crontab -l)
+  [ "$restored_crontab" = "$(cat "$d/crontab")" ]
+elif [ -f "$d/crontab.absent" ]; then
+  crontab -r 2>/dev/null || true
+  if restored_crontab=$(crontab -l 2>&1); then
+    echo "rollback: crontab removal failed; active snapshot retained for recovery." >&2; exit 1
+  elif ! printf '%s' "$restored_crontab" | grep -qi 'no crontab'; then
+    echo "rollback: crontab absence could not be verified; active snapshot retained for recovery." >&2; exit 1
+  fi
+else
+  echo "rollback: missing crontab backup; active snapshot retained for recovery." >&2; exit 1
+fi
 H=$HOME/.local/bin/hermes
-"$H" gateway stop || true
+"$H" -p default gateway stop
 GW_WANTED=1
 if [ -f "$d/.env.absent" ]; then echo "rollback: gateway left stopped (there was no .env before this deploy)."; GW_WANTED=0
-else sleep 2; "$H" gateway run --daemon || true; fi
-rm -rf "$d.prev"; mv "$d" "$d.prev"
+else sleep 2; "$H" -p default gateway ensure --json --timeout 60 >/dev/null; fi
 if [ "$GW_WANTED" = 1 ]; then
   sleep 3
-  st=$("$H" gateway status 2>&1 || true)
-  if printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
+  status_rc=0
+  st=$("$H" -p default gateway status 2>&1) || status_rc=$?
+  if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
      || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-    echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes gateway start) and check hermes logs"
+    echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
     exit 1
   fi
 fi
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
 echo "rollback: restored ~/.hermes/.env, config.yaml, SOUL.md and crontab to their pre-$DEPLOY_SKILL state."
 REMOTE
 }
 
 # deploy_finish: mark the run successful; keep the snapshot as .prev for a manual undo.
 deploy_finish() {
-  remote "d=\$HOME/.hermes/.hstack-backup/$DEPLOY_SKILL; rm -rf \"\$d.prev\"; [ -d \"\$d\" ] && mv \"\$d\" \"\$d.prev\"; true"
+  remote "SKILL_NAME='$DEPLOY_SKILL' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 
 deploy_validate_inputs || exit 1
+[ "$PLATFORM" = telegram ] || { echo "ABORT: this compatibility candidate supports Telegram only; other platform recipes still require native lifecycle migration. Nothing was written."; exit 1; }
 ```
 
 Rules for calling them: failures **before** `deploy_snapshot` (steps 1-4, the user declining the
@@ -208,11 +295,13 @@ dry run) just `exit 1` with "Nothing was written" — they do not call `deploy_r
 failure **after** `deploy_snapshot` does `deploy_rollback; exit 1`. `deploy_finish` runs after the last
 automated check.
 
-**Unverified CLI surface.** Upstream's CLI docs list `hermes gateway run|start|stop|restart|status|install`. `hermes gateway run --daemon` is NOT in those docs: they are this repo's declared adapter surface, unverified against upstream. If a call fails with "unknown option/command", check `hermes gateway --help` on the VPS and adapt; the hard-gate and rollback logic does not depend on the exact flags.
+Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
+This candidate lifecycle recipe assumes the exclusive default profile and its one host gateway. Inspect other profiles and live work first: the current gateway can serve multiple profiles, so stop/start is not isolated to one bot. Do not use `--force`, `--all` or `--yes` to evade a refusal. Named-profile and shared-host deployment remain outside this recipe.
 
-Also unverified against upstream's CLI docs, and used by this skill: `hermes config set KEY -- value`
-(upstream documents `<key> <value> [--force]`; the `--` that protects negative Telegram group
-IDs is this repo's assumption), `hermes logs`, and `hermes -z`. `SIGNAL_HOME_CHANNEL` is not in
+
+**Tagged native gateway surface.** v0.22.5 supports service `install --if-missing --no-start-now`, `start`, `stop`, and `ensure --json --timeout 60`. `run` is foreground; there is no `--daemon` option. Source/parser checks do not establish live target compatibility.
+
+Also unverified against upstream's CLI docs, and used by this skill: `hermes -p default config set KEY -- value` (argparse positional handling accepts negative IDs after `--`), `hermes -p default logs`, and `hermes -p default -z`. `SIGNAL_HOME_CHANNEL` is not in
 upstream's env-var reference page (only `SIGNAL_HOME_CHANNEL_NAME` is), so Step 6 does not write it
 unless `CONFIRM_SIGNAL_HOME_CHANNEL=1`.
 
@@ -237,12 +326,12 @@ Expected: a real hostname (not a container hex), ≥5 GB free, ≥2 GB RAM.
 ## Step 2 — idempotency check (skip if Hermes is already deployed)
 
 ```bash
-ALREADY=$(remote 'command -v hermes >/dev/null 2>&1 && hermes --version 2>/dev/null | grep -ci hermes || true' 2>/dev/null)
+ALREADY=$(remote 'command -v hermes >/dev/null 2>&1 && hermes -p default --version 2>/dev/null | grep -ci hermes || true' 2>/dev/null)
 ALREADY=${ALREADY:-0}
 
 if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
   echo "Hermes is already deployed on $VPS_IP. Set FORCE=1 to redeploy, or run /hermes-status."
-  remote "~/.local/bin/hermes --version; ~/.local/bin/hermes gateway status"
+  remote "~/.local/bin/hermes -p default --version; ~/.local/bin/hermes -p default gateway status"
   exit 0
 fi
 ```
@@ -255,7 +344,7 @@ fi
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
 
-  1. Install Hermes v0.15.2 via /hermes-install
+  1. Install the explicitly selected Hermes v0.22.5 compatibility candidate via /hermes-install
   2. Configure model via /hermes-model: provider $MODEL_PROVIDER, model $HERMES_MODEL
      (key $MODEL_KEYVAR: length ${#MODEL_API_KEY}, prefix: ${MODEL_API_KEY:0:4}...)
   3. Wire platform via /platform-$PLATFORM (it collects its own credentials and the
@@ -264,15 +353,15 @@ DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   5. Configure memory (built-in default) via /hermes-memory
   6. Write personality to ~/.hermes/SOUL.md (< 1 KB) via /hermes-soul
   7. Set home channel: $HOME_VAR=$HOME_CHANNEL_ID (HOME_WRITE=$HOME_WRITE; Signal's variable name is unverified upstream, so 0 = skipped)
-  8. Install autostart + nightly gateway restart cron
+  8. Install native gateway service and verify readiness; leave the crontab unchanged
 
 Verification after each step:
-  - hermes --version exits 0
-  - hermes -z 'reply OK' returns OK
-  - hermes gateway status shows running
+  - hermes -p default --version exits 0
+  - hermes -p default -z 'reply OK' returns OK
+  - hermes -p default gateway status shows running
   - First "hello" on $PLATFORM returns a reply
 
-Secrets are written only by the delegated skills (over ssh stdin, 'hermes config set',
+Secrets are written only by the delegated skills (over ssh stdin, 'hermes -p default config set',
 file chmod 600) and are NEVER printed in chat or logged.
 EOF
 ```
@@ -283,14 +372,18 @@ If the user confirms (or `AUTO_APPROVE=1`), proceed to Step 4.
 
 ## Step 4 — install Hermes (delegate to /hermes-install)
 
-Run `/hermes-install` (it pins v0.15.2, skips the interactive setup wizard that hangs a
+Run `/hermes-install` with `HERMES_VERSION=0.22.5` and `CANDIDATE_ACKNOWLEDGED=1` (it pins the candidate commit, skips the interactive setup wizard that hangs a
 non-TTY shell, and writes `~/.local/bin/hermes`). Do not hand-roll an installer line here.
 
 Verify (don't trust the installer — check):
 
 ```bash
-INSTALLED=$(remote '~/.local/bin/hermes --version 2>/dev/null | grep -c "0.15.2" || true' 2>/dev/null)
-[ "${INSTALLED:-0}" -ge 1 ] || { echo "ABORT: Hermes v0.15.2 not installed (see /hermes-install). Nothing was configured."; exit 1; }
+[ "${HERMES_VERSION:-}" = 0.22.5 ] && [ "${CANDIDATE_ACKNOWLEDGED:-0}" = 1 ] \
+  || { echo "ABORT: opt into the unpromoted v0.22.5 compatibility candidate explicitly. Nothing was configured."; exit 1; }
+INSTALLED=$(remote '~/.local/bin/hermes -p default --version 2>/dev/null') \
+  || { echo "ABORT: could not read Hermes version. Nothing was configured."; exit 1; }
+printf '%s\n' "$INSTALLED" | grep -Eq '(^|[^0-9])0[.]22[.]5([^0-9]|$)' \
+  || { echo "ABORT: Hermes v0.22.5 candidate not installed (see /hermes-install). Nothing was configured."; exit 1; }
 
 # First write of this deploy follows: take the snapshot now.
 deploy_snapshot || { echo "ABORT: could not snapshot ~/.hermes state. Nothing was written."; exit 1; }
@@ -302,7 +395,7 @@ deploy_snapshot || { echo "ABORT: could not snapshot ~/.hermes state. Nothing wa
 
 Secrets are written by the skills that own them, because those skills hold the format
 check, the live pre-flight, the allowlist and the rollback that an inline
-`hermes config set` here would bypass. Hand off the same variables in this session:
+`hermes -p default config set` here would bypass. Hand off the same variables in this session:
 
 ```bash
 export VPS_IP VPS_USER MODEL_PROVIDER MODEL_API_KEY HERMES_MODEL
@@ -386,7 +479,7 @@ done
 # Home channel (non-secret). Both names were validated locally before transport. `--` keeps a
 # negative Telegram group ID from being parsed as an option (unverified syntax, see Step 0 notes).
 if [ "$HOME_WRITE" = "1" ]; then
-  "$H" config set "$HOME_VAR" -- "$HOME_CHANNEL_ID"
+  "$H" -p default config set "$HOME_VAR" -- "$HOME_CHANNEL_ID"
   chmod 600 "$ENVF"
   have "$HOME_VAR" || { echo "FAIL: $HOME_VAR not written"; exit 1; }
   HOME_NOTE="$HOME_VAR set"
@@ -405,33 +498,31 @@ The gateway needs **one restart "nudge"** after first platform setup — handled
 
 ---
 
-## Step 7 — reload the gateway (stop + run, NOT restart) + install autostart
+## Step 7 — install/start the native supervised gateway
 
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
+Use the native service lifecycle. Do not force a second foreground dispatcher or bypass a live-work/supervisor refusal.
 
 ```bash
-remote "~/.local/bin/hermes gateway stop || true"
+remote "~/.local/bin/hermes -p default gateway stop" \
+  || { echo "FAIL: gateway stop refused. Rolling back."; deploy_rollback; exit 1; }
 sleep 2
-remote "~/.local/bin/hermes gateway run --daemon" \
-  || { echo "FAIL: gateway did not start. Rolling back."; deploy_rollback; exit 1; }
-sleep 5
+# The next block installs/starts the native supervised service.
+
 ```
 
-Install autostart so the gateway survives reboot, plus the nightly OOM-leak
-mitigation cron:
+Install the native service idempotently, then use its supported background start and
+readiness boundary. The old unconditional 03:30 restart workaround is not retained:
+there is no current-version evidence here that every deployment needs it. Existing
+cron jobs, including previously installed restarts, are left unchanged for review.
 
 ```bash
-remote 'bash -s' <<'REMOTE' || { echo "FAIL: autostart/cron install. Rolling back."; deploy_rollback; exit 1; }
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native gateway service setup. Rolling back."; deploy_rollback; exit 1; }
 set -e
 H=~/.local/bin/hermes
-
-# Autostart as a systemd/launchd service (documented as `hermes gateway install`)
-"$H" gateway install
-
-# Nightly gateway restart at 03:30 — mitigates leak #25315
-( crontab -l 2>/dev/null | grep -v 'hermes gateway restart' || true
-  echo '30 3 * * * ~/.local/bin/hermes gateway restart >/dev/null 2>&1'
-) | crontab -
+"$H" -p default gateway install --if-missing --no-start-now
+"$H" -p default gateway start
+"$H" -p default gateway ensure --json --timeout 60 >/dev/null
+echo "OK: native gateway service ready; crontab unchanged."
 REMOTE
 ```
 
@@ -442,10 +533,20 @@ REMOTE
 ```bash
 REGISTERED=0
 for i in $(seq 1 6); do
-  if remote "~/.local/bin/hermes logs 2>&1 | tail -200" \
-       | grep -qiE "gateway.*ready|platform.*${PLATFORM}.*(ok|connected)|registered.*tool"; then
+  LOG_STATUS=0
+  PLATFORM_LOG=$(remote "~/.local/bin/hermes -p default logs 2>&1") || LOG_STATUS=$?
+  # Generic gateway/tool readiness does not prove this platform connected. The latest
+  # status-bearing line for the selected platform wins, including a later failure.
+  if [ "$LOG_STATUS" = 0 ] && printf '%s\n' "$PLATFORM_LOG" | tail -200 | awk -v p="$PLATFORM" '
+    {
+      line = tolower($0)
+      if (line !~ ("(^|[^[:alnum:]_])" p "([^[:alnum:]_]|$)")) next
+      if (line ~ /not[[:space:]_-]+(connected|ready)|(^|[^[:alnum:]_])(disconnected|failed|error|stopped)([^[:alnum:]_]|$)/) connected = 0
+      else if (line ~ /(^|[^[:alnum:]_])(ok|connected|ready)([^[:alnum:]_]|$)/) connected = 1
+    }
+    END { exit !connected }'; then
     REGISTERED=1
-    echo "OK: gateway up, $PLATFORM connected, tools registered."
+    echo "OK: $PLATFORM connection confirmed in gateway logs."
     break
   fi
   sleep 5
@@ -459,7 +560,12 @@ done
 
 ```bash
 # 9a. Model smoke test
-OK=$(remote "~/.local/bin/hermes -z 'reply with the single word OK' 2>/dev/null" | tr -d '[:space:]')
+MODEL_STATUS=0
+MODEL_REPLY=$(remote "~/.local/bin/hermes -p default -z 'reply with the single word OK' 2>/dev/null") || MODEL_STATUS=$?
+if [ "$MODEL_STATUS" != 0 ]; then
+  echo "FAIL: model smoke command failed. Rolling back."; deploy_rollback; exit 1
+fi
+OK=$(printf '%s' "$MODEL_REPLY" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed '/^$/d')
 case "$OK" in
   OK) echo "OK: model reachable and returning text." ;;
   "") echo "FAIL: empty response — check model API key. Rolling back."; deploy_rollback; exit 1 ;;
@@ -470,15 +576,16 @@ case "$OK" in
 esac
 
 # 9b. Gateway status. "not running" must not count as running, so negatives are tested first.
-GWST=$(remote '~/.local/bin/hermes gateway status 2>&1 || true')
-if printf '%s' "$GWST" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
+GW_RC=0
+GWST=$(remote '~/.local/bin/hermes -p default gateway status 2>&1') || GW_RC=$?
+if [ "$GW_RC" != 0 ] || printf '%s' "$GWST" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$GWST" | grep -qiE 'running|active|started|online|ready'; then
   echo "FAIL: gateway not reported running. Rolling back."; deploy_rollback; exit 1
 fi
 echo "OK: gateway status reports running."
 
 # Automated checks passed: keep the snapshot as .prev for a manual undo.
-deploy_finish
+deploy_finish || exit 1
 
 # 9c. First "hello" on $PLATFORM — USER step (cannot be automated)
 echo "ACTION REQUIRED: send a real 'hello' on $PLATFORM and confirm Hermes replies."
@@ -498,16 +605,16 @@ called, and the snapshot stays so the operator can re-check or run `deploy_rollb
 every failure after the snapshot. It restores the pre-deploy `~/.hermes/.env`,
 `config.yaml`, `SOUL.md` and crontab from `~/.hermes/.hstack-backup/hermes-deploy`, stops
 the gateway, and (when an `.env` existed before) starts it again on the restored config and
-checks `hermes gateway status`: if the gateway is not reported running it prints `files restored,
-but the gateway did NOT come back` and exits non-zero (start it with `hermes gateway start`, then
-check `hermes logs`).
+checks `hermes -p default gateway status`: if the gateway is not reported running it prints `files restored,
+but the gateway did NOT come back` and exits non-zero (start it with `hermes -p default gateway start`, then
+check `hermes -p default logs`).
 Because it restores rather than deletes, a failed `FORCE=1` re-deploy puts the
 previously working keys back. The delegated skills keep their own snapshots
 (`~/.hermes/.hstack-backup/<skill>.prev`).
 
 Manual undo after a successful run: `cp ~/.hermes/.hstack-backup/hermes-deploy.prev/.env ~/.hermes/.env`
 (same for `config.yaml`, `SOUL.md`; `crontab ~/.hermes/.hstack-backup/hermes-deploy.prev/crontab`),
-then `hermes gateway stop && hermes gateway run --daemon`.
+then `hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60`.
 
 A full uninstall (remove `~/.local/bin/hermes`, `~/.hermes/`) is intentionally NOT
 part of rollback — the user may want to inspect state. See `/hermes-fix` for
@@ -519,15 +626,15 @@ deeper recovery.
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Use `stop` + `run` |
-| 2 | `echo >> .env` instead of `config set` | Mashes value onto prior line if no trailing newline | Always `hermes config set` (done by the delegated skills) |
+| 1 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Use `stop` + `ensure` |
+| 2 | `echo >> .env` instead of `config set` | Mashes value onto prior line if no trailing newline | Always `hermes -p default config set` (done by the delegated skills) |
 | 3 | Secret in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600` |
 | 4 | sed with `/` delimiter on tokens | Provider/platform tokens contain `/+=` | Use `\|` delimiter |
 | 5 | SSH key added inside a container | Host sshd never reads container `authorized_keys` | `whoami; hostname` check first; exit container |
 | 6 | `echo >>` on `authorized_keys` merging keys | Two keys on one line → SSH silently rejects both | Always `printf '\n%s\n'` |
 | 7 | Default local/small model | Hallucinates tool calls — breaks every skill | Frontier model only (DeepSeek / Sonnet / GPT) |
 | 8 | PATH missing `~/.local/bin` in fresh shell | `hermes` not found in non-login SSH | `remote()` prepends it; remote scripts use absolute `~/.local/bin/hermes` |
-| 9 | Wrong Hermes version | Skills assume v0.15.2 surface | Pin `HERMES_VERSION=v0.15.2` in install |
+| 9 | Treating a compatibility candidate as promoted | Parser/stub checks are not a live golden path | Explicit candidate version/commit and the `VERSIONS.txt` promotion gate |
 | 10 | Gateway OOM after days of uptime | Known leak #25315 | Nightly `gateway restart` cron (Step 7) |
 | 11 | First platform message hangs forever | Gateway needs one "nudge" restart after first platform setup | Stop+run after Step 6, document the nudge to the user |
 | 12 | Throwaway root password left enabled | Brute-force surface area | `passwd -l root` after deploy, or rotate |
@@ -552,22 +659,24 @@ HR, marketing, support, ops/admin, research).
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working (on host, not container)
 - [ ] Inputs validated locally (`deploy_validate_inputs`): provider, platform, model id, home channel id
-- [ ] Hermes v0.15.2 installed at `~/.local/bin/hermes`; `--version` exits 0
+- [ ] Explicit Hermes v0.22.5 compatibility candidate installed at `~/.local/bin/hermes`; `--version` exits 0
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
 - [ ] Snapshot taken before the first write; `deploy_rollback` defined in Step 0 and restores (not deletes)
 - [ ] Model key (`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`) and platform credentials written by `/hermes-model` and `/platform-$PLATFORM`; `~/.hermes/.env` is `chmod 600`
 - [ ] No secret in `config.yaml`; nothing echoed in chat
-- [ ] Model configured; `hermes -z 'reply OK'` returns OK
+- [ ] Model configured; `hermes -p default -z 'reply OK'` returns OK
 - [ ] Curated starter skills installed
 - [ ] `$PLATFORM` enabled with `${PLATFORM}_ALLOWED_USERS` non-empty, wildcard-free and no allow-all switch on (Step 6 gate passed)
 - [ ] Memory backend initialized; SOUL.md < 1 KB; home channel set (Signal: skipped unless `CONFIRM_SIGNAL_HOME_CHANNEL=1`)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Autostart service installed; nightly `gateway restart` cron added
+- [ ] Gateway reloaded with `stop` + `ensure` (NOT restart)
+- [ ] Native service installed idempotently and ready; unrelated crontab unchanged
 - [ ] Logs show gateway ready, platform connected, tools registered within 30s
-- [ ] Live smoke test: `hermes -z` returns OK (an inconclusive reply is reported UNVERIFIED, never done); `gateway status` shows running
+- [ ] Live smoke test: `hermes -p default -z` returns OK (an inconclusive reply is reported UNVERIFIED, never done); `gateway status` shows running
 - [ ] User sent first "hello" on `$PLATFORM` and Hermes replied
 - [ ] Throwaway root password rotated/locked
 
 See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway,
 MCP, SSH-key, and platform failure modes.
+
+Candidate source: [v0.22.5 gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/gateway.py). Runtime promotion remains gated by `VERSIONS.txt`.

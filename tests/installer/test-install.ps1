@@ -462,13 +462,16 @@ New-Dir $home6
 # (a) override IS the source skills dir
 $r = Invoke-Child $InstallPs1 @('-Local', '-All', '-Ide', 'claude') @{ HOME = $home6; USERPROFILE = $home6; CLAUDE_SKILLS_DIR = $srcSkillsDir }
 Assert-That ($r.Output -match 'Refusing') 'install: override that IS the source skills dir is refused with a warning'
+Assert-That ($r.Code -ne 0) 'install: refused source target exits non-zero'
 Assert-That ((Get-TreeDigest $Src) -eq $srcRootDigestBefore) 'install: source tree byte-identical after a refused install (nothing added, deleted or moved)'
 # (b) cursor/gemini override pointing into the source
 $r = Invoke-Child $InstallPs1 @('-Local', '-All', '-Ide', 'cursor,gemini') @{ HOME = $home6; USERPROFILE = $home6; CURSOR_RULES_DIR = $srcSkillsDir; GEMINI_CONTEXT_DIR = (Join-Path $srcSkillsDir 'hermes-deploy') }
 Assert-That ((Get-TreeDigest $Src) -eq $srcRootDigestBefore) 'install: cursor/gemini overrides into the source tree wrote nothing there'
+Assert-That ($r.Code -ne 0) 'install: refused cursor/gemini targets exit non-zero'
 # (c) relative override resolving into the source (cwd = temp root, 'src/skills')
 $r = Invoke-Child $InstallPs1 @('-Local', '-All', '-Ide', 'claude') @{ HOME = $home6; USERPROFILE = $home6; CLAUDE_SKILLS_DIR = 'src/skills' } '' $Tmp
 Assert-That (($r.Output -match 'Refusing') -and ((Get-TreeDigest $Src) -eq $srcRootDigestBefore)) 'install: relative override that lands in the source tree is refused'
+Assert-That ($r.Code -ne 0) 'install: refused relative source target exits non-zero'
 # (d) relative override is resolved against the CALLER cwd, not the checkout
 $work = Join-Path $Tmp 'work'
 New-Dir $work
@@ -481,11 +484,14 @@ $linkToSrc = Join-Path $Tmp 'link-to-src-skills'
 if (New-Link $linkToSrc $srcSkillsDir) {
     $r = Invoke-Child $InstallPs1 @('-Local', '-All', '-Ide', 'claude') @{ HOME = $home6; USERPROFILE = $home6; CLAUDE_SKILLS_DIR = $linkToSrc }
     Assert-That (($r.Output -match 'Refusing') -and ((Get-TreeDigest $Src) -eq $srcRootDigestBefore)) 'install: override that is a symlink to the source skills dir is refused'
+    Assert-That ($r.Code -ne 0) 'install: refused symlinked source target exits non-zero'
     $r = Invoke-Child $SetupPs1 @() @{ HOME = $home6; USERPROFILE = $home6; CLAUDE_SKILLS_DIR = $linkToSrc; CLAUDE_MD_PATH = (Join-Path $home6 'CLAUDE.md') }
     Assert-That (($r.Output -match 'Refusing') -and ((Get-TreeDigest $Src) -eq $srcRootDigestBefore)) 'setup: symlink-to-source target is refused, source untouched'
+    Assert-That ($r.Code -ne 0) 'setup: refused source target exits non-zero'
 } else { Skip-That 'cannot create symlinks here: symlinked-override scenario' }
 $r = Invoke-Child $SetupPs1 @() @{ HOME = $home6; USERPROFILE = $home6; CLAUDE_SKILLS_DIR = $srcSkillsDir; CLAUDE_MD_PATH = (Join-Path $home6 'CLAUDE.md') }
 Assert-That (($r.Output -match 'Refusing') -and ((Get-TreeDigest $Src) -eq $srcRootDigestBefore)) 'setup: target that IS the source skills dir is refused, source untouched'
+Assert-That ($r.Code -ne 0) 'setup: refused source target exits non-zero'
 Assert-That ((Get-TreeDigest $srcSkillsDir) -eq $srcDigestBefore) 'source skills dir identical to the pre-test snapshot'
 
 # ===========================================================================

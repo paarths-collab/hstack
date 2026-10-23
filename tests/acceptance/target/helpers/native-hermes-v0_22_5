@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""Offline CLI fixture for the narrow tagged v0.22.5 surface, NOT real Hermes.
+
+Uses the actual structured jobs.json layout and public argument forms; it deliberately
+does not implement legacy TSV output or gateway run --daemon. Separate upstream smoke
+checks are required before claiming runtime compatibility.
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("Hermes Agent v0.22.5")
+    raise SystemExit(0)
+if args[:2] != ["--profile", "default"]:
+    raise SystemExit(90)
+args = args[2:]
+home = Path(os.environ["HERMES_HOME"])
+if home.resolve() != (Path(os.environ["HOME"]) / ".hermes").resolve():
+    raise SystemExit(91)
+if os.environ.get("HSTACK_STUB_LOG"):
+    with open(os.environ["HSTACK_STUB_LOG"], "a") as out:
+        out.write("\t".join(sys.argv[1:]) + "\n")
+if args[:1] == ["cron"]:
+    store = home / "cron" / "jobs.json"
+    data = json.loads(store.read_text()) if store.exists() else {"jobs": []}
+    if args[1] in os.environ.get("HSTACK_NATIVE_FAIL", "").split(","):
+        raise SystemExit(1)
+    if args[1] == "create":
+        # Match the tagged public argparse boundary, including '--' and equals
+        # options, so option-looking values are not silently accepted by a stub.
+        parser = argparse.ArgumentParser(prog="hermes cron create")
+        parser.add_argument("schedule")
+        parser.add_argument("prompt", nargs="?")
+        parser.add_argument("--skill", dest="skills", action="append")
+        parser.add_argument("--paused", action="store_true")
+        for name in ("name", "deliver", "model", "provider", "reasoning-effort", "failure-deliver", "paused-reason", "interpreter"):
+            parser.add_argument("--" + name)
+        options = vars(parser.parse_args(args[2:]))
+        schedule, prompt = options.pop("schedule"), options.pop("prompt") or ""
+        # Tagged cron.jobs.parse_schedule/create_job normalization. Keep this
+        # fixture source-faithful so adapter round-trip bugs cannot pass a stub
+        # that preserves values the real CLI would normalize.
+        schedule, prompt = schedule.strip(), prompt.strip()
+        skills = list(dict.fromkeys(value.strip() for value in options.pop("skills") or [] if value.strip()))
+        sequence = home / "cron" / "fixture-sequence"
+        n = int(sequence.read_text()) + 1 if sequence.exists() else 1
+        store.parent.mkdir(parents=True, exist_ok=True)
+        sequence.write_text(str(n))
+        paused = options.pop("paused", False)
+        for key in ("model", "provider", "failure_deliver", "interpreter"):
+            if options.get(key) is not None:
+                options[key] = options[key].strip() or None
+        if options.get("reasoning_effort") is not None:
+            effort = options["reasoning_effort"].strip().lower()
+            options["reasoning_effort"] = "none" if effort in {"false", "disabled"} else effort or None
+        name = options.pop("name", None) or (prompt or (skills[0] if skills else "cron job"))[:50].strip()
+        paused_reason = (options.pop("paused_reason", None) or "").strip() or "Created paused; awaiting operator approval."
+        job = dict(id="native-{}".format(n), name=name, prompt=prompt,
+                   skills=skills, skill=skills[0] if skills else None,
+                   schedule={"kind": "cron", "expr": schedule}, repeat={"times": None, "completed": 0},
+                   enabled=not paused, state="paused" if paused else "scheduled",
+                   paused_reason=paused_reason if paused else None,
+                   paused_at="2026-10-23T00:00:00Z" if paused else None, no_agent=False,
+                   created_at="2026-10-23T00:00:00Z", next_run_at="2026-10-24T09:00:00Z",
+                   deliver=(options.pop("deliver") or "local").strip() or "local", **options)
+        data["jobs"].append(job)
+    elif args[1] == "remove" and len(args) == 3:
+        old = len(data["jobs"])
+        data["jobs"] = [job for job in data["jobs"] if job["id"] != args[2]]
+        if len(data["jobs"]) == old:
+            raise SystemExit(1)
+    else:
+        raise SystemExit(92)
+    store.write_text(json.dumps(data))
+elif args[:2] in (["gateway", "stop"], ["gateway", "start"], ["gateway", "ensure"]):
+    if args[1] in os.environ.get("HSTACK_NATIVE_FAIL", "").split(","):
+        raise SystemExit(1)
+    if args[1] == "ensure":
+        commit = os.environ["HSTACK_NATIVE_COMMIT"]
+        print(json.dumps({"state": "ready", "client_code_sha": commit, "endpoint": {
+            "profile_id": str(home), "control_home": str(home), "supervisor": "systemd",
+            "runtime_protocol": 1, "authority_epoch": 1, "instance_id": "fixture-owner",
+            "code_sha": commit,
+        }}))
+else:
+    raise SystemExit(93)

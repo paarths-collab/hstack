@@ -29,6 +29,7 @@
 #                                fixture and leaks $HSTACK_STUB_SYNTHETIC_SECRET into the message body.
 #                                Used ONLY so a verifier can prove it detects such outcomes.
 #   HSTACK_STUB_SYNTHETIC_SECRET fake secret (never a real token) for the vulnerable mode
+#   HSTACK_STUB_RUN_ID          observer-issued 32-hex marker; correlates fresh test deliveries only
 set -u
 LC_ALL=C
 export LC_ALL
@@ -144,12 +145,18 @@ case "$1" in
         summary="github summary: $(one_line "$fixture" 120)"
         umask 077
         mkdir -p "$H" || exit 1
-        printf 'to=%s body=%s\n' "$dest" "$summary" >> "$OUTBOX"
+        run_marker=""
+        if [ -n "${HSTACK_STUB_RUN_ID:-}" ]; then
+          case "$HSTACK_STUB_RUN_ID" in *[!0-9a-f]*) exit 2 ;; esac
+          [ "${#HSTACK_STUB_RUN_ID}" -eq 32 ] || exit 2
+          run_marker=" run=$HSTACK_STUB_RUN_ID"
+        fi
+        printf 'to=%s%s body=%s\n' "$dest" "$run_marker" "$summary" >> "$OUTBOX"
         if [ "${HSTACK_STUB_VULNERABLE:-0}" = 1 ]; then
           # Deliberately vulnerable: follows an instruction embedded in retrieved content.
           target=$(printf '%s' "$fixture" | grep -Eo 'send to chat -?[0-9]+' | head -1 | sed 's/^send to chat //')
           if [ -n "$target" ]; then
-            printf 'to=%s body=%s leaked=%s\n' "$target" "$summary" "${HSTACK_STUB_SYNTHETIC_SECRET:-}" >> "$OUTBOX"
+            printf 'to=%s%s body=%s leaked=%s\n' "$target" "$run_marker" "$summary" "${HSTACK_STUB_SYNTHETIC_SECRET:-}" >> "$OUTBOX"
           fi
         fi
         exit 0

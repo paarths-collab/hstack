@@ -1,0 +1,62 @@
+{
+  "repository": "https://github.com/NousResearch/hermes-agent",
+  "version": "0.22.5",
+  "commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+  "files": {
+    "subcommands/gateway.py": {
+      "upstream_path": "hermes_cli/subcommands/gateway.py",
+      "git_blob_sha": "2ecf5016fa40618d2f3c31e7af8c8b5b7db1b123",
+      "sha256": "18abc7e9b5bf7bf0eb5b47d9de20acf66934ab2847ce1606e029e1d8cbcdccc6"
+    },
+    "subcommands/model.py": {
+      "upstream_path": "hermes_cli/subcommands/model.py",
+      "git_blob_sha": "42ffb1e76a845859ab87f82da0b90e1885a9343f",
+      "sha256": "07005bb6ef30a14243fad25ee1ca2d0c958bff1329833b2e42c11408171d3033"
+    },
+    "subcommands/update.py": {
+      "upstream_path": "hermes_cli/subcommands/update.py",
+      "git_blob_sha": "5dc9dabf136b3eda4b7eb18f12c258719fdbe83b",
+      "sha256": "1e30049390cf9a15ebbe5adbe02c71944f920b6b3ad250d66543f6716dfa694e"
+    },
+    "subcommands/memory.py": {
+      "upstream_path": "hermes_cli/subcommands/memory.py",
+      "git_blob_sha": "9c9bad757831f1b9e18cc17481e07a357bfe7c4f",
+      "sha256": "c07d3b2b24c6d4a4699a68239c12dacd99a95b1775f13cf01cceb47bc913b677"
+    },
+    "subcommands/config.py": {
+      "upstream_path": "hermes_cli/subcommands/config.py",
+      "git_blob_sha": "0df9d4fb8c37cf04f58412965cae72b2e99e259d",
+      "sha256": "f8077e3fa14aa01bfe66f0a519fae22d939f9fee65b387ef2f6beb043a5cc57c"
+    },
+    "subcommands/setup.py": {
+      "upstream_path": "hermes_cli/subcommands/setup.py",
+      "git_blob_sha": "1145f13e09be59c4d88adbb9aab4e2cd8380a4b6",
+      "sha256": "233df9808bcf7af997dfdbdcce5ad9b726ad3b5303909dbdb5d849e1ad9d133e"
+    },
+    "subcommands/_shared.py": {
+      "upstream_path": "hermes_cli/subcommands/_shared.py",
+      "git_blob_sha": "6cf86df360a9c186e6a7627054ddb74a0f66b7ae",
+      "sha256": "70a6324a28ff308386a805a60503fb4e3cfe8023f63efe6a33d647e18dedb2ec"
+    },
+    "_parser.py": {
+      "upstream_path": "hermes_cli/_parser.py",
+      "git_blob_sha": "357d1eba59dd97d0cb5ba3a20796fb6506de2481",
+      "sha256": "7b83ff7de334d2589006c6effbdebf49c21bc8110dfac50290d393fecabb6ed0"
+    },
+    "LICENSE": {
+      "upstream_path": "LICENSE",
+      "git_blob_sha": "75410e73319c72cd3e991a501c5455eb78f38375",
+      "sha256": "821556e6336796450ab852d375117b48a4887e71d255794fd6318d99982a5ab6"
+    },
+    "install.sh": {
+      "upstream_path": "scripts/install.sh",
+      "git_blob_sha": "0477b981b8de0aeb2a3ff1c0c371df212e37b7e1",
+      "sha256": "99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674"
+    },
+    "main.py": {
+      "upstream_path": "hermes_cli/main.py",
+      "git_blob_sha": "03f6c60555fa0578a6063d29017437e6d268d7cf",
+      "sha256": "95635aea97728e2759f9158210ae60fcfb7141610f9e7cbc2182021d9a50d416"
+    }
+  }
+}

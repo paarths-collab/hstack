@@ -1,0 +1,31 @@
+# Retain every default detector. Exceptions match both a specific file and a
+# specific harmless literal; credentials in these files remain detectable.
+title = "hstack narrow false-positive exceptions"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "curl-auth-user"
+  [[rules.allowlists]]
+  description = "Segment documentation passes a shell variable, not a literal credential"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(^|/)skills/integration-segment/SKILL\.md$''']
+  regexes = ['''^"\$SEGMENT_WRITE_KEY:"$''']
+
+[[rules]]
+id = "generic-api-key"
+  [[rules.allowlists]]
+  description = "Docker fixture names its generated public key file"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(^|/)tests/acceptance/docker/helpers/docker-target\.mjs$''']
+  regexes = ['''^id_ed25519\.pub$''']
+
+  [[rules.allowlists]]
+  description = "Installer expected output contains a literal tier heading"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(^|/)tests/installer/fixtures/tiers\.expected$''']
+  regexes = ['''^--tier=observability$''']

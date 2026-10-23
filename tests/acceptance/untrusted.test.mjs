@@ -219,7 +219,7 @@ test("only the OPERATOR chooses destination and schedule, and both are validated
   assert.notEqual(planHash(a), planHash(b), "a different destination is a different plan");
   const c = deriveExecutionGraph(base(), contract, { chatId: FAKE.chat, schedule: "30 7 * * *" });
   assert.notEqual(planHash(a), planHash(c));
-  assert.equal(validateOperatorInput(contract, { chatId: "-100123", schedule: "0   8 * *  1-5" }).schedule, "0 8 * * 1-5", "whitespace normalised");
+  assert.equal(validateOperatorInput(contract, { chatId: "100123", schedule: "0   8 * *  1-5" }).schedule, "0 8 * * 1-5", "whitespace normalised");
   for (const chatId of ["", "abc", "12 34", "1;ls", "-", "123\n", 12345, undefined, "9".repeat(30)]) {
     assert.throws(() => validateOperatorInput(contract, { chatId, schedule: "0 8 * * *" }), OperatorInputInvalid, String(chatId));
   }
@@ -231,7 +231,12 @@ test("only the OPERATOR chooses destination and schedule, and both are validated
     assert.throws(() => validateOperatorInput(contract, { chatId: FAKE.chat, schedule }), fragment, "friendly, specific error before any review");
   }
   assert.equal(validateOperatorInput(contract, { chatId: FAKE.chat, schedule: "*/15 9-17 * * 1-5" }).schedule, "*/15 9-17 * * 1-5");
-  assert.equal(validateOperatorInput(contract, { chatId: "-1001234567890", schedule: "0 8 * * *" }).chatId, "-1001234567890", "negative group chat ids stay valid");
+  for (const chatId of ["-1001234567890", "0", "01"]) {
+    assert.throws(() => validateOperatorInput(contract, { chatId, schedule: "0 8 * * *" }), OperatorInputInvalid, "only canonical private-chat ids are eligible");
+  }
+  for (const schedule of ["99 99 * * *", "0 8 32 99 99", "*/0 8 * * *", "0 8 * * 5-1", "0 8 * * 1,,2", "0 8 0 * *"]) {
+    assert.throws(() => validateOperatorInput(contract, { chatId: FAKE.chat, schedule }), OperatorInputInvalid, "invalid numeric cron is refused before staging");
+  }
   const error = (() => { try { validateOperatorInput(contract, { chatId: "evil;id", schedule: "0 8 * * *" }); } catch (e) { return e; } return null; })();
   assert.equal(error.message.includes("evil"), false, "errors never echo the offending value");
 });

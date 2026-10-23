@@ -6,6 +6,8 @@
 //
 // mutates: "none" | "hstack-dir" (only ~/.hermes/.hstack) | "staging" (staged copy inside a txn dir)
 //        | "live" (the user's env/config/cron/skills/gateway — only legal after write-ahead).
+// Raw target builders retain the legacy helper path. For a new helper installation, use
+// bindHelper(op, install.helperSha); Transaction performs that binding automatically.
 
 import { isIP } from "node:net";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
@@ -89,6 +91,22 @@ function make(fields) {
   return Object.freeze({ stdin: null, redactedStdin: null, ...fields });
 }
 
+/** Immutable, content-addressed helper used by reviewed transactions. */
+export function helperPath(scriptSha) {
+  if (typeof scriptSha !== "string" || !/^[0-9a-f]{64}$/.test(scriptSha)) {
+    throw new UnsafeArgument("helper digest", "must be a sha256 hex digest");
+  }
+  return `~/.hermes/.hstack/bin/hstack-target-${scriptSha}.sh`;
+}
+
+/** Bind a legacy-shaped op to the exact helper the operator reviewed. */
+export function bindHelper(op, scriptSha) {
+  const pinned = helperPath(scriptSha);
+  return make({ ...op, remote: op.remote
+    .split(HELPER_PATH).join(pinned)
+    .split(HELPER_PATH.replace(/^~/, "$HOME")).join(pinned.replace(/^~/, "$HOME")) });
+}
+
 function scriptStdin(scriptBody) {
   if (typeof scriptBody !== "string" || scriptBody.length === 0) throw new UnsafeArgument("script", "target script body is empty");
   return { stdin: scriptBody, redactedStdin: `<STDIN script bytes=${Buffer.byteLength(scriptBody)} sha256=${sha256Hex(scriptBody)}>` };
@@ -103,12 +121,23 @@ export function opInspect(scriptBody) {
   return make({ op: "inspect", remote: "bash -s -- inspect", mutates: "none", ...scriptStdin(scriptBody) });
 }
 
+/** Read-only re-inspection through an already reviewed helper. */
+export function opInspectInstalled() {
+  return make({ op: "inspect", remote: target("inspect", []), mutates: "none" });
+}
+
 export function opInstallHelper(scriptBody) {
+  const input = scriptStdin(scriptBody);
+  const pinned = helperPath(sha256Hex(scriptBody));
   return make({
     op: "install-helper",
-    remote: `umask 077; mkdir -p ~/.hermes/.hstack/bin && cat > ${HELPER_PATH} && chmod 700 ${HELPER_PATH}`,
+    helperSha: sha256Hex(scriptBody),
+    helperPath: pinned,
+    // A hard link publishes complete bytes atomically without replacing an existing helper.
+    // Another transaction may be executing that inode; never truncate or rename over it.
+    remote: `umask 077; mkdir -p ~/.hermes/.hstack/bin || exit 1; t=$(mktemp "$HOME/.hermes/.hstack/bin/.helper.XXXXXXXX") || exit 1; trap 'rm -f "$t"' EXIT; cat > "$t" && chmod 700 "$t" || exit 1; if [ -d ${pinned} ] || [ -L ${pinned} ]; then exit 1; fi; if ln "$t" ${pinned} 2>/dev/null; then :; else [ ! -L ${pinned} ] && [ -f ${pinned} ] && cmp -s "$t" ${pinned} || exit 1; fi`,
     mutates: "hstack-dir",
-    ...scriptStdin(scriptBody),
+    ...input,
   });
 }
 
