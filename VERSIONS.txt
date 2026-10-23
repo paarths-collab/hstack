@@ -55,7 +55,7 @@ STRIPE_SDK_VER=12.4.0
 # --- CI tool pins ---
 SHELLCHECK_MIN_VER=0.9.0
 SHFMT_MIN_VER=3.8.0
-GITLEAKS_MIN_VER=8.20.0
+GITLEAKS_MIN_VER=8.30.1
 
 # --- Vault / storage defaults ---
 # Not credentials — sane defaults skills reference when the user doesn't override.
