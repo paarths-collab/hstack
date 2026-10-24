@@ -146,7 +146,7 @@ status_rc=0
 st=$(hermes -p default gateway status 2>&1) || status_rc=$?
 if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
+  echo "rollback: files restored, but the gateway did NOT come back — active snapshot retained; inspect the gateway and retry rollback after resolving the fault"
   exit 1
 fi
 rm -rf "$d.prev"
