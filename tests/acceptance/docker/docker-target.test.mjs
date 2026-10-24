@@ -514,7 +514,11 @@ gated("telegram skill: FORCE=1 rerun with a forced gateway failure rolls back; t
   const r = await runSkill(t, { token: TG.next, goodToken: TG.next, force: true, extraKnobs: { HSTACK_STUB_FAIL: "gateway-run" } });
   assert.equal(r.code, 1, r.output);
   assert.match(r.output, /FAIL: gateway did not start\. Rolling back\./);
-  assert.match(r.output, /rollback: files restored, but the gateway did NOT come back/, "rollback restored the files and honestly reported the gateway");
+  // A nonzero native `gateway ensure` triggers rollback's set -e/ERR path
+  // before the later status probe. File restoration is checked below; failed
+  // lifecycle recovery must retain the active snapshot and never claim success.
+  assert.match(r.output, /rollback: restoration failed; active snapshot retained for recovery\./);
+  assert.doesNotMatch(r.output, /rollback: restored ~\/\.hermes/);
   assert.equal(r.output.includes(TG.next) || r.output.includes(TG.good), false, "no token printed");
 
   // premise: the new token WAS written before the failure (so the restore below is not vacuous)

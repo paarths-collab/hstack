@@ -182,7 +182,7 @@ status_rc=0
 st=$(hermes -p default gateway status 2>&1) || status_rc=$?
 if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
    || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — start it manually (hermes -p default gateway start) and check hermes -p default logs"
+  echo "rollback: files restored, but the gateway did NOT come back — active snapshot retained; inspect the gateway and retry rollback after resolving the fault"
   exit 1
 fi
 rm -rf "$d.prev"
@@ -605,13 +605,17 @@ remote "hermes -p default logs gateway -n 50 2>&1" | sed -E 's#bot[0-9]+:[A-Za-z
 
 ## Rollback (automatic on any failure after the snapshot)
 
-`rollback` is defined once, in **Step 0**. It restores the exact pre-run `~/.hermes/.env`
-and `config.yaml` from `~/.hermes/.hstack-backup/platform-telegram/` (byte-for-byte), then
-reloads the gateway (and checks `hermes -p default gateway status`: if the gateway is not reported running it
-prints `files restored, but the gateway did NOT come back` and exits non-zero, so start it by hand with
-`hermes -p default gateway start`). So a failed `FORCE=1` re-run puts the previous working token and
-allowlist back; a failed first run removes the files this skill created. Failures in Steps
-1–4 happen before the snapshot and change nothing.
+`rollback` is defined once, in **Step 0**. It restores and verifies the pre-run
+`~/.hermes/.env` and `config.yaml` from the active snapshot, then reloads and checks
+the gateway. A failed restore or lifecycle command exits non-zero with
+`restoration failed; active snapshot retained for recovery`. If the lifecycle
+commands succeed but gateway status is unhealthy, it instead reports
+`files restored, but the gateway did NOT come back`. Neither failure retires the
+active snapshot or claims recovery succeeded. Resolve the fault and retry the
+Step 0 `rollback` helper; successful recovery moves the verified snapshot to `.prev`.
+A failed `FORCE=1` re-run restores the previous token and allowlist when file
+restoration succeeds; a failed first run removes files that were previously absent.
+Failures in Steps 1–4 happen before the snapshot and change nothing.
 
 After a successful run (`finish`) the snapshot is kept as `platform-telegram.prev` for a
 manual undo. Both directories are `chmod 700` and hold secrets, so delete them when you no
