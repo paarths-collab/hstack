@@ -201,14 +201,14 @@ ssh -i ~/.ssh/hermes_vps -o StrictHostKeyChecking=accept-new root@<hostname>
 line lacked a trailing newline, the result is two keys on one line:
 
 ```
-...paarth@digitalcrewssh-ed25519 AAAA...claude-code-hermes-deploy
+...operator@example-hostssh-ed25519 AAAA...claude-code-hermes-deploy
 ```
 
 SSH parses `authorized_keys` one key per line — the merged line is silently invalid.
 `printf '\n%s\n'` forces separation regardless of prior file state.
 
 **Detection:** `grep -c "^ssh-" ~/.ssh/authorized_keys` should equal the number of keys.
-If it's low, keys are merged. Fix: `sed -i 's/\(digitalcrew\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys`
+If it's low, keys are merged. Fix: `sed -i 's/\(example-host\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys`
 
 ### Running remote commands once SSH works
 
@@ -288,12 +288,22 @@ baseline from source or offline checks alone; the policy requires seven consecut
 real-target golden-path days and explicit review.
 
 The runnable candidate is `packages/founder-brief/`, a separate reviewed deployment
-with three repository-scoped report packs, private preparation/preview, a native no-agent script schedule, private
+with three repository-scoped report packs and multiple named instances per target,
+private preparation/preview, a native no-agent script schedule, private
 Telegram API acknowledgements and rollback. Its local SSH/HTTP tests pass; a real
 Hermes target and Telegram recipient remain unverified. The acceptance transaction
 above is experimental control-plane coverage, not the runnable packs. Use the dated
 validation record for completion claims and never equate API acknowledgement with
 human recipient observation.
+
+The opt-in `tests/founder-brief/real-native.test.mjs` runs exact candidate cron
+source on its pinned Python with loopback vendors. It verifies parsing, storage,
+claims, subprocesses, failure/recovery and ticks; it bypasses systemd readiness
+and full bootstrap. See `tests/founder-brief/REAL_NATIVE.md` before rerunning it.
+
+Each named instance owns `.hstack/workflows/ID/`, its launcher/job, credentials,
+journal, lock and rollback. Omitted `--instance` selects only the legacy
+`.hstack/founder-brief/` slot; never infer or bulk-select a named instance.
 
 ## Branch / PR conventions
 

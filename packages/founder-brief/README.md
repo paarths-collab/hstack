@@ -19,11 +19,15 @@ it does not mean a person read it. Live promotion still requires the evidence in
 
 ## Current completion status
 
-The combined suite passes **48 top-level local tests**, including actual loopback
-SSH/HTTP, all three report comparisons, preparation and preview checks. Component
-counts and evidence are in the [validation record](../../compatibility/VALIDATION.md).
-Native Hermes remains a CLI fixture in local integration checks; no real Telegram
-message was sent. The latest unauthenticated public preview hit an API rate limit.
+Local integration covers actual loopback SSH/HTTP, all three report comparisons,
+preparation, preview and independent concurrent installations. Component counts
+and native-source evidence are in the [validation record](../../compatibility/VALIDATION.md).
+Controlled endpoints do not establish real Telegram delivery. The latest
+unauthenticated public preview hit an API rate limit.
+
+The opt-in [native cron check](../../tests/founder-brief/REAL_NATIVE.md) also runs
+the exact candidate's parser, store, claims, worker subprocess and scheduler tick.
+Its vendors are controlled loopback APIs and Linux gateway readiness is bypassed.
 
 Live completion still needs the Linux target, selected repositories, private chat,
 daily time/timezone and private credential files. See the
@@ -38,9 +42,10 @@ daily time/timezone and private credential files. See the
 | `release-watch` | Published versions and links; stable releases and labelled prereleases | `published_at` inside the reporting window; drafts excluded |
 
 The review queue does not infer approvals, CI status or merge readiness. Release
-watch does not inspect assets or recommend dependency upgrades. There is **one
-selected pack per exclusive default-profile target**, not three simultaneous jobs.
-Changing an installed pack requires a migration review; setup refuses replacement.
+watch does not inspect assets or recommend dependency upgrades. **All three packs
+can run together on the same exclusive default-profile target.** Named instances
+also allow multiple copies of one pack with different repositories, destination,
+time or timezone. Replacing an installed instance with a changed plan is refused.
 
 - Selected repositories only, with canonical GitHub links.
 - The selected pack's facts, with a clear quiet result when none match.
@@ -74,7 +79,10 @@ python3 -I -B packages/founder-brief/prepare.py \
 
 Repeat `--repository` for up to eight repositories. `--at` defaults to `09:00`,
 `--timezone` to `UTC`, and `--window-hours` to `24`; the generated configuration
-shows these choices. Existing output paths are refused. Files are private from
+shows these choices. The instance ID defaults to the selected pack, so the three
+packs get distinct names automatically. Add `--instance team-reviews` for another
+review queue. IDs start with a lowercase letter and contain up to 40 lowercase
+letters, digits or hyphens. Existing output paths are refused. Files are private from
 creation, including under a permissive or restrictive shell umask.
 
 The output contains `runtime.pyz`, `config.json`, an optional invalid credential
@@ -104,6 +112,8 @@ No token goes in command arguments or logs. An existing runtime can also run
 
 The target must already have the exact candidate Hermes installation, an installed
 systemd gateway, Python 3.9+ with timezone data, and an exclusive default profile.
+The Hermes home and scripts directory must belong to the target user and must not
+be writable by other users. Named private workflow directories require mode `700`.
 This installer does not upgrade Hermes or reconfigure its other integrations.
 Native Hermes Telegram and GitHub integration setup is not required for these
 packs: the worker calls the APIs using its own private credential file, while its
@@ -118,7 +128,8 @@ optional. Keep configuration and credentials outside the repository with mode
 ```json
 {
   "schema_version": 1,
-  "workflow": "activity-brief",
+  "workflow": "review-queue",
+  "instance_id": "review-queue",
   "repositories": ["octo-org/example"],
   "telegram_chat_id": "123456789",
   "daily_time": "09:00",
@@ -161,17 +172,26 @@ python3 -I -B /private/path/runtime.pyz install \
   --approve REVIEWED_HASH
 ```
 
-Installation owns one script and `.hermes/.hstack/founder-brief/`. It preserves
-global `.env`, Hermes configuration, unrelated jobs and other integrations. Existing
-unmanaged workflow files or an earlier Founder Brief job cause refusal. An identical
-installation is idempotent; changing an existing deployment requires a migration
-review, rather than silently replacing it.
+Each named instance owns one `scripts/hstack-workflow-ID.py` launcher, one native
+job and `.hermes/.hstack/workflows/ID/`. Its runtime, configuration, credentials,
+state, lifecycle lock and rollback receipt are separate from every other instance.
+Global `.env`, Hermes configuration, unrelated jobs and other instances are preserved.
+Unmanaged files or conflicting jobs for that ID cause refusal. An identical
+installation is idempotent; a different plan using the same ID requires migration
+review. Installing a new ID adds a workflow without replacing another.
+Rollback retains the installation receipt. Reinstallation or an upgrade using
+that ID is not automated; use a new ID or review the migration separately.
+
+Existing configurations without `instance_id` keep the original
+`.hermes/.hstack/founder-brief/` namespace, launcher and review format. They coexist
+with named instances. Omitted instance selectors address only that legacy slot;
+they never guess a named instance or operate on every instance.
 
 ## Run the end-to-end canary
 
 ```bash
 python3 -I -B /private/path/runtime.pyz canary \
-  --home "$HOME/.hermes" --approve REVIEWED_HASH
+  --home "$HOME/.hermes" --instance review-queue --approve REVIEWED_HASH
 ```
 
 This arms an immutable reporting window, prints a canary ID, invokes native
@@ -207,16 +227,23 @@ no message text or credentials. Only bounded explicit rate-limit responses retry
 ambiguous sends are not blindly repeated.
 
 ```bash
-python3 -I -B /private/path/runtime.pyz status --home "$HOME/.hermes"
+python3 -I -B /private/path/runtime.pyz list --home "$HOME/.hermes"
+python3 -I -B /private/path/runtime.pyz status \
+  --home "$HOME/.hermes" --instance review-queue
 python3 -I -B /private/path/runtime.pyz rollback \
-  --home "$HOME/.hermes" --approve REVIEWED_HASH
+  --home "$HOME/.hermes" --instance review-queue --approve REVIEWED_HASH
 ```
 
-`status` displays installation metadata: phase, installation time, review hash and
-job ID. It is not a fresh health, credential or delivery test. Use the canary and
-recipient observation for those checks.
+`list` inventories all named and legacy installation receipts, including rolled-back
+instances. `status` displays the selected instance's phase, installation time,
+review hash and job ID. Both read metadata without invoking Hermes, reading
+credentials or creating lock files; neither is a fresh health or delivery test.
+Use the canary and recipient observation for those checks.
+If preparation used a custom `--instance`, use that same ID in every target command;
+the generated `NEXT_STEPS.md` already includes it.
 
-Rollback removes only the unchanged owned job and payload. It preserves delivery
+Rollback removes only the selected instance's unchanged owned job and payload.
+Other instances continue operating. It preserves delivery
 evidence and refuses user edits. It cannot recall Telegram messages. The legacy
 acceptance transaction in `packages/acceptance/` remains a separate experimental
 control-plane fixture; installing skill text there is not this runnable workflow.
@@ -231,4 +258,6 @@ node --test tests/acceptance/observer.test.mjs tests/acceptance/untrusted.test.m
 Tests use private temporary directories, fake credentials, a native CLI fixture and
 real loopback HTTP requests. Test clients are Python-only injection points, with no
 CLI or configuration flag that redirects production credentials to a test origin.
+For the separately provisioned pinned-source test, follow
+[the real native cron instructions](../../tests/founder-brief/REAL_NATIVE.md).
 No test result here should be described as a live GitHub/Telegram or seven-day run.

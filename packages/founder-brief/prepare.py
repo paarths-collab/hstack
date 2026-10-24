@@ -41,7 +41,7 @@ def encoded(value):
                        ensure_ascii=True, allow_nan=False) + "\n").encode()
 
 
-def commands():
+def commands(instance_id=None):
     directory = "<TARGET_PREPARED_DIRECTORY>"
     runtime = directory + "/runtime.pyz"
     config = directory + "/config.json"
@@ -49,12 +49,16 @@ def commands():
     target = ["--home", "<TARGET_HERMES_HOME>", "--hermes", "<TARGET_HERMES_EXECUTABLE>"]
     credentials = ["--credentials", "<TARGET_CREDENTIALS_JSON>"]
     approval = ["--approve", "<REVIEWED_PLAN_HASH>"]
+    selector = ["--instance", instance_id] if instance_id is not None else []
     arguments = {
         "credentials": prefix + ["credentials", "--output", "<TARGET_CREDENTIALS_JSON>"],
         "preview": prefix + ["preview", "--config", config] + credentials,
         "review": prefix + ["review"] + target + ["--config", config],
         "install": prefix + ["install"] + target + ["--config", config] + credentials + approval,
-        "canary": prefix + ["canary", "--home", "<TARGET_HERMES_HOME>"] + approval,
+        "canary": prefix + ["canary", "--home", "<TARGET_HERMES_HOME>"] + selector + approval,
+        "status": prefix + ["status", "--home", "<TARGET_HERMES_HOME>"] + selector,
+        "rollback": prefix + ["rollback", "--home", "<TARGET_HERMES_HOME>"] + selector + approval,
+        "list": prefix + ["list", "--home", "<TARGET_HERMES_HOME>"],
     }
     return {name: {"argv": argv, "shell": shlex.join(argv)} for name, argv in arguments.items()}
 
@@ -63,8 +67,9 @@ def instructions(config, next_commands):
     lines = [
         "# Prepared hstack workflow", "",
         "Prepared only: nothing has been transferred, installed or sent.",
-        "One selected workflow is supported per exclusive default-profile target.", "",
+        "Multiple named workflows can coexist on the same exclusive default-profile target.", "",
         "Workflow: `" + config["workflow"] + "`.",
+        "Instance: `" + config["instance_id"] + "`; credentials, runtime, job, state and rollback belong to this instance.",
         "Daily cutoff: `" + config["daily_time"] + "` in `" + config["timezone"] + "`.",
         "Reporting window: `" + str(config["window_hours"]) + "` hours; the review queue is a current snapshot.", "",
         "1. Inspect config.json and the reviewed source checkout used to build runtime.pyz.",
@@ -77,7 +82,8 @@ def instructions(config, next_commands):
         "5. After credentials capture, run preview, inspect the actual report, then review. Pass the printed plan_hash to install and canary.",
         "6. Observe the actual Telegram message separately. An API acknowledgement is not evidence that a person read it.", "",
         "The target must already run the exact supported Hermes candidate, its installed systemd gateway, Python 3.9+ with timezone data and an exclusive default profile.",
-        "Preparation does not install or upgrade these prerequisites. Existing deployments require migration review.", "",
+        "Preparation does not install or upgrade these prerequisites. Reusing an installed ID with a different plan requires migration review.",
+        "Use --instance to give another copy of the same report a different name. Omitted instance selectors in runtime commands address only the legacy installation.", "",
     ]
     for name, command in next_commands.items():
         lines.extend(["## " + name, "", "```bash", command["shell"], "```", ""])
@@ -155,6 +161,7 @@ def write_output(output, contents):
 def main(argv=None, runtime_bytes=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workflow", choices=WORKFLOWS, required=True)
+    parser.add_argument("--instance", help="Unique installation name; defaults to the workflow ID")
     parser.add_argument("--repository", action="append", required=True,
                         help="Selected owner/repository; repeat for up to eight repositories")
     parser.add_argument("--chat-id", required=True, help="Positive private Telegram chat ID")
@@ -167,13 +174,14 @@ def main(argv=None, runtime_bytes=None):
         workflow = source_module("workflow")
         config = workflow.validate_config({
             "schema_version": 1, "workflow": args.workflow, "repositories": args.repository,
+            "instance_id": args.instance if args.instance is not None else args.workflow,
             "telegram_chat_id": args.chat_id, "daily_time": args.at,
             "timezone": args.timezone, "window_hours": args.window_hours,
         })
         runtime = source_module("build").build() if runtime_bytes is None else runtime_bytes
         if not isinstance(runtime, bytes) or not 1 <= len(runtime) <= MAX_RUNTIME:
             raise PreparationError("invalid_runtime")
-        next_commands = commands()
+        next_commands = commands(config["instance_id"])
         contents = {
             "runtime.pyz": (runtime, 0o700),
             "config.json": (encoded(config), 0o600),
@@ -182,13 +190,13 @@ def main(argv=None, runtime_bytes=None):
         }
         output = write_output(args.output, contents)
         result = {
-            "status": "prepared", "workflow": config["workflow"], "configuration": config,
+            "status": "prepared", "workflow": config["workflow"], "instance_id": config["instance_id"], "configuration": config,
             "runtime_sha256": hashlib.sha256(runtime).hexdigest(),
             "files": {key: str(output / name) for key, name in {
                 "runtime": "runtime.pyz", "config": "config.json",
                 "credentials_example": "credentials.example.json", "instructions": "NEXT_STEPS.md"}.items()},
             "next_commands": next_commands, "target_transfer_required": True,
-            "scope": "one_selected_workflow_per_default_target", "evidence_scope": "offline_preparation_only",
+            "scope": "multiple_named_workflow_instances_per_default_target", "evidence_scope": "offline_preparation_only",
         }
         print(encoded(result).decode(), end="")
         return 0

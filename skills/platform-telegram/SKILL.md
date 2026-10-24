@@ -256,7 +256,9 @@ remote 'command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on t
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
 ```
 
-Expected: `0.15.x` or `0.17.x`.
+For the current candidate procedure, expect `0.22.5` and the reviewed default-profile
+systemd target described in [compatibility](../../compatibility/README.md).
+The legacy fixture version is not evidence of current runtime compatibility.
 
 ---
 
@@ -427,7 +429,7 @@ DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   4. chmod 600 ~/.hermes/.env; verify the keys landed (counts only)
   5. Set platforms.telegram.enabled true in config.yaml (the token alone enables Telegram upstream)
   6. Reload gateway: hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60 (NOT restart)
-  7. POST-SETUP NUDGE: a second stop+run cycle 10s later (Telegram quirk on first wire-up)
+  7. POST-SETUP NUDGE: a second stop+ensure cycle 10s later (requires live validation)
   8. Smoke test: read the token back from ~/.hermes/.env on the VPS, call getMe, scan logs
  9. Live test: allowlisted user DMs the bot; expect reply within 5s
 
@@ -638,9 +640,9 @@ remote "hermes -p default config set platforms.telegram.enabled false; hermes -p
 | 1 | Empty `TELEGRAM_ALLOWED_USERS` | Gateway default-denies; nobody (including operator) can talk to the bot | Step 3 hard-abort; allowlist written before the token in Step 5 |
 | 2 | Allowlist using @handle instead of numeric ID | Allowlist matcher is integer-equality on the user's `id` | Step 3 validator requires `^[0-9]+$` per user ID |
 | 3 | Token truncated at the colon | Token is `<digits>:<letters>` — colon is part of the secret | Step 3 regex requires `[0-9]+:[A-Za-z0-9_-]{30,}` |
-| 4 | First message dropped after enable | Long-poll initializer not warm yet | Step 7 nudge (second stop+run cycle); Step 9 says "send a second message" |
+| 4 | First message dropped after enable | Long-poll initializer may not be warm yet | Step 7 nudge (second stop+ensure cycle); Step 9 says "send a second message" |
 | 5 | Group ID without leading `-` (or missing `-100` prefix for supergroups) | Telegram sends from groups as negative IDs; matcher fails | Add @userinfobot to the group → it sends the correct negative ID; `TELEGRAM_HOME_CHANNEL` accepts `^-?[0-9]+$` |
-| 6 | `gateway restart` instead of `stop`+`run` | Restart does NOT reliably re-read `.env` | Always `stop` + `run` (Step 7) |
+| 6 | Copying a legacy daemon command onto the candidate | `gateway run` is foreground on 0.22.5 | Use the reviewed `stop` + `ensure --json --timeout 60` sequence (Step 7) and verify readiness |
 | 7 | `echo >> .env` | Merge risk on missing trailing newline | Always `hermes -p default config set` (Step 5), or the stdin upsert shown there |
 | 8 | Token in `config.yaml` | Often checked into git; tokens exposed | Only `~/.hermes/.env`, `chmod 600` |
 | 9 | Token revoked in @BotFather without redeploy | Old token in `.env` keeps failing on `getMe` | Rotate token → re-run with `FORCE=1`; if the new run fails, `rollback` restores the OLD working values |
@@ -659,7 +661,7 @@ remote "hermes -p default config set platforms.telegram.enabled false; hermes -p
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS host (`0.15.x` / `0.17.x`)
+- [ ] Candidate Hermes version verified on the VPS host (`0.22.5`, exclusive default-profile systemd target)
 - [ ] Idempotency check ran (skipped if token + allowlist already present, unless `FORCE=1`)
 - [ ] HARD GATE passed with nothing written: allowlist non-empty, no `*` anywhere in it, every user ID matches `^[0-9]+$`; no allow-all switch (`TELEGRAM_ALLOW_ALL_USERS` / `GATEWAY_ALLOW_ALL_USERS`) in the VPS `.env`; token matches `^[0-9]+:[A-Za-z0-9_-]{30,}$`
 - [ ] Live Telegram `getMe` (run from the VPS, token sent over ssh stdin) returned the bot's `@username`
@@ -667,7 +669,7 @@ remote "hermes -p default config set platforms.telegram.enabled false; hermes -p
 - [ ] Snapshot taken immediately before the first write
 - [ ] `TELEGRAM_ALLOWED_USERS` written before `TELEGRAM_BOT_TOKEN`; both in `~/.hermes/.env`, `chmod 600`, verified by count (no values printed), with the allowlist re-read and the open-access check repeated after the write
 - [ ] `platforms.telegram.enabled` set only after Step 5 verification passed (no `TELEGRAM_ENABLED` variable)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart) — TWICE (initial + nudge)
+- [ ] Gateway reloaded with the reviewed `stop` + `ensure --json --timeout 60` sequence — TWICE (initial + nudge)
 - [ ] Post-reload `getMe` using the token READ BACK from `~/.hermes/.env` on the VPS returned the same bot
 - [ ] Telegram connect confirmed in gateway log within 30s, then `finish` ran
 - [ ] Live smoke: allowlisted user DM'd @$USERNAME and got a reply (possibly on 2nd message)

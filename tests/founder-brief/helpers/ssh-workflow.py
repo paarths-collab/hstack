@@ -17,7 +17,8 @@ import workflow
 
 HERMES_HOME = HOME / ".hermes"
 HERMES = str(HOME / "hermes-fixture")
-DEPLOYMENT = deployment.Deployment(HERMES_HOME, HERMES, offline=True)
+INSTANCE = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != "-" else None
+DEPLOYMENT = deployment.Deployment(HERMES_HOME, HERMES, offline=True, instance_id=INSTANCE)
 
 
 def telegram_client(port):
@@ -36,7 +37,7 @@ def worker():
     port = int(os.environ["HSTACK_SSH_TEST_HTTP_PORT"])
     if not 1 <= port <= 65535:
         raise RuntimeError("invalid_test_port")
-    result = workflow.execute(HERMES_HOME, _deployment=DEPLOYMENT,
+    result = workflow.execute(HERMES_HOME, instance_id=INSTANCE, _deployment=DEPLOYMENT,
                               _github_client=github_brief.GitHubClient._for_test("http://127.0.0.1:" + str(port)),
                               _telegram_client=telegram_client(port))
     print(json.dumps(result))
@@ -64,6 +65,8 @@ def canary():
                     "committer": {"date": (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")},
                     "message": "Release tested reliability fix"}}])
             elif self.path.split("?")[0] in {"/repos/acme/widget/issues", "/repos/acme/widget/pulls"}:
+                self.answer([])
+            elif self.path.split("?")[0] == "/repos/acme/widget/releases":
                 self.answer([])
             else:
                 self.send_error(404)
@@ -93,8 +96,8 @@ def canary():
     os.environ["HSTACK_SSH_TEST_HTTP_PORT"] = str(server.server_port)
     try:
         receipt = DEPLOYMENT.verify_installation(verify_job=True)
-        proof = workflow.run_canary(HERMES_HOME, receipt["review_hash"], "c" * 32, _deployment=DEPLOYMENT)
-        replay = workflow.run_canary(HERMES_HOME, receipt["review_hash"], "c" * 32, _deployment=DEPLOYMENT)
+        proof = workflow.run_canary(HERMES_HOME, receipt["review_hash"], "c" * 32, instance_id=INSTANCE, _deployment=DEPLOYMENT)
+        replay = workflow.run_canary(HERMES_HOME, receipt["review_hash"], "c" * 32, instance_id=INSTANCE, _deployment=DEPLOYMENT)
         if proof != replay or seen["sends"] != 1:
             raise RuntimeError("replay_did_not_reconcile")
         print(json.dumps({"status": "loopback_api_ack", "native_command": proof["native_command"],
@@ -111,18 +114,20 @@ def canary():
 
 if sys.argv[1] == "install":
     value = json.load(sys.stdin)
-    print(json.dumps(DEPLOYMENT.install((HOME / "runtime.pyz").read_bytes(), workflow.LAUNCHER,
+    print(json.dumps(DEPLOYMENT.install((HOME / "runtime.pyz").read_bytes(), workflow.launcher_for(INSTANCE),
                                        value["config"], value["credentials"])))
 elif sys.argv[1] == "status":
     receipt = DEPLOYMENT.verify_installation(verify_job=True)
     calls = [json.loads(line) for line in (HERMES_HOME / "fixture-argv.jsonl").read_text().splitlines()]
     print(json.dumps({"phase": receipt["phase"], "job_id": receipt["job_id"],
-                      "run_calls": [args for args in calls if args[2:4] == ["cron", "run"]]}))
+                      "run_calls": [args for args in calls if args[2:] == ["cron", "run", receipt["job_id"]]]}))
 elif sys.argv[1] == "worker":
     worker()
 elif sys.argv[1] == "canary":
     canary()
 elif sys.argv[1] == "rollback":
     print(json.dumps(DEPLOYMENT.rollback()))
+elif sys.argv[1] == "list":
+    print(json.dumps(workflow.list_instances(HERMES_HOME)))
 else:
     raise SystemExit("unknown_test_operation")

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,17 @@ import threading
 import uuid
 
 import native_adapter
+
+try:
+    from instance_scope import scope_for
+except ModuleNotFoundError:
+    # Source-only test tools load this module by path under Python -I. The
+    # packaged runtime imports the same module normally from its zipapp.
+    _scope_spec = importlib.util.spec_from_file_location("instance_scope", Path(__file__).with_name("instance_scope.py"))
+    _scope_module = importlib.util.module_from_spec(_scope_spec)
+    sys.modules["instance_scope"] = _scope_module
+    _scope_spec.loader.exec_module(_scope_module)
+    scope_for = _scope_module.scope_for
 
 VERSION = native_adapter.VERSION
 COMMIT = native_adapter.COMMIT
@@ -71,16 +83,20 @@ def validate_credentials(credentials):
         refuse("invalid_credentials")
 
 
-def desired_job():
+def desired_job(instance_id=None):
+    scope = scope_for(instance_id)
+    prompt = "Run reviewed GitHub daily brief " + scope.marker
     config = dict.fromkeys(native_adapter.FIELDS)
-    config.update(name=MARKER, prompt=PROMPT, schedule={"kind": "cron", "expr": "* * * * *"},
-                  skills=[], script=SCRIPT, no_agent=True, repeat={"times": None}, enabled=True,
+    config.update(name=scope.marker, prompt=prompt, schedule={"kind": "cron", "expr": "* * * * *"},
+                  skills=[], script=scope.script, no_agent=True, repeat={"times": None}, enabled=True,
                   deliver="local", failure_deliver="local")
     return config
 
 
 class Deployment:
-    def __init__(self, home, hermes, *, offline=False):
+    def __init__(self, home, hermes, *, offline=False, instance_id=None):
+        self.scope = scope_for(instance_id)
+        self.instance_id = self.scope.instance_id
         if not offline and sys.platform != "linux":
             refuse("linux_target_required")
         if (not isinstance(hermes, (str, Path)) or not os.path.isabs(str(hermes))
@@ -92,11 +108,12 @@ class Deployment:
         except native_adapter.Refusal:
             refuse("unsafe_target")
         self.home = self.native.home
+        self._check_home()
         self.hermes = str(hermes)
         self.parent = self.home / ".hstack"
-        self.root = self.parent / "founder-brief"
+        self.root = self.home / self.scope.relative_root
         self.scripts = self.home / "scripts"
-        self.launcher = self.scripts / SCRIPT
+        self.launcher = self.scripts / self.scope.script
         self.receipt = self.root / "installation.json"
         self._lock_fd = None
         self._lock_thread = None
@@ -105,11 +122,18 @@ class Deployment:
         if (not isinstance(bundle_bytes, bytes) or not 1 <= len(bundle_bytes) <= MAX_BUNDLE
                 or not isinstance(launcher_bytes, bytes) or not 1 <= len(launcher_bytes) <= 65536):
             refuse("invalid_artifact")
-        return {"schema_version": 1, "workflow": OWNER, "home": str(self.home), "hermes": self.hermes,
+        config = self._validated_config(config)
+        return {"schema_version": 1, "workflow": self.scope.owner, "home": str(self.home), "hermes": self.hermes,
                 "hermes_version": VERSION, "hermes_commit": COMMIT,
                 "runtime_sha256": sha(bundle_bytes), "launcher_sha256": sha(launcher_bytes),
-                "config": validate_config(config), "credential_keys": sorted(CREDENTIAL_KEYS),
-                "native_job": desired_job()}
+                "config": config, "credential_keys": sorted(CREDENTIAL_KEYS),
+                "native_job": desired_job(self.instance_id)}
+
+    def _validated_config(self, config):
+        value = validate_config(config)
+        if (self.instance_id is None and "instance_id" in value) or value.get("instance_id") != self.instance_id:
+            refuse("instance_config_mismatch")
+        return value
 
     def review_hash(self, bundle_bytes, launcher_bytes, config):
         return sha(encoded(self.review_descriptor(bundle_bytes, launcher_bytes, config)))
@@ -121,11 +145,40 @@ class Deployment:
         except FileNotFoundError:
             if not create:
                 return False
-            path.mkdir(mode=0o700)
-            return True
+            try:
+                path.mkdir(mode=0o700)
+                return True
+            except FileExistsError:
+                # Other instances can create shared containers concurrently.
+                info = path.lstat()
         if not stat.S_ISDIR(info.st_mode):
             refuse("unsafe_path")
         return True
+
+    def _check_home(self):
+        try:
+            info = self.home.lstat()
+        except OSError:
+            refuse("unsafe_target")
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) & 0o022):
+            refuse("unsafe_target")
+
+    def _scope_directories(self, create=False):
+        # A protected child can still be replaced through a writable home.
+        # Recheck before opening locks and again during runtime validation.
+        self._check_home()
+        present = self._directory(self.parent, create=create)
+        if present:
+            info = self.parent.lstat()
+            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o022:
+                refuse("owned_directory_drift")
+        if self.instance_id is not None:
+            container = self.parent / "workflows"
+            if self._directory(container, create=create):
+                info = container.lstat()
+                if stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.geteuid():
+                    refuse("owned_directory_drift")
 
     @contextmanager
     def _lock(self):
@@ -134,15 +187,15 @@ class Deployment:
                 refuse("deployment_busy")
             yield
             return
-        self._directory(self.parent, create=True)
-        lock = self.parent / "founder-brief.lock"
+        self._scope_directories(create=True)
+        lock = self.parent / self.scope.lock_name
         try:
             fd = os.open(str(lock), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         except OSError:
             refuse("unsafe_lock")
         try:
             info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.geteuid():
+            if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600 or info.st_uid != os.geteuid() or info.st_nlink != 1:
                 refuse("unsafe_lock")
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -165,7 +218,8 @@ class Deployment:
             info = path.lstat()
         except FileNotFoundError:
             return None
-        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BUNDLE:
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BUNDLE
+                or info.st_uid != os.geteuid() or info.st_nlink != 1):
             refuse("unsafe_path")
         try:
             fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -189,11 +243,11 @@ class Deployment:
         try:
             receipt = json.loads(found[0], object_pairs_hook=native_adapter.unique_pairs)
             proof = receipt.pop("receipt_sha256")
-            if proof != sha(encoded(receipt)) or receipt["owner"] != OWNER or receipt["home"] != str(self.home):
+            if proof != sha(encoded(receipt)) or receipt["owner"] != self.scope.owner or receipt["home"] != str(self.home):
                 refuse("receipt_drift")
             expected_fields = {"schema_version", "owner", "home", "hermes", "installation_id", "installed_at", "phase",
                                "plan_hash", "review_hash", "native_job", "baseline_job_ids", "job_id", "files"}
-            if (set(receipt) != expected_fields or receipt["schema_version"] != 1 or receipt["native_job"] != desired_job()
+            if (set(receipt) != expected_fields or receipt["schema_version"] != 1 or receipt["native_job"] != desired_job(self.instance_id)
                     or receipt["hermes"] != self.hermes
                     or receipt["phase"] not in {"installing", "create_intended", "complete", "rolled_back"}
                     or not isinstance(receipt["installation_id"], str)
@@ -252,13 +306,19 @@ class Deployment:
                 "config": self.root / "config.json", "credentials": self.root / "credentials.json"}
 
     def _structure(self):
-        self._directory(self.scripts)
+        self._scope_directories()
+        if self._directory(self.scripts):
+            info = self.scripts.lstat()
+            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) & 0o022:
+                refuse("owned_directory_drift")
         if self._directory(self.root):
-            if stat.S_IMODE(self.root.stat().st_mode) != 0o700:
+            if stat.S_IMODE(self.root.stat().st_mode) != 0o700 or self.root.stat().st_uid != os.geteuid():
                 refuse("owned_directory_drift")
             self._directory(self.root / "state")
-            if (self.root / "state").exists() and stat.S_IMODE((self.root / "state").stat().st_mode) != 0o700:
-                refuse("owned_directory_drift")
+            if (self.root / "state").exists():
+                info = (self.root / "state").stat()
+                if stat.S_IMODE(info.st_mode) != 0o700 or info.st_uid != os.geteuid():
+                    refuse("owned_directory_drift")
             if any(path.name not in {"runtime.pyz", "config.json", "credentials.json", "installation.json", "state"}
                    for path in self.root.iterdir()):
                 refuse("unmanaged_files_present")
@@ -272,6 +332,11 @@ class Deployment:
             expected = receipt["files"][key]
             if found is None or sha(found[0]) != expected["sha256"] or found[1] != expected["mode"]:
                 refuse("owned_file_drift")
+            if key == "config":
+                try:
+                    self._validated_config(json.loads(found[0], object_pairs_hook=native_adapter.unique_pairs))
+                except (ValueError, TypeError, native_adapter.Refusal):
+                    refuse("invalid_config")
 
     def _jobs(self):
         try:
@@ -280,11 +345,11 @@ class Deployment:
             refuse("native_store_refused")
 
     def _owned_job(self, receipt):
-        marked = [job for job in self._jobs() if job["managed_id"] == "founder-brief"
-                  or job["id"] == receipt.get("job_id") or job["config"].get("script") == SCRIPT]
+        marked = [job for job in self._jobs() if job["managed_id"] == self.scope.managed_id
+                  or job["id"] == receipt.get("job_id") or job["config"].get("script") == self.scope.script]
         if not marked:
             return None
-        if (len(marked) != 1 or marked[0]["config"] != desired_job()
+        if (len(marked) != 1 or marked[0]["config"] != desired_job(self.instance_id)
                 or marked[0]["id"] in receipt["baseline_job_ids"]
                 or receipt.get("job_id") not in {None, marked[0]["id"]}):
             refuse("native_job_drift")
@@ -351,17 +416,18 @@ class Deployment:
             else:
                 if (self.launcher.exists() or self.launcher.is_symlink()
                         or (self.root.exists() and any(self.root.iterdir()))
-                        or any(job["managed_id"] == "founder-brief" for job in self._jobs())):
+                        or any(job["managed_id"] == self.scope.managed_id
+                               or job["config"].get("script") == self.scope.script for job in self._jobs())):
                     refuse("existing_workflow_requires_review")
                 job = None
             self._ready()
             if receipt is None:
                 self._directory(self.root, create=True)
                 self._directory(self.root / "state", create=True)
-                receipt = {"schema_version": 1, "owner": OWNER, "home": str(self.home), "hermes": self.hermes,
+                receipt = {"schema_version": 1, "owner": self.scope.owner, "home": str(self.home), "hermes": self.hermes,
                            "installation_id": uuid.uuid4().hex, "installed_at": datetime.now(timezone.utc).isoformat(),
                            "phase": "installing", "plan_hash": plan_hash, "review_hash": sha(encoded(descriptor)),
-                           "native_job": desired_job(), "baseline_job_ids": [job["id"] for job in self._jobs()],
+                           "native_job": desired_job(self.instance_id), "baseline_job_ids": [job["id"] for job in self._jobs()],
                            "job_id": None, "files": files}
                 self._write_receipt(receipt)
             try:
@@ -375,9 +441,9 @@ class Deployment:
                     self._write_receipt(receipt)
                     creation_failed = False
                     try:
-                        self._run(["--profile", "default", "cron", "create", "--script=" + SCRIPT, "--no-agent",
-                                   "--deliver=local", "--failure-deliver=local", "--name=" + MARKER,
-                                   "--", "* * * * *", PROMPT])
+                        self._run(["--profile", "default", "cron", "create", "--script=" + self.scope.script, "--no-agent",
+                                   "--deliver=local", "--failure-deliver=local", "--name=" + self.scope.marker,
+                                   "--", "* * * * *", "Run reviewed GitHub daily brief " + self.scope.marker])
                     except DeploymentError:
                         creation_failed = True
                     job = self._owned_job(receipt)

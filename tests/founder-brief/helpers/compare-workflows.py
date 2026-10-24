@@ -89,7 +89,7 @@ def write_json(path, value):
 
 
 def config(pack):
-    return {"schema_version": 1, "workflow": pack, "repositories": ["acme/widget"],
+    return {"schema_version": 1, "workflow": pack, "instance_id": pack, "repositories": ["acme/widget"],
             "telegram_chat_id": "555000111", "daily_time": "08:00", "timezone": "UTC", "window_hours": 24}
 
 
@@ -106,15 +106,16 @@ def telegram_client(port):
 
 
 def worker(home, arm):
-    runtime = home / (".hstack/founder-brief/runtime.pyz" if arm == "hstack" else "manual-brief/runtime.pyz")
+    pack = os.environ["HSTACK_COMPARISON_PACK"]
+    runtime = home / (".hstack/workflows/" + pack + "/runtime.pyz" if arm == "hstack" else "manual-brief/runtime.pyz")
     workflow, deployment = modules(runtime)
     collector = workflow.collector_module()
     port = int(os.environ["HSTACK_COMPARISON_HTTP_PORT"])
     github = collector.GitHubClient._for_test("http://127.0.0.1:" + str(port), token=CREDENTIALS["GITHUB_TOKEN"])
     now = workflow.utc(NOW)
     if arm == "hstack":
-        dep = deployment.Deployment(home, home.parent / "hermes-fixture", offline=True)
-        result = workflow.execute(home, now=now, _github_client=github, _telegram_client=telegram_client(port), _deployment=dep)
+        dep = deployment.Deployment(home, home.parent / "hermes-fixture", instance_id=pack, offline=True)
+        result = workflow.execute(home, instance_id=pack, now=now, _github_client=github, _telegram_client=telegram_client(port), _deployment=dep)
     else:
         namespace = runpy.run_path(str(home / "scripts/manual-brief.py"))
         result = namespace["run"](home, now, github, telegram_client(port))
@@ -154,7 +155,10 @@ def operation(step, root, pack):
         print(json.dumps({"status": "removed", "evidence_retained": True}))
         return
     original = deployment.Deployment
-    deployment.Deployment = lambda target, executable: original(target, executable, offline=True)
+    def offline_deployment(target, executable, **kwargs):
+        kwargs["offline"] = True
+        return original(target, executable, **kwargs)
+    deployment.Deployment = offline_deployment
     runtime = prepared / "hstack-brief.pyz"
     if step == "prepare":
         import prepare
@@ -172,10 +176,10 @@ def operation(step, root, pack):
             args += ["--credentials", str(root / "credentials.json"), "--approve", (root / "approval").read_text()]
     elif step in {"canary", "canary-replay"}:
         original_canary = workflow.run_canary
-        workflow.run_canary = lambda target, approval, identity: original_canary(target, approval, identity, now=workflow.utc(NOW))
-        args = ["canary"] + common + ["--approve", (root / "approval").read_text(), "--run-id", CANARY]
+        workflow.run_canary = lambda target, approval, identity, **kwargs: original_canary(target, approval, identity, now=workflow.utc(NOW), **kwargs)
+        args = ["canary"] + common + ["--instance", pack, "--approve", (root / "approval").read_text(), "--run-id", CANARY]
     else:
-        args = ["rollback"] + common + ["--approve", (root / "approval").read_text()]
+        args = ["rollback"] + common + ["--instance", pack, "--approve", (root / "approval").read_text()]
     raise SystemExit(workflow.main(args))
 
 
@@ -297,7 +301,7 @@ def arm(api, pack, kind, bundle):
         job = next(value for value in jobs if value["id"] == job_id)
         assert job["no_agent"] and job["deliver"] == job["failure_deliver"] == "local"
         assert job["schedule"] == {"kind": "cron", "expr": "* * * * *"}
-        assert job["script"] == ("hstack-founder-brief.py" if kind == "hstack" else "manual-brief.py")
+        assert job["script"] == ("hstack-workflow-" + pack + ".py" if kind == "hstack" else "manual-brief.py")
         if kind == "hstack":
             one = invoke("canary")
             before_replay = len(api.calls)
@@ -316,7 +320,7 @@ def arm(api, pack, kind, bundle):
         assert len(api.bodies) - first_body == 1
         assert json.loads((home / "cron/jobs.json").read_text())["jobs"] == [foreign]
         if kind == "hstack":
-            base, launcher = home / ".hstack/founder-brief", home / "scripts/hstack-founder-brief.py"
+            base, launcher = home / ".hstack/workflows" / pack, home / "scripts" / ("hstack-workflow-" + pack + ".py")
         else:
             base, launcher = home / "manual-brief", home / "scripts/manual-brief.py"
         assert not launcher.exists() and not launcher.is_symlink(), "cleanup must retire the owned launcher"

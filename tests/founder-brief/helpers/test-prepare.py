@@ -57,12 +57,14 @@ class PreparationTests(unittest.TestCase):
                 self.assertEqual((code, stderr), (0, ""))
                 result = json.loads(stdout)
                 self.assertEqual(result["workflow"], name)
+                self.assertEqual(result["instance_id"], name)
                 config = json.loads((output / "config.json").read_text())
                 self.assertEqual(config, result["configuration"])
                 self.assertEqual(config["repositories"], ["acme/app", "zed/project"])
                 self.assertEqual((config["workflow"], config["daily_time"], config["timezone"], config["window_hours"]),
                                  (name, "09:00", "UTC", 24))
                 self.assertEqual(workflow.validate_config(config), config)
+                self.assertEqual(config["instance_id"], name)
                 self.assertEqual((output / "runtime.pyz").read_bytes(), self.runtime)
                 self.assertEqual(result["evidence_scope"], "offline_preparation_only")
                 self.assertTrue(result["target_transfer_required"])
@@ -88,9 +90,11 @@ class PreparationTests(unittest.TestCase):
         for flag, value in (("--repository", "../bad"), ("--repository", "acme/app"),
                             ("--chat-id", "-100123"), ("--chat-id", "00123"),
                             ("--at", "25:00"), ("--timezone", "Bad/Zone"),
+                            ("--instance", "../escape"), ("--instance", "UPPERCASE"),
+                            ("--instance", ""), ("--instance", "-leading"),
                             ("--window-hours", "0"), ("--window-hours", "169")):
             with self.subTest(flag=flag, value=value):
-                code, stdout, stderr = self.call(self.argv() + [flag, value])
+                code, stdout, stderr = self.call(self.argv() + [flag + "=" + value])
                 self.assertEqual(code, 1)
                 self.assertEqual(stdout, "")
                 self.assertEqual(json.loads(stderr)["status"], "unprepared")
@@ -174,12 +178,24 @@ class PreparationTests(unittest.TestCase):
         result = json.loads(stdout)
         self.assertEqual(Path(result["files"]["config"]), output / "config.json")
         self.assertFalse(marker.exists())
-        self.assertEqual(set(result["next_commands"]), {"canary", "credentials", "install", "preview", "review"})
+        self.assertEqual(set(result["next_commands"]), {"canary", "credentials", "install", "preview", "review", "status", "rollback", "list"})
         for command in result["next_commands"].values():
             self.assertEqual(shlex.split(command["shell"]), command["argv"])
             self.assertIn("<TARGET_PREPARED_DIRECTORY>/runtime.pyz", command["argv"])
         credentials = result["next_commands"]["credentials"]["argv"]
         self.assertEqual(credentials[-3:], ["credentials", "--output", "<TARGET_CREDENTIALS_JSON>"])
+        for name in ("canary", "status", "rollback"):
+            argv = result["next_commands"][name]["argv"]
+            self.assertEqual(argv[argv.index("--instance") + 1], "activity-brief")
+
+    def test_custom_instance_is_bound_to_configuration_and_operation_commands(self):
+        code, stdout, stderr = self.call(self.argv("review-queue") + ["--instance", "team-a-reviews"])
+        self.assertEqual((code, stderr), (0, ""))
+        result = json.loads(stdout)
+        self.assertEqual(result["configuration"]["instance_id"], "team-a-reviews")
+        for name in ("canary", "status", "rollback"):
+            argv = result["next_commands"][name]["argv"]
+            self.assertEqual(argv[argv.index("--instance") + 1], "team-a-reviews")
 
     def test_actual_checkout_cli_is_deterministic_and_ignores_ambient_credentials(self):
         secret = "never_copy_this_private_test_secret"

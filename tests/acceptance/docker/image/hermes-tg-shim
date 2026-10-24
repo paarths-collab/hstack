@@ -1,20 +1,38 @@
 #!/usr/bin/env bash
 # Docker-test-only shim in FRONT of the stub hermes (the stub is moved to hermes.stub next to it) for the
-# Telegram skill test. It adds exactly three things the skill calls but the stub's declared surface lacks;
-# every other call is passed to the stub unchanged:
+# Telegram skill test. It adapts only the default-profile forms exercised by the current skill and adds
+# commands the legacy acceptance stub's declared surface lacks:
+#   hermes -p default ... / hermes --profile default ... -> the same legacy-stub call without the prefix
 #   hermes config set KEY -- VALUE   -> stub `config set KEY VALUE`   (the skill's `--` guard for negative ids)
+#   hermes gateway ensure --json --timeout 60 -> stub `gateway run --daemon`, then a fixture ready response
 #   hermes gateway status            -> "gateway: running|stopped" from the stub's gateway.state
 #   hermes logs gateway -n N         -> a "telegram connected" line only while the gateway state is running
-# These are assumptions about Hermes, the same class as the stub: not evidence about the real CLI.
+# The shared stub and its legacy version pin are unchanged. This adaptation is a TEST DOUBLE, not evidence
+# that either Hermes release supports another release's lifecycle commands or that a real gateway is ready.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 stub="$here/hermes.stub"
+case "${1:-}" in
+  -p|--profile)
+    [ $# -ge 3 ] && [ "$2" = default ] || exit 99
+    shift 2 ;;
+  --profile=default) shift ;;
+  --profile=*) exit 99 ;;
+esac
 state=$(cat "$HOME/.hermes/gateway.state" 2>/dev/null || echo stopped)
 case "${1:-} ${2:-}" in
+  "gateway ensure")
+    [ $# -eq 5 ] && [ "$3" = --json ] && [ "$4" = --timeout ] && [ "$5" = 60 ] || exit 99
+    "$stub" gateway run --daemon || exit $?
+    printf '{"state":"ready","evidence":"test-double"}\n'
+    exit 0 ;;
   "gateway status")
+    [ $# -eq 2 ] || exit 99
     if [ "$state" = running ]; then echo "gateway: running"; else echo "gateway: stopped"; fi
     exit 0 ;;
   "logs gateway")
+    [ $# -eq 4 ] && [ "$3" = -n ] || exit 99
+    case "$4" in ''|*[!0-9]*) exit 99 ;; esac
     if [ "$state" = running ]; then echo "[gateway] telegram connected (long-poll)"; else echo "[gateway] not started"; fi
     exit 0 ;;
   "config set")

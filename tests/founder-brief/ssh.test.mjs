@@ -26,7 +26,7 @@ async function port() {
   });
 }
 
-test("real disposable SSH transfers the bundle and exercises install, native-fixture canary, status and rollback", { timeout: 60_000 }, async (t) => {
+test("real disposable SSH transfers the bundle and isolates legacy and named install, canary, status and rollback", { timeout: 120_000 }, async (t) => {
   if (!existsSync("/usr/sbin/sshd")) return t.skip("local /usr/sbin/sshd unavailable; no system installation attempted");
   let chosen;
   try { chosen = await port(); }
@@ -96,10 +96,10 @@ test("real disposable SSH transfers the bundle and exercises install, native-fix
     // Hermes source and the reviewed runtime have no endpoint override switches.
     const nativeFixture = readFileSync(path.join(HERE, "helpers/native-hermes-v0_22_5.py"), "utf8").replace(
       "else:sys.exit(92)",
-      `elif args[1]=="run":\n import subprocess\n raise SystemExit(subprocess.run([sys.executable,"-I","-B",str(pathlib.Path(os.environ["HOME"])/"ssh-workflow.py"),"worker"],check=False).returncode)\nelse:sys.exit(92)`);
+      `elif args[1]=="run":\n import subprocess\n job=next(job for job in data["jobs"] if job["id"]==args[2])\n script=job["script"]\n instance=script[len("hstack-workflow-"):-3] if script.startswith("hstack-workflow-") else "-"\n raise SystemExit(subprocess.run([sys.executable,"-I","-B",str(pathlib.Path(os.environ["HOME"])/"ssh-workflow.py"),"worker",instance],check=False).returncode)\nelse:sys.exit(92)`);
     await upload("hermes-fixture", nativeFixture, "700");
-    const call = async (operation, input = null) => {
-      const result = await transport.exec({ remote: `${quote(python)} ${pythonArgs.map(quote).join(" ")} -I -B "$HOME/ssh-workflow.py" ${quote(operation)}`, stdin: input });
+    const call = async (operation, input = null, instance = "-") => {
+      const result = await transport.exec({ remote: `${quote(python)} ${pythonArgs.map(quote).join(" ")} -I -B "$HOME/ssh-workflow.py" ${quote(operation)} ${quote(instance)}`, stdin: input });
       assert.equal(result.code, 0, `${operation}: ${result.stderr}`);
       assert.equal(result.transportError, false);
       return JSON.parse(result.stdout);
@@ -123,6 +123,29 @@ test("real disposable SSH transfers the bundle and exercises install, native-fix
     assert.equal((await call("rollback")).status, "already_rolled_back");
     const removed = await transport.exec({ remote: 'test ! -e "$HOME/.hermes/.hstack/founder-brief/credentials.json" && test ! -e "$HOME/.hermes/scripts/hstack-founder-brief.py" && printf private-payload-removed', stdin: null });
     assert.equal(removed.stdout, "private-payload-removed");
+    const named = [];
+    for (const workflow of ["review-queue", "release-watch"]) {
+      const config = JSON.parse(input);
+      config.config.workflow = workflow;
+      config.config.instance_id = workflow;
+      const installed = await call("install", JSON.stringify(config), workflow);
+      assert.equal(installed.status, "installed");
+      named.push({ instance: workflow, installation: installed });
+    }
+    assert.notEqual(named[0].installation.job_id, named[1].installation.job_id);
+    const inventory = await call("list");
+    assert.deepEqual(inventory.map((entry) => entry.instance_id), [null, "release-watch", "review-queue"]);
+    for (const { instance, installation: installed } of named) {
+      const result = await call("canary", null, instance);
+      assert.equal(result.counts.sends, 1);
+      assert.ok(result.counts.github_gets >= 1);
+      const status = await call("status", null, instance);
+      assert.equal(status.job_id, installed.job_id);
+      assert.equal(status.run_calls.length, 2);
+    }
+    assert.equal((await call("rollback", null, named[0].instance)).status, "rolled_back");
+    assert.equal((await call("status", null, named[1].instance)).phase, "complete");
+    assert.equal((await call("rollback", null, named[1].instance)).status, "rolled_back");
   } finally {
     if (daemon && !closed) {
       daemon.kill("SIGTERM");

@@ -11,6 +11,7 @@ def build():
     here = Path(__file__).resolve().parent
     sources = {"workflow.py": here / "workflow.py", "github_brief.py": here / "github-brief.py",
                "prepare.py": here / "prepare.py",
+               "instance_scope.py": here / "instance_scope.py",
                "telegram_delivery.py": here / "telegram_delivery.py", "deployment.py": here / "deployment.py",
                "native_adapter.py": here.parent / "acceptance" / "target" / "native-hermes-v0_22_5.py"}
     output = io.BytesIO()

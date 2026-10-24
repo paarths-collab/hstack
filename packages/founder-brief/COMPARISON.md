@@ -21,7 +21,8 @@ The packs address a narrower need: a deterministic, repository-scoped report,
 without a model call, with checked private Telegram delivery, a durable reporting
 identity and an owned installation that can be removed safely. Choose activity,
 requested PR reviews or published releases instead of assembling that worker.
-Only one selected pack is supported on each exclusive default-profile target.
+Multiple named instances coexist on one exclusive default-profile target; each
+has its own repositories, private chat, cutoff, credentials and rollback.
 The pack uses its own private API credentials and a native local-delivery job, so
 it does not require configuring shared Hermes Telegram/GitHub integrations. This
 is an application setup choice, not a capability missing from native scripts.
@@ -60,8 +61,10 @@ these shared components. It receives the same five explicit choices: workflow,
 repositories, private chat, daily time and timezone. The default 24-hour reporting
 window is the same in both arms. Time and timezone have hstack defaults; providing
 them explicitly here prevents unequal input assumptions.
+The instance ID is derived from the pack in both fixture configurations; it is
+not counted as another operator choice. Custom instance names are optional.
 
-The native arm then assembles its seven-field JSON configuration, publishes the
+The native arm then assembles its eight-field JSON configuration, publishes the
 archive/configuration/credentials and small launcher, and creates a native job:
 
 ```bash
@@ -95,7 +98,7 @@ from the subprocess invocations that actually ran:
 | Setup process invocations | 3 | 3 |
 | Full transcript, including replay and cleanup | 7 | 6 |
 | Runbook-supplied integration artifacts | 2 | 0 |
-| Runbook-supplied configuration fields | 7 | 0 |
+| Runbook-supplied configuration fields | 8 | 0 |
 | Runbook-supplied worker, nonblank source lines | 29 | 0 |
 | Telegram sends after a confirmed replay | 1 | 1 |
 

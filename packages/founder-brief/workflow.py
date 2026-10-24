@@ -63,6 +63,30 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+def scope_for(instance_id=None):
+    """Resolve only a validated application instance, including the legacy slot."""
+    try:
+        import instance_scope
+    except ModuleNotFoundError as error:
+        if error.name != "instance_scope":
+            raise
+        spec = importlib.util.spec_from_file_location("hstack_instance_scope", Path(__file__).with_name("instance_scope.py"))
+        instance_scope = importlib.util.module_from_spec(spec)
+        # Dataclasses need their defining module while resolving annotations.
+        sys.modules[spec.name] = instance_scope
+        spec.loader.exec_module(instance_scope)
+    try:
+        return instance_scope.scope_for(instance_id)
+    except ValueError:
+        raise WorkflowError("invalid_instance_id") from None
+
+
+def bind_config(config, instance_id):
+    if config.get("instance_id") != instance_id:
+        raise WorkflowError("instance_configuration_mismatch")
+    return config
+
+
 def pairs(values):
     result = {}
     for key, value in values:
@@ -99,8 +123,12 @@ def private_json(file, optional=False):
 
 def validate_config(value):
     required = {"schema_version", "repositories", "telegram_chat_id", "daily_time", "timezone", "window_hours"}
-    if not isinstance(value, dict) or not required <= set(value) or set(value) - required - {"workflow"} or type(value["schema_version"]) is not int or value["schema_version"] != 1:
+    if not isinstance(value, dict) or not required <= set(value) or set(value) - required - {"workflow", "instance_id"} or type(value["schema_version"]) is not int or value["schema_version"] != 1:
         raise WorkflowError("invalid_config_shape")
+    if "instance_id" in value:
+        if value["instance_id"] is None:
+            raise WorkflowError("invalid_instance_id")
+        scope_for(value["instance_id"])
     if not isinstance(value.get("workflow", "activity-brief"), str) or value.get("workflow", "activity-brief") not in WORKFLOWS:
         raise WorkflowError("unknown_workflow")
     repos = value["repositories"]
@@ -303,16 +331,18 @@ def atomic_json(file, value):
             os.unlink(temp)
 
 
-def deployment_for(home, supplied=None):
+def deployment_for(home, supplied=None, *, instance_id=None, _metadata_only=False):
+    scope = scope_for(instance_id)
     if supplied is not None:
-        if supplied.home != home:
+        if supplied.home != home or supplied.instance_id != instance_id:
             raise WorkflowError("deployment_target_mismatch")
         return supplied
     from deployment import Deployment
-    raw = private_json(home / ROOT / "installation.json")
+    raw = private_json(home / scope.relative_root / "installation.json")
     if not isinstance(raw, dict) or not isinstance(raw.get("hermes"), str):
         raise WorkflowError("installation_not_complete")
-    return Deployment(home, raw["hermes"])
+    options = {"offline": True} if _metadata_only else {}
+    return Deployment(home, raw["hermes"], instance_id=instance_id, **options)
 
 
 def canary_request(base, config, canary_id, now, create=False):
@@ -341,17 +371,17 @@ def canary_request(base, config, canary_id, now, create=False):
     return request
 
 
-def execute(home, *, canary_id=None, now=None, _github_client=None, _telegram_client=None, _deployment=None):
+def execute(home, *, instance_id=None, canary_id=None, now=None, _github_client=None, _telegram_client=None, _deployment=None):
     """Run the real collector and sender; test seams are Python-only arguments."""
     from telegram_delivery import TelegramDelivery, DeliveryUnknown
     home = home_path(home)
-    base = home / ROOT
-    deployment = deployment_for(home, _deployment)
+    base = home / scope_for(instance_id).relative_root
+    deployment = deployment_for(home, _deployment, instance_id=instance_id)
     # Installation, updates and rollback share this kernel lock. No request can
     # send from a partly replaced payload or silently drift from reviewed bytes.
     with deployment.runtime_guard() as installation:
         deployment.verify_installation(verify_job=True)
-        config = validate_config(private_json(base / "config.json"))
+        config = bind_config(validate_config(private_json(base / "config.json")), instance_id)
         credentials = validate_credentials(private_json(base / "credentials.json"))
         now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         state = state_directory(base)
@@ -406,23 +436,35 @@ def execute(home, *, canary_id=None, now=None, _github_client=None, _telegram_cl
 LAUNCHER = b'''# hstack-owned founder brief launcher v1\nimport os\nimport sys\nhome = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))\nruntime = os.path.join(home, ".hstack", "founder-brief", "runtime.pyz")\nos.execv(sys.executable, [sys.executable, "-I", "-B", runtime, "scheduled", "--home", home])\n'''
 
 
+def launcher_for(instance_id=None):
+    scope = scope_for(instance_id)
+    if instance_id is None:
+        return LAUNCHER
+    components = ", ".join(repr(part) for part in Path(scope.relative_root).parts)
+    return ("# hstack-owned workflow launcher v1\nimport os\nimport sys\n"
+            "home = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))\n"
+            "runtime = os.path.join(home, " + components + ", 'runtime.pyz')\n"
+            "os.execv(sys.executable, [sys.executable, '-I', '-B', runtime, 'scheduled', '--home', home, '--instance', "
+            + repr(instance_id) + "])\n").encode()
+
+
 def safe_summary(value):
     # Output is a receipt/status, never source text, credentials or raw chat IDs.
     return canonical(value)
 
 
-def run_canary(home, approval, canary_id, *, now=None, _deployment=None, _dispatch=None):
+def run_canary(home, approval, canary_id, *, instance_id=None, now=None, _deployment=None, _dispatch=None):
     """Arm one immutable window, dispatch native cron, require its API proof."""
     from telegram_delivery import TelegramDelivery
     home = home_path(home)
-    deployment = deployment_for(home, _deployment)
+    deployment = deployment_for(home, _deployment, instance_id=instance_id)
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    base = home / ROOT
+    base = home / scope_for(instance_id).relative_root
     with deployment.runtime_guard() as record:
         deployment.verify_installation(verify_job=True)
         if approval != record["review_hash"]:
             raise WorkflowError("approval_hash_mismatch")
-        config = validate_config(private_json(base / "config.json"))
+        config = bind_config(validate_config(private_json(base / "config.json")), instance_id)
         request = canary_request(base, config, canary_id, now, create=True)
         pointer_file = state_directory(base) / "canary-request.json"
         pointer = private_json(pointer_file, optional=True)
@@ -455,6 +497,42 @@ def run_canary(home, approval, canary_id, *, now=None, _deployment=None, _dispat
         return {"native_job_id": job_id, "native_command": "cron run", "canary_id": canary_id, "delivery": proof}
 
 
+def list_instances(home):
+    """Read installation metadata only; never invoke Hermes or read credentials."""
+    home = home_path(home)
+    parent = home / ".hstack"
+    if not parent.exists() and not parent.is_symlink():
+        return []
+    if parent.is_symlink() or not parent.is_dir():
+        raise WorkflowError("unsafe_workflow_inventory")
+    candidates = []
+    legacy = home / ROOT / "installation.json"
+    if legacy.exists() or legacy.is_symlink():
+        candidates.append(None)
+    container = parent / "workflows"
+    if container.exists() or container.is_symlink():
+        info = container.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise WorkflowError("unsafe_workflow_inventory")
+        for path in sorted(container.iterdir()):
+            scope_for(path.name)
+            info = path.lstat()
+            if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                raise WorkflowError("unsafe_workflow_inventory")
+            if (path / "installation.json").exists() or (path / "installation.json").is_symlink():
+                candidates.append(path.name)
+    result = []
+    for instance_id in candidates:
+        deployment = deployment_for(home, instance_id=instance_id, _metadata_only=True)
+        deployment._structure()
+        record = deployment._read_receipt()
+        if record is None:
+            raise WorkflowError("installation_not_complete")
+        result.append({"instance_id": instance_id, **{key: record.get(key) for key in
+                      ("phase", "installed_at", "review_hash", "job_id")}})
+    return result
+
+
 def main(argv=None):
     # Prepare owns its flags, and runs without a Hermes target or credentials.
     command_args = list(sys.argv[1:] if argv is None else argv)
@@ -465,6 +543,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Prepare, preview and run ready-to-use GitHub workflows")
     subs = parser.add_subparsers(dest="command", required=True)
     subs.add_parser("packs", help="List the three workflows and their scope")
+    p = subs.add_parser("list", help="List named installations and the legacy slot without invoking Hermes")
+    p.add_argument("--home", type=Path, required=True)
     p = subs.add_parser("credentials", help="Write a new private credential file using hidden terminal prompts")
     p.add_argument("--output", type=Path, required=True)
     p = subs.add_parser("preview", help="Fetch the selected report without installing or sending it")
@@ -481,6 +561,7 @@ def main(argv=None):
     for command in ("scheduled", "canary", "status", "rollback"):
         p = subs.add_parser(command)
         p.add_argument("--home", type=Path, required=True)
+        p.add_argument("--instance", help="Named workflow instance; omit only for the legacy installation")
         if command in {"canary", "rollback"}:
             p.add_argument("--approve", required=True)
         if command == "canary":
@@ -492,7 +573,7 @@ def main(argv=None):
             return 0
         if args.command == "packs":
             print(safe_summary({"workflows": [{"id": key, **value} for key, value in WORKFLOWS.items()],
-                                "installation_scope": "one_selected_workflow_per_default_profile_target",
+                                "installation_scope": "multiple_named_workflow_instances_per_default_profile_target",
                                 "requirements": "Linux, exact Hermes 0.22.5 candidate, Python 3.9+, private Telegram chat",
                                 "limits": "1-8 repositories; 3 pages of 100 items per source; 2 MiB per response; 90 seconds collection",
                                 "access": "Public repositories: optional token. Private: grant the selected repositories and the read permissions listed for that pack."}))
@@ -516,41 +597,50 @@ def main(argv=None):
             print(body)
             return 0
         home = home_path(args.home)
-        base = home / ROOT
+        if args.command == "list":
+            print(safe_summary({"instances": list_instances(home), "evidence_scope": "installation_metadata_only"}))
+            return 0
         if args.command in {"review", "install"}:
             from deployment import Deployment
             config = validate_config(private_json(args.config))
             bundle = Path(sys.argv[0]).read_bytes()
-            deployment = Deployment(home, str(args.hermes))
-            review = deployment.review_descriptor(bundle, LAUNCHER, config)
-            review_hash = deployment.review_hash(bundle, LAUNCHER, config)
+            instance_id = config.get("instance_id")
+            launcher = launcher_for(instance_id)
+            deployment = Deployment(home, str(args.hermes), instance_id=instance_id)
+            review = deployment.review_descriptor(bundle, launcher, config)
+            review_hash = deployment.review_hash(bundle, launcher, config)
             if args.command == "review":
                 print(safe_summary({"plan_hash": review_hash, "review": review, "evidence_scope": "offline_plan_only"}))
                 return 0
             if args.approve != review_hash:
                 raise WorkflowError("approval_hash_mismatch")
             credentials = validate_credentials(private_json(args.credentials))
-            print(safe_summary(deployment.install(bundle, LAUNCHER, config, credentials)))
+            print(safe_summary(deployment.install(bundle, launcher, config, credentials)))
             return 0
+        instance_id = args.instance
+        base = home / scope_for(instance_id).relative_root
         if args.command == "scheduled":
-            print(safe_summary(execute(home)))
+            print(safe_summary(execute(home, instance_id=instance_id)))
             return 0
         record = private_json(base / "installation.json")
         if args.command == "status":
-            print(safe_summary({key: record.get(key) for key in ("phase", "installed_at", "review_hash", "job_id")}))
+            deployment = deployment_for(home, instance_id=instance_id, _metadata_only=True)
+            deployment._structure()
+            record = deployment._read_receipt()
+            print(safe_summary({"instance_id": instance_id, **{key: record.get(key) for key in ("phase", "installed_at", "review_hash", "job_id")}}))
             return 0
         if args.approve != record.get("review_hash"):
             raise WorkflowError("approval_hash_mismatch")
         if args.command == "rollback":
             from deployment import Deployment
-            print(safe_summary(Deployment(home, record["hermes"]).rollback()))
+            print(safe_summary(Deployment(home, record["hermes"], instance_id=instance_id).rollback()))
             return 0
         # An explicit canary uses the same runtime/collector/sender as the scheduled job.
         # The canary ID is printed before any network request, allowing an interrupted
         # attempt to be reconciled without silently choosing another delivery identity.
         canary_id = args.run_id or secrets.token_hex(16)
         print(safe_summary({"canary_id": canary_id, "status": "starting", "evidence_scope": "not_yet_observed"}), flush=True)
-        print(safe_summary(run_canary(home, args.approve, canary_id)))
+        print(safe_summary(run_canary(home, args.approve, canary_id, instance_id=instance_id)))
         return 0
     except Exception as error:
         # Every expected module exception carries a fixed code; never print raw

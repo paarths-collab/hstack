@@ -79,8 +79,10 @@ proves a real daemon, vendor authentication, model response or message delivery.
 
 The three runnable GitHub report packs are documented in
 [`packages/founder-brief/`](../packages/founder-brief/README.md). Its separate private
-deployment owns its script, runtime, configuration, credentials and native no-agent
-job. The older acceptance transaction remains an experimental control-plane fixture.
+deployment supports multiple named instances on the same default-profile target.
+Each owns its script, runtime, configuration, credentials, journal and native
+no-agent job; legacy unlabelled installations keep their original namespace.
+The older acceptance transaction remains an experimental control-plane fixture.
 An API acknowledgement from the runnable worker is explicitly distinguished from
 recipient observation and does not satisfy the live promotion gate by itself.
 

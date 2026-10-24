@@ -364,8 +364,10 @@ gated("transaction: a user edit of a managed key after apply => manual_recovery_
 //   S3  env: VPS_USER, VPS_IP, TELEGRAM_* and FORCE come from the test; the dry-run's "wait for confirmation" is
 //       prose, not code, so AUTO_APPROVE needs no shim. Nothing else is altered; Steps 1, 2, 4, 6, 7, 9 run too.
 //   S4  container side: ~/.local/bin gets `curl` (answers only getMe for the fake good token, logs token LENGTH)
-//       and `hermes` becomes a shim in front of the stub adding `config set K -- V`, `gateway status`, and
-//       `logs gateway -n N` (the stub's declared surface lacks them; the skill lists them as UNVERIFIED).
+//       and `hermes` becomes a shim accepting only the default-profile forms, `config set K -- V`,
+//       `gateway status`, `logs gateway -n N` and fixture `gateway ensure --json --timeout 60`.
+//       Ensure delegates to the legacy stub's run command and labels readiness as test-double evidence.
+//       The shared legacy stub/version pin remain unchanged; this is not live candidate validation.
 
 const SKILL = path.join(REPO, "skills", "platform-telegram", "SKILL.md");
 

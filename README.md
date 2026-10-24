@@ -4,11 +4,16 @@
 
 hstack packages three deterministic GitHub-to-private-Telegram workflows: repository activity, requested PR reviews and published releases. Select a pack and generate its private configuration and worker without writing source code or JSON. Hermes supplies native scheduling. The repository also includes 97 setup and integration procedures.
 
-Install it once, then say what you want:
+Run all three on the same Hermes server, or create several copies with different
+repositories, chats and daily cutoffs. Each instance owns its credentials, delivery
+journal and rollback. The reports run without a model call.
 
-> *"Deploy Hermes to my server and connect Notion, GitLab and Telegram."*
+For example:
 
-Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself can read the procedures and prepare the selected setup. Prefer native Hermes setup and connectors where they cover the task; custom deployment steps and verification should address a concrete remaining need.
+> *"Send repository activity at 9 AM, requested reviews at noon, and release updates to another private chat."*
+
+Prepare a separate instance for each report, preview its output, then review and
+install it on your existing compatible target using the generated instructions.
 
 **Compatibility:** the default acceptance contract is a legacy 0.15.2 fixture baseline. Hermes 0.22.5 is an explicit, unpromoted candidate with source and offline checks. These checks do not establish live operation, and the catalog has not been re-verified against every vendor. Read [compatibility and promotion](compatibility/README.md) before deployment.
 
@@ -45,8 +50,11 @@ python3 -I -B packages/founder-brief/prepare.py \
 ```
 
 Follow the generated `NEXT_STEPS.md` to transfer, preview, review, install and run
-the canary. One selected pack is supported per exclusive default-profile Linux
-target with the exact Hermes 0.22.5 candidate. Setup does not provision that target.
+the canary. All three packs can coexist on the same exclusive default-profile
+Linux target with the exact Hermes 0.22.5 candidate. Use `--instance team-reviews`
+to prepare another copy of a pack with different repositories, chat or cutoff.
+Each instance has its own job, private files, delivery journal and rollback.
+Setup does not provision the target.
 Reports are bounded and refuse incomplete data; open-PR and release-history
 volume limits are described in the [pack guide](packages/founder-brief/README.md).
 
@@ -55,8 +63,8 @@ avoids blind retries after uncertain sends, and supports owned rollback.
 
 | Part | Current status |
 |---|---|
-| Three reports, private preparation, preview, installation, schedule, canary and rollback | Implemented |
-| Combined local suite, including all three comparisons and real loopback SSH/HTTP | **48 top-level tests passed; no failures or skips** |
+| Three reports, multiple independent instances, private preparation, preview, schedule, canary and rollback | Implemented |
+| Workflow/native-cron/Telegram-shim checks, including real loopback SSH/HTTP | **56 tests passed; no failures or skips**. Controlled vendors; [evidence and limits](compatibility/VALIDATION.md) |
 | Real Hermes 0.22.5 target and real Telegram delivery | **Pending target and private credential files** |
 | Seven-day live reliability gate | Not started; candidate remains unpromoted |
 
@@ -74,6 +82,11 @@ below installs procedures; it does not deploy these workers or supply credential
 ## What a superpower is
 
 A superpower is one Markdown file: a procedure your AI coding agent reads and executes on your server. Review its commands, required credentials, supported runtime and recovery limits before it touches your box.
+
+Claude Code, Codex, Cursor, Gemini CLI, OpenClaw, or Hermes itself can read these
+procedures for requests such as "Deploy Hermes to my server and connect Notion,
+GitLab and Telegram." Prefer native Hermes setup and connectors where they cover
+the task; custom steps should address a concrete remaining need.
 
 Install hstack once and your coding agent gains all 97:
 

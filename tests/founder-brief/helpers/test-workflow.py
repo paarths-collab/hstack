@@ -164,7 +164,7 @@ class PureTests(unittest.TestCase):
         one, two = build.build(), build.build()
         self.assertEqual(one, two)
         with zipfile.ZipFile(io.BytesIO(one)) as archive:
-            self.assertEqual(set(archive.namelist()), {"__main__.py", "workflow.py", "prepare.py", "github_brief.py", "telegram_delivery.py", "deployment.py", "native_adapter.py"})
+            self.assertEqual(set(archive.namelist()), {"__main__.py", "workflow.py", "prepare.py", "instance_scope.py", "github_brief.py", "telegram_delivery.py", "deployment.py", "native_adapter.py"})
             for member in archive.namelist():
                 self.assertNotIn(BOT.encode(), archive.read(member))
                 self.assertNotIn(GITHUB.encode(), archive.read(member))

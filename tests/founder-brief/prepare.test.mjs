@@ -10,5 +10,5 @@ test("workflow packs prepare privately without JSON editing, source authoring or
     encoding: "utf8", timeout: 55_000, maxBuffer: 4 * 1024 * 1024,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /Ran 12 tests/);
+  assert.match(result.stderr, /Ran 13 tests/);
 });

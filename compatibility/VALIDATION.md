@@ -1,6 +1,7 @@
 # Workflow packs implementation and validation status
 
-Updated: **2026-10-24**. Implementation and local end-to-end validation are complete.
+Updated: **2026-10-24**. Multiple-instance implementation and local integration
+are complete, including a separately provisioned native cron source check.
 **Live target deployment and real Telegram verification remain pending.**
 
 The runnable entrypoint is [the workflow pack guide](../packages/founder-brief/README.md).
@@ -17,20 +18,30 @@ baseline has not been changed. Machine-readable status is in [hermes.json](herme
 - Reviewed installation, native no-agent scheduling, first-run canary and rollback.
 - Immutable reporting windows, durable journals, confirmed replay without HTTP, and unknown-send recovery.
 - Artifact, credential, receipt and native-job drift checks before dispatch.
+- Multiple named instances per default-profile target, including repeated copies
+  of a pack, with independent configuration, credentials, state, locks and rollback.
+- Legacy namespace, launcher and review-format compatibility; explicit instance
+  selection for canary, status and rollback, plus metadata-only inventory.
+- Ownership and write-permission checks on the target home, scripts and workflow
+  parents before installation/dispatch; hard-link aliases and symlink collisions refused.
 
 ## Evidence
 
 | Check | Result | What it establishes |
 |---|---|---|
-| Combined workflow pack suite | 48 top-level tests passed; 0 failures/skips | Complete local workflow and all three comparisons through controlled dependencies |
+| Workflow and Telegram shim suite | 56 top-level tests passed; 0 failures/skips | Local reports, concurrent instances, comparisons, transport and real native cron through controlled vendors |
 | Collector cases | 41 passed (23 activity + 18 pack cases) | Distinct source queries, queue/publication semantics, paging, windows, sanitization and failure handling |
-| Preparation cases | 12 passed | Actual checkout/packaged CLI, deterministic runtime, private modes, safe refusal and instructions |
+| Preparation cases | 13 passed | Actual checkout/packaged CLI, instance defaults/custom names, deterministic runtime, private modes, safe refusal and instructions |
 | Pack runtime/credential cases | 7 passed | Selection, target-free preview, actionable source errors and fail-closed hidden input |
 | Executable comparison | 3 workflows across both arms passed | Matching reports, endpoints, API acknowledgement, replay and cleanup; documented metric provenance |
 | Deployment scenarios | 16 passed | Install/retry, ownership, locking, interruption and rollback |
+| Multi-instance deployment scenarios | 18 passed | Concurrent installs, same-pack copies, namespace/receipt binding, independent recovery/rollback, directory and link safety |
+| Multi-instance runtime scenarios | 8 passed | Installed launchers, separate destinations/schedules, replay, unknown acknowledgements, drift, locks and legacy coexistence |
 | Telegram sender scenarios | 14 passed | Real loopback HTTP, private-chat checks, acknowledgements and uncertain sends |
 | Workflow scenarios | 21 passed | Collector-to-sender flow, schedule/DST, drift and canary recovery |
-| Real loopback SSH | Passed in the combined suite | Key authentication, actual transport, bundle transfer, install, canary, replay and rollback |
+| Real loopback SSH | Passed | Actual authentication/transport and legacy plus two named instances: transfer, canary, replay and independent rollback |
+| Pinned Hermes cron source | Passed on Python 3.14.9 | Three coexisting jobs, native claims/subprocesses, five controlled API acknowledgements, replay, failure/recovery and scheduler tick |
+| Telegram Docker shim regression | 5 passed | Actual skill reachability/reload blocks accept current default-profile syntax; legacy acceptance stub remains unchanged |
 | Focused acceptance checks | 20 passed | Observer freshness, operator validation and native adapter regressions |
 | Native adapter models | 25 passed | Tagged job bookkeeping and schedule/configuration semantics |
 | Contract recheck | 14 passed | Compatibility contract and version/status consistency |
@@ -38,7 +49,22 @@ baseline has not been changed. Machine-readable status is in [hermes.json](herme
 | Skill references / Bash lint | Passed | Referenced skills exist; fenced Bash parses |
 | Public GitHub collection | Earlier activity check passed; fresh pack preview hit `rate_limited` | Earlier production read succeeded without a token; the current unauthenticated API quota prevents a fresh public-pack verification |
 
-Pre-publication recheck on **24 October 2026**:
+Final multiple-instance recheck on **24 October 2026**:
+
+- All **56 workflow/native-cron/Telegram-shim tests passed**, with no skips, using
+  the explicit opt-in exact-source environment as well as disposable loopback SSH.
+- **89 compatibility and Telegram skill regressions passed**. Separate deployment
+  checks passed 16 legacy and 18 multiple-instance Python scenarios; these component
+  counts overlap the combined suite.
+- All **97 skills** validated; references passed; **1,061 Bash blocks** parsed with
+  120 placeholder blocks skipped and no errors. The final working-directory Gitleaks
+  scan found no leaks.
+- The legacy launcher, native job and four configuration descriptor hashes matched
+  the preceding implementation. The new code validated and rolled back an actual
+  receipt generated by that preceding implementation.
+- No real Telegram message, Linux gateway restart or seven-day live run was performed.
+
+Earlier pre-publication check on **24 October 2026**, before the multiple-instance changes:
 
 - The combined recipe, acceptance, skill and workflow suites passed **619 tests**,
   with zero failures and **14 optional Docker tests skipped**.
@@ -52,12 +78,26 @@ Pre-publication recheck on **24 October 2026**:
   release. The [comparison guide](../packages/founder-brief/COMPARISON.md) links the
   native capabilities and explains the packs' narrower application setup benefit.
 
-These remain local/source checks. They do not change live-verification or
-promotion status.
+The previous remote recipe run exposed four Telegram Docker tests rejecting the
+current default-profile CLI prefix. The shim now handles that syntax and explicitly
+labels its readiness response as test-double evidence. Five new local tests passed;
+the Docker container suite has not been rerun because no Docker daemon is available.
+
+These remain local/source checks. They do not change live-verification or promotion status.
 
 Parent and component counts overlap; do not sum them as independent top-level tests.
 The SSH test uses real SSH and HTTP, with a native Hermes CLI fixture and controlled
 GitHub/Telegram endpoints. It does not run a real Hermes daemon or send to Telegram.
+The separate [opt-in native cron check](../tests/founder-brief/REAL_NATIVE.md) imports
+seven hash-pinned source files from the exact candidate and uses the release's
+pinned Python 3.14.9. It exercises the actual parser, store, claims, no-agent worker
+subprocess and scheduler tick. Three packs produce five controlled API acknowledgements
+across initial delivery, source-failure recovery and a tick; confirmed replay adds
+no HTTP or send. Native failure bookkeeping and scoped cleanup are checked.
+The harness bypasses Linux/systemd readiness and enters the cron handler directly,
+excluding full startup and managed dependency activation. It does not verify a live
+gateway, gateway restart or real Telegram delivery. Test dependency setup is separate
+from a fully synchronized Hermes installation.
 
 The public Hermes repository exceeded collection bounds. The collector returned
 failure with no brief instead of describing incomplete data as a healthy result.
@@ -79,7 +119,7 @@ retained delivery evidence and preservation of unrelated jobs.
 
 Each supplied transcript uses three setup process invocations. The full lifecycle
 uses six for hstack and seven for the manual baseline, whose payload cleanup is
-separate. The native runbook supplies a seven-field configuration and 29-line
+separate. The native runbook supplies an eight-field configuration and 29-line
 integration worker; hstack generates those artifacts. These artifact counts come
 from the runbook manifest and constants, not observed human authoring. Machine
 timings are test overhead. **Human setup time has not been measured**, and the
