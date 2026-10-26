@@ -362,9 +362,6 @@ if ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=d.get("si
 fi
 rm -f "$PREFLIGHT_TMP/wf.json"
 
-# Path A: require npx
-if [ "${WIRE_PATH:-A}" = "A" ]; then
-fi
 
 VENDOR_PROBE
   } | remote "bash -c 'IFS= read -r HTTP; IFS= read -r PREFLIGHT_TMP; IFS= read -r WEBFLOW_SITE_ID; IFS= read -r WEBFLOW_TOKEN; IFS= read -r WIRE_PATH; IFS= read -r WRITES_ACKNOWLEDGED; export HTTP PREFLIGHT_TMP WEBFLOW_SITE_ID WEBFLOW_TOKEN WIRE_PATH WRITES_ACKNOWLEDGED; exec /bin/bash'"

@@ -60,6 +60,14 @@ function knobsFor(vendor) {
 const ids = (vendor, end = 8) => loadBlocks(`integration-${vendor}`).filter(b => /^step[0-8]#/.test(b.id) && Number(/^step(\d)/.exec(b.id)[1]) <= end).map(b => b.id);
 const flow = (vendor, end = 8, tail = "") => assemble(["set +e\n", { skill: `integration-${vendor}`, ids: ids(vendor, end) }, tail, 'echo SCRIPT-COMPLETED\n']);
 const fullEnv = vendor => ({ FORCE: "1", WRITES_ACKNOWLEDGED: "1", ...envs[vendor] });
+// A fenced block's grammar check treats heredocs as data. Check the source executed by the remote shell separately.
+const vendorProbe = vendor => {
+  const block = loadBlocks(`integration-${vendor}`).find(b => b.id === "step3#1");
+  const probes = [...block.code.matchAll(/^\s*cat <<'VENDOR_PROBE'\n([\s\S]*?)^VENDOR_PROBE$/gm)];
+  assert.equal(probes.length, 1, `${vendor}: exactly one executable vendor probe must be checked`);
+  return probes[0][1];
+};
+const bashGrammar = code => spawnSync("/bin/bash", ["-n"], { input: code, encoding: "utf8" });
 
 describe("wave2 batch3: source-bound native surfaces", () => {
   for (const vendor of vendors) {
@@ -71,9 +79,20 @@ describe("wave2 batch3: source-bound native surfaces", () => {
         const result = spawnSync("/bin/bash", ["-n"], { input: b.code, encoding: "utf8" });
         assert.equal(result.status, 0, `${vendor} ${b.id}: ${result.stderr}`);
       }
+      const probe = bashGrammar(vendorProbe(vendor));
+      assert.equal(probe.status, 0, `${vendor} embedded VENDOR_PROBE: ${probe.stderr}`);
       assert.doesNotMatch(text, /gateway run --daemon|--auth-header|--auth-scheme|--placeholder-token|gateway env|gateway stop;/);
     });
   }
+});
+
+it("the embedded-probe grammar guard rejects an empty retired branch even inside a valid outer heredoc", () => {
+  const broken = vendorProbe("sendgrid") + "\nif false; then\nfi\n";
+  const outer = "cat <<'VENDOR_PROBE'\n" + broken + "VENDOR_PROBE\n";
+  assert.equal(bashGrammar(outer).status, 0, "outer heredoc syntax alone cannot validate its executable contents");
+  const inner = bashGrammar(broken);
+  assert.equal(inner.status, 2);
+  assert.match(inner.stderr, /syntax error.*fi/);
 });
 
 describe("wave2 batch3: complete executable default routes", { concurrency: 4 }, () => {
@@ -81,6 +100,8 @@ describe("wave2 batch3: complete executable default routes", { concurrency: 4 },
     it(`${vendor}: credential/consent gate, native install, actual client/MCP smoke, new ready gateway and retained recovery`, async () => {
       await scenario({ name: `w2-b3-${vendor}`, seed, script: flow(vendor), env: fullEnv(vendor), valid: validFor(vendor), knobs: knobsFor(vendor) }, async run => {
         assert.equal(run.code, 0, run.out);
+        // Bash 3.2 can reset a streamed parser error to exit 0 after an EXIT cleanup trap.
+        assert.doesNotMatch(run.out, /syntax error|unexpected token/i);
         assert.ok(run.completed);
         assert.ok(run.sb.exists(`.hermes/skills/hstack-${vendor}/SKILL.md`));
         assert.ok(run.sb.exists(`.hermes/skills/hstack-${vendor}/client.py`));

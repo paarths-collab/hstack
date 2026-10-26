@@ -359,9 +359,6 @@ python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=d.get("scopes"
 rm -f "$PREFLIGHT_TMP/sg.json"
 echo "SendGrid key OK, mail.send scope present."
 
-# Path B: require npx
-if [ "${WIRE_PATH:-A}" = "B" ]; then
-fi
 
 VENDOR_PROBE
   } | remote "bash -c 'IFS= read -r PREFLIGHT_TMP; IFS= read -r RESP; IFS= read -r SENDGRID_API_KEY; IFS= read -r SENDGRID_FROM; IFS= read -r WIRE_PATH; IFS= read -r WRITES_ACKNOWLEDGED; export PREFLIGHT_TMP RESP SENDGRID_API_KEY SENDGRID_FROM WIRE_PATH WRITES_ACKNOWLEDGED; exec /bin/bash'"

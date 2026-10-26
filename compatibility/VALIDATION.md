@@ -53,6 +53,21 @@ No production behavior was weakened to satisfy the corrected assertion.
 PowerShell **7.6.9 on macOS passed 207 checks**, with zero failures or skips.
 This does not establish native Windows junction, ACL, Developer Mode or PowerShell 5.1 behavior.
 
+### Linux CI follow-up
+
+Ubuntu exposed three empty retired prerequisite branches inside executable heredocs
+in SendGrid, Webflow and WooCommerce. These branches are removed. Regression tests
+now parse all 22 embedded vendor probes directly, demonstrate that checking only the
+outer heredoc misses this error, and reject syntax diagnostics even if an older Bash
+cleanup trap returns zero.
+
+The corrected batch passes **74/74 tests on macOS Bash 3.2**. A disposable Node 20 / Bash 5.2
+Linux host-model run passes **2,294 skill tests**, with one root-only permission skip;
+the permission suite also passes separately as an unprivileged user. The container's
+markers were removed only inside that disposable test environment to model a host;
+production host-only guards remain unchanged. Validators, fenced Bash lint and
+Gitleaks were rerun successfully before the follow-up commit.
+
 ## Earlier workflow evidence (24 October 2026)
 
 | Check | Result | What it establishes |
