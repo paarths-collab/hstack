@@ -8,8 +8,6 @@ on:
       - "**.sh"
       - "tests/skills/stubs/*"
       - "tests/skills/stub-commands/*.sh"
-      - "tests/acceptance/stubs/*"
-      - "packages/acceptance/target/*"
       - ".github/workflows/shellcheck.yml"
   pull_request:
     paths:
@@ -18,8 +16,6 @@ on:
       - "**.sh"
       - "tests/skills/stubs/*"
       - "tests/skills/stub-commands/*.sh"
-      - "tests/acceptance/stubs/*"
-      - "packages/acceptance/target/*"
       - ".github/workflows/shellcheck.yml"
   workflow_dispatch:
 
@@ -38,12 +34,12 @@ jobs:
       - name: ShellCheck
         run: |
           # Find *.sh anywhere (includes tests/installer/*.sh), plus the extensionless
-          # setup and setup-* scripts at repo root, and the acceptance and skill-test stub scripts, and the acceptance target script
+          # setup and setup-* scripts at repo root, and the skill-test stub scripts
           # (only if it has a bash/sh shebang). Feed via xargs so multi-line
           # file lists work without GITHUB_OUTPUT heredoc gymnastics.
           {
             find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
-            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
+            for f in setup setup-* tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
               if [ -f "$f" ] && head -1 "$f" | grep -qE '(bash|sh)'; then echo "$f"; fi
             done
           } | xargs shellcheck --severity=warning
@@ -57,7 +53,7 @@ jobs:
           # -i 2: 2-space indent  -ci: case-indent  -bn: binary-op on new line
           {
             find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
-            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
+            for f in setup setup-* tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
               if [ -f "$f" ] && head -1 "$f" | grep -qE '(bash|sh)'; then echo "$f"; fi
             done
           } | xargs shfmt -i 2 -ci -bn -d

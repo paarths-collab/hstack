@@ -1,0 +1,20 @@
+{
+  "name": "hstack",
+  "interface": {
+    "displayName": "hstack"
+  },
+  "plugins": [
+    {
+      "name": "hstack",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

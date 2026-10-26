@@ -17,7 +17,7 @@ it("exact tagged syntax fixtures and installer are bound to the single supported
   assert.ok(versions.includes(`HERMES_COMMIT=${provenance.commit}\n`));
   assert.ok(versions.includes(`HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/${provenance.commit}/scripts/install.sh\n`));
   assert.ok(versions.includes(`HERMES_INSTALLER_SHA256=${provenance.files["install.sh"].sha256}\n`));
-  assert.ok(versions.includes("HERMES_LEGACY_FIXTURE_VERSION=0.15.2\n"), "the old fixture version is kept only under its legacy name");
+  assert.doesNotMatch(versions, /HERMES_LEGACY_FIXTURE_VERSION=/, "retired workflow fixtures do not retain a runtime pin");
   assert.doesNotMatch(versions, /HERMES_CANDIDATE_/, "the candidate keys are gone");
   for (const [name, meta] of Object.entries(provenance.files)) {
     const bytes = readFileSync(path.join(fixture, name));

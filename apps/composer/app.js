@@ -61,7 +61,7 @@ const fallbackRegistry = {
       },
       connector_rules: {
         sources: {
-          ids: ["github", "stripe", "posthog", "sentry", "notion", "linear"],
+          ids: ["stripe", "posthog", "sentry", "notion", "linear"],
           minimum_for_live_deployment: 1,
         },
         deliveries: {
@@ -79,14 +79,6 @@ const fallbackRegistry = {
     { id: "startup-operator", name: "Startup Operator", status: "labs" },
   ],
   connectors: [
-    createFallbackSource({
-      id: "github",
-      name: "GitHub",
-      shortLabel: "Code activity",
-      description: "Pull requests and project updates",
-      mark: "GH",
-      skill: "integration-github",
-    }),
     createFallbackSource({
       id: "stripe",
       name: "Stripe",

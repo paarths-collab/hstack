@@ -463,9 +463,6 @@ while IFS= read -r args; do
   [ -n "$args" ] || continue
   first_arg="$(list_files $args | head -1)"
   case "$first_arg" in
-    tests/acceptance/docker/*) dir=tests/acceptance/docker ;;
-    tests/acceptance/*) dir=tests/acceptance ;;
-    tests/founder-brief/*) dir=tests/founder-brief ;;
     tests/recipes/*) dir=tests/recipes ;;
     tests/skills/*) dir=tests/skills ;;
     *) BADFORM="$BADFORM [unknown:$args]"; continue ;;

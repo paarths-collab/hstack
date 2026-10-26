@@ -12,7 +12,10 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ## [Unreleased]
 
+- Removed the dedicated GitHub-to-Telegram report packs, their experimental acceptance transaction and associated tests/contracts. Retained the standalone GitHub integration skill; removed GitHub from the brief planner. Refocused the README on setup, connections and operations.
+
 ### Changed
+- **Plugin package refresh (0.4.0).** Claude, Codex and Cursor metadata now describes the source-verified Hermes 0.22.5 catalogue without blanket live-validation or rollback claims. Added a portable Agent Plugins manifest and explicit Codex repository marketplace, retained host compatibility manifests, corrected Codex listing limits and documented install/update flows. Public directory publication and live host execution are separate from source validation.
 - **Complete Hermes 0.22.5 catalogue migration.** All integration batches use native catalog/MCP registration or discoverable native skills, exact host-version gates, private credentials and guarded gateway readiness. Placeholder registrations and inert REST notes are replaced with executable procedures. Native OAuth remains user-approved; vendor live validation is not claimed.
 - **Regression hardening.** Restart interruption requires literal opt-in; draining gateways retain their instance identity; legacy recovery rejects unknown runtimes; seven-day scheduled reports handle autumn DST. Installer guidance delegates to the guarded restart skill, the validator recognizes profiled credential writes, and narrowly scoped secret-scan exceptions have positive controls.
 - **PowerShell root symlinks.** Relative links directly under the filesystem root (including macOS `/var`) now resolve correctly without an empty parent path. Both installer copies share the regression-tested fix.
@@ -199,10 +202,16 @@ Not tagged; commits captured for provenance. Notable milestones before `0.1.0`:
 ## How to add an entry
 
 1. Open your PR against `main`.
-2. Add a bullet under `## [Unreleased]` in the appropriate subsection (Added / Changed / Deprecated / Removed / Fixed / Security).
+2. Add a bullet under `## [Unreleased]
+
+- Removed the dedicated GitHub-to-Telegram report packs, their experimental acceptance transaction and associated tests/contracts. Retained the standalone GitHub integration skill; removed GitHub from the brief planner. Refocused the README on setup, connections and operations.` in the appropriate subsection (Added / Changed / Deprecated / Removed / Fixed / Security).
 3. On release cut, a maintainer:
-   - Renames `## [Unreleased]` to `## [<version>] — <YYYY-MM-DD>`.
-   - Creates a fresh empty `## [Unreleased]` block above it.
+   - Renames `## [Unreleased]
+
+- Removed the dedicated GitHub-to-Telegram report packs, their experimental acceptance transaction and associated tests/contracts. Retained the standalone GitHub integration skill; removed GitHub from the brief planner. Refocused the README on setup, connections and operations.` to `## [<version>] — <YYYY-MM-DD>`.
+   - Creates a fresh empty `## [Unreleased]
+
+- Removed the dedicated GitHub-to-Telegram report packs, their experimental acceptance transaction and associated tests/contracts. Retained the standalone GitHub integration skill; removed GitHub from the brief planner. Refocused the README on setup, connections and operations.` block above it.
    - Tags the release commit: `git tag -a v<version> -m 'v<version>'` and pushes.
 
 ## Links to older per-PR notes

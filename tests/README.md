@@ -8,13 +8,9 @@ they do not establish live vendor access, gateway restart or Telegram delivery.
 
 | Directory | Coverage |
 |---|---|
-| `recipes/` | Recipe registry, connector descriptors, plan construction and composer behavior |
+| `recipes/` | Recipe registry, connector descriptors, plan construction, composer behavior and plugin manifests |
 | `skills/` | Executable skill blocks against a simulated SSH target, native parser contracts and failure controls |
 | `installer/` | Bash/PowerShell installation, ownership, preservation and repository validation scripts |
-| `acceptance/` | Transaction contracts, receipts, transport, rollback and hostile inputs |
-| `acceptance/target/` | Target-side filesystem, locking, recovery and runtime behavior |
-| `acceptance/docker/` | Optional disposable Linux SSH target |
-| `founder-brief/` | Report packs, preparation, scheduling, delivery journals, loopback HTTP/SSH and comparisons |
 
 ## Static checks
 
@@ -33,9 +29,7 @@ OpenSSH tools. CI runs the main suites on Ubuntu and macOS.
 
 ```bash
 node --test tests/recipes/*.mjs
-node --test tests/acceptance/*.mjs tests/acceptance/target/*.test.mjs tests/acceptance/docker/*.test.mjs
 node --test --test-concurrency=3 tests/skills/*.test.mjs
-node --test --test-concurrency=3 tests/founder-brief/*.test.mjs
 /bin/bash tests/installer/test-install.sh
 /bin/bash tests/installer/test-scripts.sh
 pwsh -NoProfile -File tests/installer/test-install.ps1
@@ -44,23 +38,6 @@ pwsh -NoProfile -File tests/installer/test-install.ps1
 PowerShell needs a separate installation. Its cross-platform tests do not prove
 native Windows ACL, junction or Windows PowerShell 5.1 behavior. The real filesystem
 permission test is skipped when run as root; use an unprivileged account to cover it.
-
-## Optional runtime environments
-
-The default acceptance command reports Docker scenarios as skipped. Enable them
-with a running Docker daemon:
-
-```bash
-HSTACK_DOCKER=1 node --test tests/acceptance/docker/*.test.mjs
-```
-
-Read the [Docker target guide](acceptance/docker/README.md) for prerequisites and
-scope. Host-only skill guards intentionally reject containers; an ordinary Docker
-container is not a substitute for the simulated host environment in skill tests.
-
-The [exact-source native cron guide](founder-brief/REAL_NATIVE.md) documents its
-separate source checkout, pinned Python, dependencies and opt-in variables. That
-check still uses loopback vendor services and does not prove a live gateway.
 
 ## Secret scanning
 

@@ -1,0 +1,51 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hstack",
+  "version": "0.4.0",
+  "description": "97 SSH-first setup and operations skills for Hermes 0.22.5, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
+  "author": {
+    "name": "Paarth",
+    "url": "https://github.com/paarths-collab"
+  },
+  "homepage": "https://github.com/paarths-collab/hstack",
+  "repository": "https://github.com/paarths-collab/hstack",
+  "license": "Apache-2.0",
+  "keywords": [
+    "hermes",
+    "self-hosted",
+    "ai-agent",
+    "deployment",
+    "integrations",
+    "mcp",
+    "devops",
+    "ssh",
+    "automation",
+    "blueprints"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "hstack",
+        "shortDescription": "Set up self-hosted Hermes",
+        "longDescription": "hstack provides 97 agent-readable procedures for installing and operating Hermes 0.22.5 over SSH, including 71 integration procedures, 8 messaging platforms and reviewable blueprints. Procedures document credential preflights, native gateway checks and scoped recovery. Source and isolated regression checks are not live vendor or gateway verification; recovery cannot undo external side effects.",
+        "developerName": "Paarth",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Interactive",
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "Deploy Hermes to my server and wire up Telegram.",
+          "Integrate Notion, HubSpot, and Salesforce into my Hermes agent.",
+          "Something's wrong with my Hermes gateway."
+        ],
+        "websiteURL": "https://github.com/paarths-collab/hstack",
+        "privacyPolicyURL": "https://github.com/paarths-collab/hstack/blob/main/SECURITY.md",
+        "termsOfServiceURL": "https://github.com/paarths-collab/hstack/blob/main/LICENSE",
+        "brandColor": "#9D6BFF",
+        "screenshots": []
+      }
+    }
+  }
+}

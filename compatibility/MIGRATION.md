@@ -13,7 +13,6 @@ All migration batches target that host-installed release and its exclusive defau
 | Integrations | Mixed custom MCP snippets, placeholder packages and inert REST notes | Pinned native catalog/custom MCP routes or discoverable executable Hermes skills |
 | Authentication | Static credentials applied to some OAuth-only services | Native OAuth where required; browser consent remains a user action |
 | Recovery | Some legacy procedures removed keys or overwrote state | Prior env/config snapshots, owned artifact recovery, refusal on conflicts |
-| Legacy acceptance | Recovery could run against an unknown upgraded runtime | Only the original exact fixture runtime is accepted; otherwise retain the backup |
 | Weekly reporting | A valid seven-local-day fall-back window failed the collector | Calendar-day scheduled windows accepted; standalone explicit elapsed limits retained |
 | Validation | Parser checks concentrated on the first migration wave | Every catalogue procedure is checked against pinned native argparse |
 

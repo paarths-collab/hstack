@@ -11,6 +11,9 @@ It is intentionally written for curious, nontechnical people:
 - The interface explains access, verification, and rollback in plain language.
 - It never asks for, saves, logs, or places credentials in generated browser downloads.
 
+The retired GitHub report workers are not included. This planner supports selected
+business and notes sources; it produces a plan, not an executable report service.
+
 ## Local use
 
 This is a static ES module application. Serve the repository over any local static HTTP server, then open:

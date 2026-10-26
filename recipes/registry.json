@@ -46,17 +46,40 @@
   ],
   "connectors": {
     "sources": [
-      { "id": "github", "path": "../connectors/integrations/github.json" },
-      { "id": "stripe", "path": "../connectors/integrations/stripe.json" },
-      { "id": "posthog", "path": "../connectors/integrations/posthog.json" },
-      { "id": "sentry", "path": "../connectors/integrations/sentry.json" },
-      { "id": "notion", "path": "../connectors/integrations/notion.json" },
-      { "id": "linear", "path": "../connectors/integrations/linear.json" }
+      {
+        "id": "stripe",
+        "path": "../connectors/integrations/stripe.json"
+      },
+      {
+        "id": "posthog",
+        "path": "../connectors/integrations/posthog.json"
+      },
+      {
+        "id": "sentry",
+        "path": "../connectors/integrations/sentry.json"
+      },
+      {
+        "id": "notion",
+        "path": "../connectors/integrations/notion.json"
+      },
+      {
+        "id": "linear",
+        "path": "../connectors/integrations/linear.json"
+      }
     ],
     "deliveries": [
-      { "id": "telegram", "path": "../connectors/platforms/telegram.json" },
-      { "id": "slack", "path": "../connectors/platforms/slack.json" },
-      { "id": "discord", "path": "../connectors/platforms/discord.json" }
+      {
+        "id": "telegram",
+        "path": "../connectors/platforms/telegram.json"
+      },
+      {
+        "id": "slack",
+        "path": "../connectors/platforms/slack.json"
+      },
+      {
+        "id": "discord",
+        "path": "../connectors/platforms/discord.json"
+      }
     ]
   },
   "capability_rules": {

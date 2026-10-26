@@ -114,7 +114,7 @@ test("one optional source plus one optional destination produces a valid safe pl
     recipe,
     connectors,
     selection: {
-      sourceIds: ["github"],
+      sourceIds: ["notion"],
       deliveryIds: ["telegram"],
       cadence: "weekdays",
     },
@@ -122,7 +122,7 @@ test("one optional source plus one optional destination produces a valid safe pl
 
   assert.equal(result.deployable, true);
   assert.deepEqual(result.blueprint.integrations, [
-    { id: "github", skill: "integration-github", access: "read_only" },
+    { id: "notion", skill: "integration-notion", access: "read_only" },
   ]);
   assert.deepEqual(result.blueprint.delivery, { mode: "platforms", channels: ["telegram"] });
   assert.deepEqual(result.blueprint.automations, [
@@ -135,7 +135,7 @@ test("one optional source plus one optional destination produces a valid safe pl
   });
   assert.deepEqual(result.blueprint.resolved_skills, [
     "platform-telegram",
-    "integration-github",
+    "integration-notion",
     "hermes-home",
     "hermes-cron",
   ]);
@@ -201,7 +201,7 @@ test("unsafe or incomplete combinations cannot become deployment plans", () => {
     () => compileFounderBrief({
       recipe,
       connectors,
-      selection: { sourceIds: ["github", "github"], deliveryIds: ["telegram"] },
+      selection: { sourceIds: ["notion", "notion"], deliveryIds: ["telegram"] },
     }),
     RecipeCompilerError,
   );

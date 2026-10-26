@@ -1,14 +1,6 @@
 {
   "schema_version": 1,
   "upstream": "https://github.com/NousResearch/hermes-agent",
-  "legacy_fixture": {
-    "version": "0.15.2",
-    "tag": "v2026.5.29.2",
-    "contract": "acceptance/founder-brief-github-telegram.contract.json",
-    "status": "legacy-offline-fixture",
-    "scope": "offline acceptance contract and its test fixtures only; no skill targets it",
-    "live_verified": false
-  },
   "target": {
     "version": "0.22.5",
     "tag": "v0.22.5",
@@ -16,31 +8,15 @@
     "release_url": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5",
     "installer_url": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh",
     "installer_sha256": "99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674",
-    "contract": "acceptance/founder-brief-github-telegram.hermes-0.22.5.candidate.contract.json",
     "status": "source-verified",
     "scope": "exclusive-default-profile-linux-target",
     "tagged_interfaces_reviewed_on": "2026-10-26",
     "latest_stable_checked_on": "2026-10-26",
-    "offline_checks": "passed-source-contract-and-offline-regressions",
-    "workflow_entrypoint": "packages/founder-brief/README.md",
-    "workflow_packs": [
-      "activity-brief",
-      "review-queue",
-      "release-watch"
-    ],
-    "workflow_installation_scope": "multiple-named-instances-per-default-profile-target-with-legacy-slot",
-    "workflow_setup": "private-prepare-preview-and-hidden-credential-capture",
-    "setup_comparison": "packages/founder-brief/COMPARISON.md",
-    "human_setup_time_measured": false,
-    "workflow_implementation": "complete",
+    "offline_checks": "source-contract-and-skill-regressions",
     "validation_record": "compatibility/VALIDATION.md",
     "validation_updated_on": "2026-10-26",
     "live_validation_status": "pending-target-and-private-credentials",
-    "workflow_checks": "passed-loopback-http-and-real-ssh-with-native-cli-fixture",
-    "native_cron_source_validation": "passed-pinned-source-python-3.14.9-with-loopback-vendors",
     "native_gateway_live_verified": false,
-    "public_preview_recheck": "unauthenticated-api-rate-limit-reached",
-    "delivery_evidence_scope": "telegram-api-ack-not-recipient-read",
     "live_verified": false,
     "consecutive_live_golden_days": 0
   },

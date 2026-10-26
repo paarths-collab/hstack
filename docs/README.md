@@ -5,7 +5,7 @@ Use this index to find current user guides, contributor documentation and histor
 ## Set up and use hstack
 
 - [Project overview and installation](../README.md)
-- [Three GitHub-to-Telegram workflow packs](../packages/founder-brief/README.md)
+- [Claude Code, Codex and Cursor plugins](plugins.md)
 - [Browser plan composer](../apps/composer/README.md)
 - [Troubleshooting](reference/TROUBLESHOOTING.md)
 - [Hermes compatibility policy](../compatibility/README.md), [migration details](../compatibility/MIGRATION.md) and [validation evidence](../compatibility/VALIDATION.md)
@@ -18,7 +18,6 @@ Use this index to find current user guides, contributor documentation and histor
 - [Security policy](../SECURITY.md)
 - [Recipe catalogue](../recipes/README.md)
 - [Recipe planning library](../packages/recipe-core/README.md)
-- [Experimental acceptance transaction](../packages/acceptance/README.md)
 - [Skill authoring template](../templates/SKILL.template.md)
 
 ## Maintainer material

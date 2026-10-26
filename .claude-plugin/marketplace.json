@@ -1,6 +1,6 @@
 {
   "name": "hstack",
-  "description": "Setup automation and reviewable Agent Blueprints for self-hosted Hermes agents from any AI coding agent.",
+  "description": "97 SSH-first setup and operations skills for Hermes 0.22.5, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
   "owner": {
     "name": "Paarth",
     "url": "https://github.com/paarths-collab"
@@ -8,8 +8,8 @@
   "plugins": [
     {
       "name": "hstack",
-      "description": "Skill files that let your AI coding agent deploy self-hosted Hermes, connect 71 integrations and 8 messaging platforms, and compose reviewable Agent Blueprints.",
-      "version": "0.3.0",
+      "description": "97 SSH-first setup and operations skills for Hermes 0.22.5, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
+      "version": "0.4.0",
       "source": "./",
       "author": {
         "name": "Paarth",

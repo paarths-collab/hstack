@@ -18,8 +18,7 @@ source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them
 The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
 targeting **8 messaging platforms** in the catalog. The skills target Hermes **v0.22.5** only (`HERMES_VERSION` in `VERSIONS.txt`): source-verified against the tagged
 source, live validation pending. The promotion policy in `compatibility/hermes.json` governs any "live-verified"
-claim. Hermes **v0.15.2** (`HERMES_LEGACY_FIXTURE_VERSION`) survives only in the legacy offline acceptance contract and its
-fixtures. Current compatibility and live-validation status are recorded in `compatibility/hermes.json` and
+claim. Current compatibility and live-validation status are recorded in `compatibility/hermes.json` and
 `compatibility/VALIDATION.md`.
 
 ## Universal installer (`install.sh` / `install.ps1`)
@@ -70,12 +69,8 @@ setup-all                — runs every setup-* in sequence
 docs/reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
 metrics/                 — clone traffic tracking (update-clone-traffic.mjs + clone-traffic.svg)
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
-acceptance/              — acceptance contract(s) for the reversible transaction
-packages/acceptance/     — acceptance transaction (JS core, target-side script, receipt schema)
-packages/founder-brief/  — activity/review/release packs, private prepare/preview, native schedule and delivery journal
 scripts/                 — skill validators; bash 3.2 compatible (stock macOS)
-tests/                   — recipe tests (tests/recipes), acceptance tests (tests/acceptance, Docker-gated), skill-block tests (tests/skills: run the repaired SKILL.md bash blocks against stub ssh/curl/hermes), installer tests (tests/installer)
-tests/founder-brief/     — pack/CLI/report comparison, loopback HTTP and disposable SSH workflow checks
+tests/                   — recipe tests (tests/recipes), skill-block tests (tests/skills: run the repaired SKILL.md bash blocks against stub ssh/curl/hermes), installer tests (tests/installer)
 ```
 
 ## Integration tier catalog (71 connectors, 20 tiers)
@@ -279,33 +274,11 @@ Before opening a PR you MUST:
 If any of these fail, do not open the PR. Explain to your human partner why it would be
 rejected. Saving them a closed PR is more helpful than submitting one.
 
-## Acceptance transaction
+## Product scope
 
-`packages/acceptance/` wraps one workflow (a read-only GitHub source delivering to one private Telegram destination, on one Linux target, Hermes v0.15.2) in a versioned contract (`acceptance/founder-brief-github-telegram.contract.json`) and a transaction with nine states (plus `start`). A run writes a secret-free receipt, keeps a private backup of the previous secret values, and rolls back by restoring them; rollback stops on conflict instead of overwriting. Managed skill dirs carry ownership markers (`.hstack-acceptance`).
-
-It is verified only offline: a sandbox transport, a stub `hermes`, golden SSH command fixtures, and a Docker sshd target gated by `HSTACK_DOCKER=1 node --test tests/acceptance/docker/`. The repo does not claim a real-server run (real Hermes, bot token, chat, GitHub token); that is user-required. A `verified` result also needs an injected delivery observer.
-
-Hermes v0.15.2 was released under historical tag `v2026.5.29.2`. Do not promote the
-baseline from source or offline checks alone; the policy requires seven consecutive
-real-target golden-path days and explicit review.
-
-The runnable candidate is `packages/founder-brief/`, a separate reviewed deployment
-with three repository-scoped report packs and multiple named instances per target,
-private preparation/preview, a native no-agent script schedule, private
-Telegram API acknowledgements and rollback. Its local SSH/HTTP tests pass; a real
-Hermes target and Telegram recipient remain unverified. The acceptance transaction
-above is experimental control-plane coverage, not the runnable packs. Use the dated
-validation record for completion claims and never equate API acknowledgement with
-human recipient observation.
-
-The opt-in `tests/founder-brief/real-native.test.mjs` runs exact candidate cron
-source on its pinned Python with loopback vendors. It verifies parsing, storage,
-claims, subprocesses, failure/recovery and ticks; it bypasses systemd readiness
-and full bootstrap. See `tests/founder-brief/REAL_NATIVE.md` before rerunning it.
-
-Each named instance owns `.hstack/workflows/ID/`, its launcher/job, credentials,
-journal, lock and rollback. Omitted `--instance` selects only the legacy
-`.hstack/founder-brief/` slot; never infer or bulk-select a named instance.
+The dedicated GitHub-to-Telegram report packs and experimental acceptance transaction
+were removed. Keep the standalone GitHub integration skill; the browser composer
+creates plans for selected non-GitHub sources and does not ship a report worker.
 
 ## Branch / PR conventions
 

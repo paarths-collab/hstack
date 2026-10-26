@@ -125,21 +125,9 @@ Rows written from the v0.22.5 source while modernizing the skills; file:line cit
 | `hermes import` refuses: "Drain and stop the gateway" | a running gateway owns the home | stop the gateway (add `-y` only if interrupting chats is acceptable), then import |
 | Other skills abort "source-verified for Hermes 0.22.5 only" after /hermes-update | stable moved past 0.22.5 | expected; the update is reported unverified for hstack until the skills are re-verified |
 
-## Acceptance transaction
-Failure states from `packages/acceptance/` (see its README for the full state machine and recovery commands).
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `skill_collision:<name>` (exit 5) | a same-named skill dir exists that the transaction did not install | nothing was changed; move or remove it yourself, or choose another target; no auto-adoption |
-| `restore_conflict` / `manual_recovery_required` | a managed key or `config.yaml` changed after apply | nothing was overwritten; inspect the named keys, resolve manually, then restore or purge with the exact commands in the README |
-| `incomplete_transaction:<id>` | an earlier transaction has no done/restored marker | resume it (`restore`) or abandon it per the README before starting another |
-| `delivery check unknown` | no delivery observer supplied | provide an observer; without one a transaction cannot reach `verified` |
-
 ## Migration regression checks (Hermes 0.22.5)
 
 | Symptom | Cause | Recovery |
 |---|---|---|
 | Restart refuses with active chats | Interrupting requires explicit consent | Leave `GW_INTERRUPT` unset to preserve chats; only literal `GW_INTERRUPT=1` opts in. Values `0` and `false` do not. |
-| Native transaction reports `native_previous_instance_unconfirmed` | No authoritative pre-restart identity was obtained | Resolve readiness or profile identity first; the adapter refuses to claim a restart without a baseline. |
-| Legacy receipt refuses restore after upgrading Hermes | Its TSV recovery contract belongs only to the exact 0.15.2 fixture | Preserve the backup and recover with the original runtime or manually reconcile the files. Do not run legacy mutations on the upgraded runtime. |
-| Seven-day brief crosses autumn DST | Seven local calendar days can be 169 elapsed hours | Current scheduled collection handles the local calendar bound; explicit standalone collector windows retain their 168-hour limit. |
 | PowerShell installer fails under a root-level relative symlink | `Split-Path` can return an empty parent for `/var` on Unix | Current installers resolve relative link targets against the filesystem root using the path API. |

@@ -17,7 +17,7 @@ id = "curl-auth-user"
 [[rules]]
 id = "generic-api-key"
   [[rules.allowlists]]
-  description = "Docker fixture names its generated public key file"
+  description = "Removed Docker fixture in published history names its generated public key file"
   condition = "AND"
   regexTarget = "secret"
   paths = ['''(^|/)tests/acceptance/docker/helpers/docker-target\.mjs$''']

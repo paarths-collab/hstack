@@ -16,7 +16,7 @@
 #      different version.
 
 # --- Hermes runtime ---
-# HERMES_VERSION is the one release the skills and the report packs target: Hermes v0.22.5 (tag v0.22.5).
+# HERMES_VERSION is the one release the skills target: Hermes v0.22.5 (tag v0.22.5).
 # It is SOURCE-verified (tagged interfaces read; offline fixtures and loopback tests pass) and NOT live-verified:
 # no real-target golden path has been run on it yet. A "live-verified" claim needs the real-target golden path
 # green for 7+ consecutive days plus explicit review (compatibility/hermes.json "promotion" keeps that policy);
@@ -26,9 +26,6 @@ HERMES_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
 # Immutable (commit-addressed) installer; never use a branch URL such as .../main/install.sh.
 HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh
 HERMES_INSTALLER_SHA256=99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674
-# Hermes 0.15.2 (upstream tag v2026.5.29.2): used ONLY by the legacy offline acceptance contract
-# (acceptance/founder-brief-github-telegram.contract.json) and its test fixtures. No skill targets it.
-HERMES_LEGACY_FIXTURE_VERSION=0.15.2
 
 # --- MCP servers we spawn as stdio commands ---
 # Format: <NAME>_MCP_PKG=<npm-or-pypi-package>@<pinned-version>
