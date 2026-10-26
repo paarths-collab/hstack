@@ -1,336 +1,451 @@
 ---
 name: integration-clerk
-description: Connect Clerk (auth + user management — users, sessions, organizations, invitations, roles) to a self-hosted Hermes Agent over SSH via Clerk's Backend API with a sk_test_ or sk_live_ secret key. Bearer auth; refuses to wire sk_live_ in dev without explicit acknowledgment. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, Gemini CLI, and OpenClaw.
+description: Connect clerk to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-clerk — connect Clerk to a remote Hermes (SSH-first)
+# /integration-clerk — connect clerk over SSH
 
-You are the engineer connecting Clerk (developer-focused authentication + user management)
-to a self-hosted Hermes agent on the user's VPS. You (the AI agent — Hermes, Claude Code,
-Codex, Cursor, Gemini, OpenClaw, any of them) work over SSH as root against the VPS. The
-user does one thing a machine cannot: create the API key at
-https://dashboard.clerk.com → API Keys.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-Everything else — key storage, live Backend API verification, gateway reload, live
-user-list smoke test — runs on the VPS via SSH, idempotently with a rollback path.
+## Before you start — gather (ask once)
 
-**Honest auth picture (verified 2026-06):** Clerk exposes a **Backend API** at
-`https://api.clerk.com/v1/` with **Bearer authentication**:
-`Authorization: Bearer sk_test_...` (test mode) or `Authorization: Bearer sk_live_...`
-(production). Perfect for a headless agent.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. CLERK_SECRET_KEY (sk_test_... or sk_live_...). Production requires PROD_ACKNOWLEDGED=1. The installed native skill only lists users; it does not claim to run an unverified MCP package.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-Sources:
-- https://clerk.com/docs/guides/development/machine-auth/api-keys
-- https://clerk.com/docs/reference/backend-api
-
-**MCP options:**
-
-- **Path A (default) — direct REST via Backend API.** No first-party Clerk MCP server
-  exists yet as a hosted HTTP endpoint. Clerk's `@clerk/agent-toolkit` and `@clerk/mcp-tools`
-  are libraries for BUILDING MCP servers in your own app, not a ready-to-run server. The
-  simplest headless path is generic HTTP tool against `api.clerk.com/v1/`.
-- **Path B (opt-in) — self-hosted stdio MCP via `@clerk/agent-toolkit`.** Requires you to
-  run a small Node.js wrapper on the VPS. Only useful if you specifically want MCP tool
-  semantics over the API.
-
-**Key mode:** `sk_test_` keys touch only test data (no real users). `sk_live_` keys hit
-production. This skill refuses to wire `sk_live_` without `PROD_ACKNOWLEDGED=1`.
-
-**Key format:** exactly `sk_(test|live)_<40+ alphanumeric>`. Never inline in URLs, never
-in chat.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$CLERK_SECRET_KEY` | Secret key `sk_test_...` or `sk_live_...` | https://dashboard.clerk.com → API Keys → Show secret key |
-| `$PROD_ACKNOWLEDGED` *(required if key is `sk_live_...`)* | Set to `1` to confirm you know this is production | Explicit gate to prevent accidental prod wire-ups |
-| `$WIRE_PATH` *(optional)* | `A` (REST, default) or `B` (self-hosted stdio MCP) | B requires npm/npx and hosting overhead |
-
-Confirm SSH access:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-clerk
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    HERMES="$(command -v hermes)"
-  elif [ -x "$HOME/.local/bin/hermes" ]; then
-    HERMES="$HOME/.local/bin/hermes"
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    HERMES="docker exec $AGENT hermes"
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-  echo "Using: $HERMES"
-  $HERMES --version
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-HAS_KEY=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CLERK_SECRET_KEY=sk_' ~/.hermes/.env 2>/dev/null" || echo 0)
-if [ "$HAS_KEY" = "1" ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Clerk already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — HARD GATE (key format + prod acknowledgment + live Backend API)
-
-```bash
-# Key format
-printf '%s' "$CLERK_SECRET_KEY" | grep -qE '^sk_(test|live)_[A-Za-z0-9]+$' \
-  || { echo "ABORT: CLERK_SECRET_KEY must be sk_test_<alnum> or sk_live_<alnum>."; exit 1; }
-[ "${#CLERK_SECRET_KEY}" -ge 40 ] \
-  || { echo "ABORT: CLERK_SECRET_KEY looks too short (<40 chars)."; exit 1; }
-
-# Detect mode
-case "$CLERK_SECRET_KEY" in
-  sk_test_*) MODE=test ;;
-  sk_live_*) MODE=live ;;
-esac
-echo "Key mode: $MODE"
-
-# Refuse live without explicit acknowledgment
-if [ "$MODE" = "live" ] && [ "${PROD_ACKNOWLEDGED:-0}" != "1" ]; then
-  echo "ABORT: sk_live_ key detected — this touches PRODUCTION user data."
-  echo "Set PROD_ACKNOWLEDGED=1 to confirm you intend this and understand the blast radius."
-  echo "  (An agent misuse can delete users, invalidate sessions, or mass-invite the wrong org.)"
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-
-# Live Backend API verify — GET /v1/users?limit=1
-HTTP=$(curl -sS -o /tmp/clerk.json -w '%{http_code}' --max-time 10 \
-  -H "Authorization: Bearer $CLERK_SECRET_KEY" \
-  'https://api.clerk.com/v1/users?limit=1' 2>/dev/null) || HTTP=000
-case "$HTTP" in
-  200)
-    USER_COUNT=$(grep -oE '"id":"user_' /tmp/clerk.json | wc -l | tr -d ' ')
-    echo "Clerk Backend API OK. Sample query returned $USER_COUNT user(s) (limited to 1)."
-    ;;
-  401|403) echo "ABORT: 401/403 — key rejected. Re-check https://dashboard.clerk.com → API Keys."; exit 1 ;;
-  *) echo "ABORT: unexpected HTTP $HTTP from Backend API."; cat /tmp/clerk.json | head -3; exit 1 ;;
-esac
-rm -f /tmp/clerk.json
-```
-
----
-
-## Step 4 — DRY RUN preview (always show before writing)
-
-```bash
-PATH_CHOSEN=${WIRE_PATH:-A}
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  Path: $PATH_CHOSEN
-
-  Always:
-    1. Write CLERK_SECRET_KEY (length ${#CLERK_SECRET_KEY}, mode=$MODE) via 'hermes config set'
-    2. chmod 600 ~/.hermes/.env
-
-  Path A (REST — default, no MCP server):
-    3. No MCP registration; generic HTTP tool reads CLERK_SECRET_KEY from env
-    4. Reload gateway: stop + run
-    5. Smoke test: GET /v1/users?limit=1 with Bearer header — expect 200
-
-  Path B (self-hosted stdio MCP via @clerk/agent-toolkit):
-    3. Register MCP: hermes mcp add clerk --command npx --args -y,@clerk/agent-toolkit
-       --env CLERK_SECRET_KEY=\${CLERK_SECRET_KEY}
-    4. Reload gateway: stop + run
-    5. Verify in logs: grep "registered.*clerk"
-
-Key is NEVER printed in plaintext beyond a length + mode.
-Mode: $MODE $([ "$MODE" = "live" ] && echo "(PRODUCTION — REAL user data)" || echo "(test — sandbox data only)")
-EOF
-```
-
-Wait for confirmation (or `AUTO_APPROVE=1`).
-
----
-
-## Step 5 — write the secret (chmod 600)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set CLERK_SECRET_KEY '$CLERK_SECRET_KEY'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CLERK_SECRET_KEY=sk_' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: Clerk key not written. Rolling back."; rollback; exit 1; }
-```
-
-> Sed fallback (pipe delimiter):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^CLERK_SECRET_KEY=' ~/.hermes/.env || printf 'CLERK_SECRET_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^CLERK_SECRET_KEY=.*|CLERK_SECRET_KEY=$CLERK_SECRET_KEY|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
-Never `echo >>`. Never put the key in `config.yaml`.
-
----
-
-## Step 6 — wire the chosen path
-
-### Path A — direct REST (default, no third-party wrapper)
-
-```bash
-if [ "${WIRE_PATH:-A}" = "A" ]; then
-  echo "Path A chosen: REST base https://api.clerk.com/v1"
-  echo "Generic HTTP tool reads CLERK_SECRET_KEY and uses:"
-  echo "  Authorization: Bearer \${CLERK_SECRET_KEY}"
-  echo "  Content-Type: application/json"
-fi
-```
-
-Common Backend API endpoints:
-
-- `GET /v1/users` — list users (paginate with `limit` + `offset`)
-- `GET /v1/users/{id}` — get user
-- `POST /v1/users` — create user
-- `PATCH /v1/users/{id}` — update user
-- `DELETE /v1/users/{id}` — delete user
-- `POST /v1/users/{id}/ban` — ban user
-- `GET /v1/organizations` — list organizations
-- `POST /v1/organizations` — create organization
-- `POST /v1/invitations` — invite email
-- `GET /v1/sessions/{id}` — inspect session
-- `POST /v1/sessions/{id}/revoke` — revoke session
-
-### Path B — self-hosted stdio MCP (opt-in)
-
-```bash
-if [ "${WIRE_PATH:-A}" = "B" ]; then
-  ssh "$VPS_USER@$VPS_IP" "command -v npx >/dev/null 2>&1" \
-    || { echo "ABORT: Path B requires npx on VPS."; exit 1; }
-  ssh "$VPS_USER@$VPS_IP" "
-    hermes mcp add clerk \
-      --command 'npx' \
-      --args '-y,@clerk/agent-toolkit' \
-      --env 'CLERK_SECRET_KEY=\${CLERK_SECRET_KEY}'
-  "
-  echo "Path B registered. Note: @clerk/agent-toolkit is a toolkit — audit the tools it exposes before granting write scope."
-fi
-```
-
----
-
-## Step 7 — reload the gateway (stop + run, NOT restart)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 8 — verify + smoke test
-
-```bash
-if [ "${WIRE_PATH:-A}" = "B" ]; then
-  REGISTERED=0
-  for i in $(seq 1 6); do
-    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
-         | grep -qiE "registered.*tool.*clerk|MCP server.*clerk.*(ok|ready)"; then
-      REGISTERED=1; echo "OK: clerk MCP registered."; break
-    fi
-    sleep 5
-  done
-  [ "$REGISTERED" = "1" ] || { echo "FAIL: clerk not in logs. Rolling back."; rollback; exit 1; }
-fi
-
-# Smoke test (both paths)
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-    -H \"Authorization: Bearer \$CLERK_SECRET_KEY\" \
-    'https://api.clerk.com/v1/users?limit=1'
-")
-case "$HTTP" in
-  200) echo "OK: Clerk Backend API reachable from VPS." ;;
-  401) echo "FAIL: 401. Rolling back."; rollback; exit 1 ;;
-  *) echo "WARN: HTTP $HTTP." ;;
-esac
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
-rollback() {
-  if [ "${WIRE_PATH:-A}" = "B" ]; then
-    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove clerk 2>/dev/null || true"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-  ssh "$VPS_USER@$VPS_IP" "sed -i '/^CLERK_SECRET_KEY=/d' ~/.hermes/.env && chmod 600 ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Rotate the key at https://dashboard.clerk.com → API Keys if compromised."
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in skills/hstack-clerk/SKILL.md skills/hstack-clerk/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Refuse to replace a changed or foreign native workflow. A concurrent user edit
+# belongs to the user; retain all recovery artifacts for manual reconciliation.
+p="$HOME/.hermes/skills/hstack-clerk"
+original="$b/skills_hstack-clerk_SKILL.md"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] || exit 1
+  entries=$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  if [ "$entries" = 0 ] && [ -f "$original.absent" ]; then :
+  else
+    [ "$entries" = 2 ] && [ -f "$p/SKILL.md" ] && [ -f "$p/.hstack-managed" ] \
+      && [ ! -L "$p/SKILL.md" ] && [ ! -L "$p/.hstack-managed" ] \
+      && [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] \
+      || { echo "extra_restore: native skill was edited or is unowned; active backup retained." >&2; exit 1; }
+  fi
+elif [ ! -f "$original.absent" ]; then
+  echo "extra_restore: previous native skill was removed; active backup retained." >&2
+  exit 1
+fi
+# Validate all copies before restoring any artifact.
+for rel in skills/hstack-clerk/SKILL.md skills/hstack-clerk/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in skills/hstack-clerk/SKILL.md skills/hstack-clerk/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+case "${CLERK_SECRET_KEY:-}" in sk_live_*) [ "${PROD_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: PROD_ACKNOWLEDGED=1 required. Nothing was written."; exit 1; } ;; sk_test_*) ;; *) echo "ABORT: a Clerk secret key is required. Nothing was written."; exit 1 ;; esac
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${CLERK_SECRET_KEY:-}" || { echo "ABORT: CLERK_SECRET_KEY is empty or unsafe. Nothing was written."; exit 1; }
+[ "${#CLERK_SECRET_KEY}" -ge 40 ] || { echo "ABORT: Clerk secret key too short. Nothing was written."; exit 1; }
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: local skill is not safely replaceable. Nothing was written."; exit 1; }
+p="$HOME/.hermes/skills/hstack-clerk"
+[ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] && [ -f "$p/.hstack-managed" ] && [ -f "$p/SKILL.md" ] && [ ! -L "$p/SKILL.md" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] || exit 1
+  [ "$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ] || exit 1
+fi
+REMOTE
+printf '%s\n' "${CLERK_SECRET_KEY:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'CLERK_SECRET_KEY'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.clerk.com/v1/users?limit=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'CLERK_SECRET_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: clerk; path: rest.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Install a discoverable read-only Hermes skill with owned-file recovery.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env CLERK_SECRET_KEY "${CLERK_SECRET_KEY:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native skill installation."; fail_transaction; }
+set -e
+p="$HOME/.hermes/skills/hstack-clerk"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+mkdir -p "$p" && chmod 700 "$p"
+t=$(mktemp "$p/.SKILL.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'HSTACK_NATIVE_SKILL'
 ---
+name: hstack-clerk
+description: Read clerk account data using a private host credential; use for the installed read-only clerk connection.
+---
+
+# clerk: read-only account access
+
+Only run this read request when the user asks for clerk account data. Do not print credentials.
+This connector is read-only; changes require a separately reviewed workflow and user authorization.
+The script reads the private ~/.hermes/.env without sourcing it as executable shell code.
+Use the following command through the native terminal tool on the Hermes host:
+
+
+    python3 -c 'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+    d={}
+    p=os.path.expanduser("~/.hermes/.env")
+    if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+    if os.path.isfile(p):
+     for line in open(p):
+      k, sep, v=line.rstrip("\n").partition("=")
+      if sep:
+       v=v.strip()
+       if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+       d[k]=v
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+      raise RuntimeError("Redirect refused; credentials were not forwarded")
+    def req(url, headers=None, body=None):
+     if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+     r=urllib.request.Request(url,headers=headers or {},data=body)
+     with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+      if f.status != 200: raise RuntimeError("Non-200 response")
+      data=f.read(2 * 1024 * 1024 + 1)
+      if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+      return data
+    result=req('"'"'https://api.clerk.com/v1/users?limit=1'"'"',{'"'"'Authorization'"'"':'"'"'Bearer '"'"'+d['"'"'CLERK_SECRET_KEY'"'"']})
+    print(result.decode())
+    '
+
+Return only requested account fields. Keep the fixed read-only endpoint and never expose .env values.
+HSTACK_NATIVE_SKILL
+chmod 600 "$t"
+mv "$t" "$p/SKILL.md"
+cksum < "$p/SKILL.md" > "$p/.hstack-managed"
+chmod 600 "$p/.hstack-managed"
+REMOTE
+remote 'hermes -p default skills list --enabled-only | grep -F "hstack-clerk"' >/dev/null || { echo "FAIL: installed skill is not discoverable/enabled."; fail_transaction; }
+```
+
+This installs a real Hermes-discoverable native skill, with an executable read request and managed-file checksum. Existing user edits or unowned files are refused. The previous skill file and marker are recovered with the transaction.
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.clerk.com/v1/users?limit=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'CLERK_SECRET_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; fail_transaction; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-clerk.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring `sk_live_` in dev without PROD_ACKNOWLEDGED=1 | Accidentally connects agent to production user data | Step 3 hard-aborts sk_live_ without explicit ack |
-| 2 | Test vs live confusion | Test key touches only test-mode users; agent looks broken because "your" real users don't appear | Match key mode to intent; live starts sk_live_ |
-| 3 | Agent has DELETE/BAN permissions | Backend API secret key has FULL account access — can delete users, revoke sessions, ban accounts | Restrict via system prompt; if possible expose only read tools; Path A generic HTTP layer can be scoped by tool definitions |
-| 4 | Secret exposed to frontend | Backend secret must NEVER touch client code | Only `~/.hermes/.env`, `chmod 600`; agent-only exposure |
-| 5 | Key in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
-| 6 | Not rotating key periodically | Long-lived credentials | Rotate quarterly; Clerk supports multiple active keys during rotation |
-| 7 | Assuming Clerk ships a hosted MCP | Clerk provides libraries to BUILD MCP servers (@clerk/mcp-tools, @clerk/agent-toolkit) — no first-party hosted MCP as of 2026-06 | Path A (REST) is the honest path; Path B is self-hosted wrapper |
-| 8 | Rate limits on Backend API | Bursty user-provisioning loops hit rate limits | Back off on 429; batch |
-| 9 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
-| 10 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
-| 11 | sed with `/` delimiter | Universal rule; keys are alphanumeric but rule applies | Always `\|` delimiter |
-| 12 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
-| 13 | Publishable key vs secret key confusion | `pk_test_...` / `pk_live_...` are PUBLISHABLE — safe for frontend but wrong for Backend API | This skill only wires `sk_...`; refuses `pk_...` in Step 3 |
-| 14 | Assuming Frontend API can be called with sk_ | Two APIs: Backend (sk_) and Frontend (pk_ + session token) | This skill only wires Backend API |
-| 15 | Missing rate/webhook signing checks | Webhooks use separate signing secret — this skill doesn't wire webhooks | Wire webhooks separately if the agent needs to react to Clerk events |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Production choice | sk_live_ grants access to production identity data | Require PROD_ACKNOWLEDGED=1 |
+| 2 | Key family | A publishable key is not a Backend API secret | Use sk_test_ or sk_live_ |
+| 3 | Read capability | The installed client only lists one user | Do not claim mutation or session management support |
+| 4 | Data privacy | User records can contain personal information | Return only the fields requested |
+| 5 | Package identity | No unverified agent-toolkit MCP is launched | Use the installed native read client |
+| 6 | Rollback | A failed setup must not erase an earlier key | Restore the original private settings bytes |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
-- [ ] Idempotency check ran (skipped if key present, unless `FORCE=1`)
-- [ ] HARD GATE passed: key matches `sk_(test|live)_<alnum>` + ≥40 chars; `sk_live_` requires `PROD_ACKNOWLEDGED=1`; live `/v1/users?limit=1` returned 200
-- [ ] Dry-run shown to user; mode called out plainly (test vs live); user approved (or `AUTO_APPROVE=1`)
-- [ ] `CLERK_SECRET_KEY` written to `~/.hermes/.env`, `chmod 600`, verified by grep
-- [ ] Path A: REST surface documented (base URL + Bearer + common endpoints)
-- [ ] Path B: stdio MCP `@clerk/agent-toolkit` registered with env indirection
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Path B: logs show `registered N tool(s) for 'clerk'` within 30s
-- [ ] Smoke test: `/v1/users?limit=1` from VPS returned 200
-- [ ] User told about write-danger scope (agent can delete/ban users) and system-prompt restriction recommended
-- [ ] Rollback function defined; key rotation URL included
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, sk-vs-pk
-confusion, and Clerk Backend API failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

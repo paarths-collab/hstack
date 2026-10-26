@@ -198,8 +198,14 @@ export function opApply({ txn, cron }) {
   });
 }
 
-export function opReload({ txn }) {
-  return make({ op: "reload", remote: target("reload", [quote(check("txn", txn, "txn"))]), mutates: "live" });
+/**
+ * Reload the gateway. `interruptLiveSessions` is the operator's explicit opt-in to Hermes 0.22.5's `restart -y`
+ * (interrupt live sessions); by default the reload is refused, and reported as failed, while sessions are live.
+ */
+export function opReload({ txn, interruptLiveSessions = false }) {
+  const args = [quote(check("txn", txn, "txn"))];
+  if (interruptLiveSessions === true) args.push("--interrupt-live-sessions");
+  return make({ op: "reload", remote: target("reload", args), mutates: "live" });
 }
 
 export function opVerify({ txn, destinationFp, allowVar, destVar, cronId, schedule, skills = null }) {

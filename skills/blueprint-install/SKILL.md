@@ -100,6 +100,45 @@ again.
 
 ---
 
+## Step 1b — refuse specialists that are still legacy procedures
+
+The validated plan resolves to specialist skills. Several `/integration-*` skills still carry the line
+`> **Compatibility:** legacy procedure written for Hermes 0.15.x - not yet re-verified on Hermes 0.22.5`: their reload or `mcp add` steps may call gateway or MCP flags that
+do not exist on Hermes 0.22.5. Chaining one of them from a blueprint would
+run an unverified procedure inside an approved plan, so the plan stops here unless the user accepts that explicitly. The check is local; nothing is
+written and no ssh call is made.
+
+```bash
+RESOLVED=$(python3 "$VALIDATOR" "$BLUEPRINT_PATH" --json | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)["resolved_skills"]))') \
+  || { echo "ABORT: could not read the resolved skills from the validator. Nothing was written."; exit 1; }
+
+# local_skill_file NAME: the SKILL.md of skill NAME in this checkout or in the skill folders of Claude Code, Codex, Hermes or OpenClaw.
+local_skill_file() {
+  local d
+  for d in "$HSTACK_ROOT/skills" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.hermes/skills" "$HOME/.openclaw/skills"; do
+    if [ -f "$d/$1/SKILL.md" ]; then printf '%s' "$d/$1/SKILL.md"; return 0; fi
+  done
+  return 1
+}
+LEGACY=""
+for n in $RESOLVED; do
+  if f=$(local_skill_file "$n"); then
+    if grep -q '^> \*\*Compatibility:\*\* legacy procedure' "$f"; then LEGACY="$LEGACY $n"; fi
+  else
+    echo "NOTE: $n is not installed in a known skill folder on this machine; check its SKILL.md for the legacy marker where your agent keeps it before running it."
+  fi
+done
+LEGACY=$(printf '%s' "$LEGACY" | sed 's/^ *//')
+if [ -n "$LEGACY" ] && [ "${ALLOW_LEGACY:-0}" != 1 ]; then
+  echo "ABORT: still legacy procedures, not re-verified for Hermes 0.22.5 (their reload step may call commands that do not exist): $LEGACY."
+  echo "       Remove them from the blueprint, or set ALLOW_LEGACY=1 only if the user accepts running an unverified procedure. Nothing was written."
+  exit 1
+fi
+[ -z "$LEGACY" ] || echo "WARN: ALLOW_LEGACY=1: the plan will run unverified legacy specialists: $LEGACY"
+```
+
+---
+
 ## Step 2 — show the resolved dry run
 
 The plan's `resolved_skills` field is only a review artifact. The validator derives
@@ -280,6 +319,7 @@ configuration deletion.
 | 8 | Scheduling terminal-only output | Hermes has no home channel to deliver it | Disable automations without a selected delivery channel. |
 | 9 | Treating approval policy as enforcement | The runtime may need its own policy configuration | State it as a plan contract and preserve specialist safety gates. |
 | 10 | Deleting “everything from the blueprint” on failure | Some selected configuration may predate this run | Roll back only resources that the owning skill created. |
+| 11 | Chaining a legacy-marked specialist | Its reload or `mcp add` form may not exist on Hermes 0.22.5 | Step 1b refuses unless `ALLOW_LEGACY=1` |
 
 ---
 
@@ -287,6 +327,7 @@ configuration deletion.
 
 - [ ] Blueprint path exists locally and passes the bundled validator.
 - [ ] Blueprint contains no secret, command, URL, or unapproved skill input.
+- [ ] No resolved specialist carries the legacy-procedure marker (Step 1b), or the user accepted `ALLOW_LEGACY=1` knowingly.
 - [ ] The resolved skill order and all requested access modes were shown and approved.
 - [ ] Hermes target was verified, or `/hermes-deploy` completed and re-verified.
 - [ ] Selected platform skills ran in series and their own allowlist/pairing checks passed.

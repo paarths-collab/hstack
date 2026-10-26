@@ -18,7 +18,10 @@ import types
 
 sys.dont_write_bytecode = True
 root = pathlib.Path(sys.argv[1])
-request = json.loads(sys.argv[2])
+# `FIXTURE -- ARGV...` (used by stubs/hermes): check ONE invocation, print argparse's message to stderr and
+# exit with its status; otherwise `FIXTURE JSON` prints a JSON result per invocation.
+check_one = len(sys.argv) > 2 and sys.argv[2] == "--"
+request = [sys.argv[3:]] if check_one else json.loads(sys.argv[2])
 pkg = types.ModuleType("hermes_cli")
 pkg.__path__ = [str(root)]
 sys.modules["hermes_cli"] = pkg
@@ -32,6 +35,7 @@ profile_root.mkdir()
 (profile_root / "active_profile").write_text("work\n")
 constants.get_default_hermes_root = lambda: profile_root
 constants.get_process_hermes_home = lambda: pathlib.Path("/syntax-only-home")
+constants.get_hermes_home = lambda: pathlib.Path("/syntax-only-home")
 sys.modules["hermes_constants"] = constants
 channels = types.ModuleType("hermes_cli.release_channels")
 channels.validate_name = str  # Channel-name validity is outside this syntax test.
@@ -50,6 +54,19 @@ from hermes_cli.subcommands.memory import build_memory_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.setup import build_setup_parser
 from hermes_cli.subcommands.update import build_update_parser
+from hermes_cli.subcommands.cron import build_cron_parser
+from hermes_cli.subcommands.backup import build_backup_parser
+from hermes_cli.subcommands.import_cmd import build_import_cmd_parser
+from hermes_cli.subcommands.skills import build_skills_parser
+from hermes_cli.subcommands.mcp import build_mcp_parser
+from hermes_cli.subcommands.doctor import build_doctor_parser
+from hermes_cli.subcommands.logs import build_logs_parser
+from hermes_cli.subcommands.pairing import build_pairing_parser
+from hermes_cli.subcommands.sessions import build_sessions_parser
+from hermes_cli.subcommands.status import build_status_parser
+from hermes_cli.subcommands.plugins import build_plugins_parser
+from hermes_cli.subcommands.profile import build_profile_parser
+from hermes_cli.send_cmd import register_send_subparser
 
 parser, subs, _ = build_top_level_parser()
 handler = lambda args: None
@@ -59,6 +76,19 @@ build_memory_parser(subs, cmd_memory=handler)
 build_model_parser(subs, cmd_model=handler)
 build_setup_parser(subs, cmd_setup=handler)
 build_update_parser(subs, cmd_update=handler)
+build_cron_parser(subs, cmd_cron=handler)
+build_backup_parser(subs, cmd_backup=handler)
+build_import_cmd_parser(subs, cmd_import=handler)
+build_skills_parser(subs, cmd_skills=handler)
+build_mcp_parser(subs, cmd_mcp=handler)
+build_doctor_parser(subs, cmd_doctor=handler)
+build_logs_parser(subs, cmd_logs=handler)
+build_pairing_parser(subs, cmd_pairing=handler)
+build_sessions_parser(subs, cmd_sessions=handler)
+build_status_parser(subs, cmd_status=handler)
+build_plugins_parser(subs, cmd_plugins=handler)
+build_profile_parser(subs, cmd_profile=handler)
+register_send_subparser(subs)
 # Execute only actual tagged early profile functions, never main.py imports or handlers.
 # Home resolution and service presence are injected boundaries; selection/flag stripping are real.
 profiles = types.ModuleType("hermes_cli.profiles")
@@ -88,4 +118,10 @@ for argv in request:
         result.append({"argv": argv, "code": exc.code, "output": output.getvalue()})
 import shutil
 shutil.rmtree(profile_root.parent)
+if check_one:
+    row = result[0]
+    if row["code"] != 0:
+        sys.stderr.write(row.get("output") or "hermes: invalid invocation\n")
+        sys.exit(row["code"] if isinstance(row["code"], int) else 2)
+    sys.exit(0)
 print(json.dumps(result))

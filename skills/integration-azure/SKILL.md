@@ -1,346 +1,340 @@
 ---
 name: integration-azure
-description: Connect Microsoft Azure (resource groups, storage, Cosmos DB, Key Vault, monitor) to a self-hosted Hermes Agent over SSH. Wires Microsoft's first-party `@azure/mcp` stdio server with an Entra ID service principal. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect azure to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-azure — connect Azure to a remote Hermes (SSH-first)
+# /integration-azure — connect azure over SSH
 
-You are the engineer connecting Microsoft Azure to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
-as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the Entra ID service principal in their tenant (`az ad sp create-for-rbac`).
-2. Confirm RBAC scope and role (least-privilege Reader on a single resource group is the default).
+## Before you start — gather (ask once)
 
-Everything else — secret storage, stdio MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Existing Reader-scoped AZURE_TENANT_ID, AZURE_CLIENT_ID and AZURE_CLIENT_SECRET. The recipe does not create service principals or grant roles.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Azure is NOT the typical hstack remote-HTTP MCP case.
-
-- Microsoft's first-party server is `@azure/mcp` (package `@azure/mcp`, image
-  `mcr.microsoft.com/azure-sdk/azure-mcp`, source `github.com/microsoft/mcp`). It runs as a
-  **local stdio process** (`npx -y @azure/mcp@latest server start`), NOT a hosted HTTPS endpoint.
-  There is **no first-party remote MCP base URL** to bearer-auth against, so the
-  remote-HTTP `/hermes-mcp-add` probe-and-bearer flow does **not** apply here.
-- Auth is **not a static API key**. The server uses `DefaultAzureCredential`. For a headless
-  container the correct path is an **Entra ID service principal** via three env vars:
-  `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, plus the production-hardening
-  flag `AZURE_TOKEN_CREDENTIALS=prod` to block interactive browser fallback.
-
-So Path A here is: register `@azure/mcp` as a **stdio MCP** inside the Hermes container with
-`${AZURE_*}` indirection; the SP secret lives only in `~/.hermes/.env`.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$AZURE_TENANT_ID` | Entra ID tenant GUID | `tenant` field of `az ad sp create-for-rbac` output |
-| `$AZURE_CLIENT_ID` | Service principal app ID (GUID) | `appId` field of the same output |
-| `$AZURE_CLIENT_SECRET` | SP client secret | `password` field of the same output |
-| RBAC scope | Resource group + role | User picks; default Reader on one RG |
-
-Have the user mint the SP on a machine with Azure CLI logged in:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-# Least-privilege: scope to one resource group, role Reader (Contributor only if writes needed).
-az ad sp create-for-rbac \
-  --name "hermes-agent" \
-  --role Reader \
-  --scopes /subscriptions/<sub-id>/resourceGroups/<rg-name>
-```
-
-Docs: `https://learn.microsoft.com/en-us/azure/developer/azure-mcp-server/get-started`
-and the auth guide at `https://github.com/microsoft/mcp/blob/main/docs/Authentication.md`.
-
-Confirm SSH access before doing anything:
-
-```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci azure" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Azure is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write AZURE_TENANT_ID (length ${#AZURE_TENANT_ID}, prefix ${AZURE_TENANT_ID:0:4}...) via 'hermes config set'
-  2. Write AZURE_CLIENT_ID (length ${#AZURE_CLIENT_ID}, prefix ${AZURE_CLIENT_ID:0:4}...) via 'hermes config set'
-  3. Write AZURE_CLIENT_SECRET (length ${#AZURE_CLIENT_SECRET}, prefix ${AZURE_CLIENT_SECRET:0:2}...) via 'hermes config set'
-  4. Write AZURE_TOKEN_CREDENTIALS=prod (blocks interactive browser fallback)
-  5. chmod 600 ~/.hermes/.env
-  6. Register stdio MCP: hermes mcp add azure --command npx --args -y,@azure/mcp@latest,server,start
-  7. Reload gateway: hermes gateway stop && hermes gateway run (sleep 12 — first npx download)
-  8. Verify in logs: grep -i "registered.*azure|DefaultAzureCredential"
-  9. Smoke test: subscription list via SP token → expect 200
-
-The client secret is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set AZURE_TENANT_ID '$AZURE_TENANT_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AZURE_CLIENT_ID '$AZURE_CLIENT_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AZURE_CLIENT_SECRET '$AZURE_CLIENT_SECRET'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AZURE_TOKEN_CREDENTIALS 'prod'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify each key landed (each line prints `1`, never the value):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  for k in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TOKEN_CREDENTIALS; do
-    grep -c \"^\${k}=\" ~/.hermes/.env
-  done
-"
-```
-
-If any line is `0`, roll back and abort.
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> with `|` delimiter (Azure secrets routinely contain `/`, `+`, `=`):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   f=~/.hermes/.env
->   touch \$f
->   for k in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TOKEN_CREDENTIALS; do
->     grep -q \"^\${k}=\" \$f || printf '%s=\n' \"\$k\" >> \$f
->   done
->   sed -i 's|^AZURE_TENANT_ID=.*|AZURE_TENANT_ID=$AZURE_TENANT_ID|'           \$f
->   sed -i 's|^AZURE_CLIENT_ID=.*|AZURE_CLIENT_ID=$AZURE_CLIENT_ID|'             \$f
->   sed -i 's|^AZURE_CLIENT_SECRET=.*|AZURE_CLIENT_SECRET=$AZURE_CLIENT_SECRET|' \$f
->   sed -i 's|^AZURE_TOKEN_CREDENTIALS=.*|AZURE_TOKEN_CREDENTIALS=prod|'         \$f
->   chmod 600 \$f
-> "
-> ```
-
----
-
-## Step 5 — register the Azure MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred.
-
-### Path A (preferred) — official `@azure/mcp` stdio server with SP env indirection
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add azure \
-    --command npx \
-    --args '-y,@azure/mcp@latest,server,start' \
-    --env 'AZURE_TENANT_ID=\${AZURE_TENANT_ID}' \
-    --env 'AZURE_CLIENT_ID=\${AZURE_CLIENT_ID}' \
-    --env 'AZURE_CLIENT_SECRET=\${AZURE_CLIENT_SECRET}' \
-    --env 'AZURE_TOKEN_CREDENTIALS=\${AZURE_TOKEN_CREDENTIALS}'
-"
-```
-
-This writes a stdio entry to `config.yaml` referencing only `${AZURE_*}` placeholders — the
-real values stay in `~/.hermes/.env`. The flag names vary by Hermes version; run
-`hermes mcp add --help` and match its stdio syntax if unsure. If the build did not template
-the `env:` block, edit `config.yaml` so the `azure:` entry looks like:
-
-```yaml
-azure:
-  command: npx
-  args: ["-y", "@azure/mcp@latest", "server", "start"]
-  env:
-    AZURE_TENANT_ID: ${AZURE_TENANT_ID}
-    AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
-    AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
-    AZURE_TOKEN_CREDENTIALS: ${AZURE_TOKEN_CREDENTIALS}
-  enabled: true
-```
-
-To avoid first-boot latency on every restart, pin a version after confirming it on npm:
-replace `@azure/mcp@latest` with `@azure/mcp@<pinned-version>`.
-
-### Path B (fallback) — Azure Resource Manager REST API with SP-issued bearer
-
-If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command, use ARM directly.
-There is **no first-party hosted Azure MCP URL** — do not invent one. Mint a token from the
-service principal at runtime and call ARM:
-
-- **Token endpoint:** `https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/token`
-  with `grant_type=client_credentials`, `scope=https://management.azure.com/.default`,
-  `client_id=${AZURE_CLIENT_ID}`, `client_secret=${AZURE_CLIENT_SECRET}`.
-- **ARM base URL:** `https://management.azure.com`
-- **Auth header:** `Authorization: Bearer <token-from-above>`
-- **API version:** append `?api-version=2022-12-01` (or current) to every ARM request.
-
-Do NOT try to `hermes mcp add` an Azure URL with a static bearer header — there is no hosted
-MCP endpoint and the bearer would expire within an hour anyway.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run. First boot also
-downloads `@azure/mcp` via `npx`, so allow extra time before polling.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 12
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*azure|MCP server.*azure.*(ok|ready)|Azure\.Identity"; then
-    REGISTERED=1
-    echo "OK: azure registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-azure
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: azure not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-A `DefaultAzureCredential failed to retrieve a token` line means the SP env vars did not land
-in the stdio child process — re-check Step 4 and the `${...}` indirection in `config.yaml`.
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (inside the container so the secret stays on the VPS)
-
-Mint a token from the SP and hit ARM `subscriptions`. A `200` proves auth, transport, and
-RBAC end-to-end; an empty `value` array still counts as success (the SP just has no
-in-scope subscriptions yet — not a wiring failure).
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  . ~/.hermes/.env
-  TOKEN=$(curl -sS -X POST \
-    "https://login.microsoftonline.com/${AZURE_TENANT_ID}/oauth2/v2.0/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials" \
-    -d "client_id=${AZURE_CLIENT_ID}" \
-    -d "client_secret=${AZURE_CLIENT_SECRET}" \
-    -d "scope=https://management.azure.com/.default" \
-    | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
-  [ -n "$TOKEN" ] || { echo 000; exit 0; }
-  curl -sS -o /dev/null -w "%{http_code}" \
-    "https://management.azure.com/subscriptions?api-version=2022-12-01" \
-    -H "Authorization: Bearer ${TOKEN}"
-')
-case "$HTTP" in
-  200) echo "OK: Azure ARM reachable and SP token valid." ;;
-  401) echo "FAIL: SP secret invalid or expired. Re-mint and re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: SP authenticated but RBAC denies subscriptions. Confirm role+scope."; exit 1 ;;
-  000) echo "FAIL: token mint failed (tenant/client/secret mismatch). Re-check Step 4."; rollback; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from ARM. Check manually." ;;
-esac
-```
-
-An end-to-end check from the chat interface, once registered:
-```
-@<agent> using azure, list my resource groups
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove azure 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "
-    for k in AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET AZURE_TOKEN_CREDENTIALS; do
-      hermes config unset \$k 2>/dev/null || sed -i \"/^\${k}=/d\" ~/.hermes/.env
-    done
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Azure is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=azure
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${AZURE_TENANT_ID:-}" || { echo "ABORT: AZURE_TENANT_ID is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${AZURE_CLIENT_ID:-}" || { echo "ABORT: AZURE_CLIENT_ID is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${AZURE_CLIENT_SECRET:-}" || { echo "ABORT: AZURE_CLIENT_SECRET is empty or unsafe. Nothing was written."; exit 1; }
+
+for v in "$AZURE_TENANT_ID" "$AZURE_CLIENT_ID"; do printf "%s\n" "$v" | grep -Eq "^[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}$" || { echo "ABORT: tenant/client GUID required. Nothing was written."; exit 1; }; done
+printf '%s\n' "${AZURE_TENANT_ID:-}" "${AZURE_CLIENT_ID:-}" "${AZURE_CLIENT_SECRET:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'AZURE_TENANT_ID'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AZURE_CLIENT_ID'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AZURE_CLIENT_SECRET'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+token=json.loads(req("https://login.microsoftonline.com/"+d["AZURE_TENANT_ID"]+"/oauth2/v2.0/token",{"Content-Type":"application/x-www-form-urlencoded"},urllib.parse.urlencode({"grant_type":"client_credentials","client_id":d["AZURE_CLIENT_ID"],"client_secret":d["AZURE_CLIENT_SECRET"],"scope":"https://management.azure.com/.default"}).encode()))["access_token"]
+req("https://management.azure.com/subscriptions?api-version=2022-12-01",{"Authorization":"Bearer "+token})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: azure; path: stdio.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env AZURE_TENANT_ID "${AZURE_TENANT_ID:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AZURE_CLIENT_ID "${AZURE_CLIENT_ID:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AZURE_CLIENT_SECRET "${AZURE_CLIENT_SECRET:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AZURE_TOKEN_CREDENTIALS prod || { rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+if [ "${FORCE:-0}" = 1 ]; then printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null || { rollback; exit 1; }; fi
+printf 'y\n' | remote 'hermes -p default mcp add azure --env '"'"'AZURE_TENANT_ID=${AZURE_TENANT_ID}'"'"' '"'"'AZURE_CLIENT_ID=${AZURE_CLIENT_ID}'"'"' '"'"'AZURE_CLIENT_SECRET=${AZURE_CLIENT_SECRET}'"'"' AZURE_TOKEN_CREDENTIALS=prod --command npx --args -y @azure/mcp@4.0.0-beta.3 server start' >/dev/null 2>&1 || { echo "FAIL: stdio registration."; rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: MCP is not enabled."; rollback; exit 1; }
+```
+
+The one stdin answer enables discovered tools. `--env` precedes `--args`; every argument is a separate token. Environment references are expanded by Hermes when it starts the server. A zero exit from add does not prove registration. Vendor package compatibility remains live-unverified; failure must roll back.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+token=json.loads(req("https://login.microsoftonline.com/"+d["AZURE_TENANT_ID"]+"/oauth2/v2.0/token",{"Content-Type":"application/x-www-form-urlencoded"},urllib.parse.urlencode({"grant_type":"client_credentials","client_id":d["AZURE_CLIENT_ID"],"client_secret":d["AZURE_CLIENT_SECRET"],"scope":"https://management.azure.com/.default"}).encode()))["access_token"]
+req("https://management.azure.com/subscriptions?api-version=2022-12-01",{"Authorization":"Bearer "+token})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-azure.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Expecting a static `AZURE_API_KEY` | Azure has no per-tenant API key; credential is an Entra ID app | Always SP: `tenant`/`appId`/`secret` triple |
-| 2 | Wiring a remote `https://...azure...` MCP URL with a bearer | No first-party hosted Azure MCP exists | Use stdio Path A, or ARM REST Path B with runtime-minted token |
-| 3 | Interactive browser hang in headless container | Without `AZURE_TOKEN_CREDENTIALS=prod`, `DefaultAzureCredential` falls back to `InteractiveBrowserCredential` | Always set `AZURE_TOKEN_CREDENTIALS=prod` |
-| 4 | Over-broad RBAC scope | Agent inherits all SP permissions; Contributor on subscription can delete resources | Start `Reader` on one resource group; widen only on request |
-| 5 | SP secret expiry | `az ad sp create-for-rbac` defaults to ~1 year; tools start returning 401 | Re-mint and re-run Step 4 when 401 appears |
-| 6 | First-run latency | `npx @azure/mcp@latest` downloads on first boot; short sleep races registration | Step 6 sleeps 12s; pin version to skip download on subsequent boots |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` / sed | Can glue onto a prior line without trailing newline; SSH silently corrupts | Always `hermes config set` (or sed with `|` delimiter) |
-| 9 | Secret in `config.yaml` instead of `.env` | World-readable; SP-secret leak; not reloaded by runtime | Only `~/.hermes/.env`, `chmod 600`, `${AZURE_*}` indirection in YAML |
-| 10 | sed with `/` delimiter on SP secrets | Secrets contain `/`, `+`, `=` — `/` delimiter breaks the substitution | Always use `\|` delimiter |
-| 11 | Container vs host confusion | Adding key inside container is invisible to host sshd | Check `whoami; hostname` first; exit container if needed |
-| 12 | Skipping the verify step | "Silent success" — config written, child process never started | Always poll `hermes logs` and run the ARM smoke test |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Identity choice | The recipe uses an existing Entra service principal | Do not create role grants during setup |
+| 2 | RBAC denied | Token minting alone does not prove resource access | Require the subscriptions read preflight |
+| 3 | Interactive fallback | Headless deployments need deterministic credentials | Set AZURE_TOKEN_CREDENTIALS=prod |
+| 4 | Node version | Pinned Azure package requires Node22 or newer | Verify the host runtime before registration |
+| 5 | Beta package | Published does not mean live Hermes compatibility | Require native mcp test and preserve rollback |
+| 6 | Subscription scope | A Reader on a narrow scope may see limited results | Keep least privilege rather than broadening automatically |
 
----
+Pinned package metadata: [@azure/mcp 4.0.0-beta.3](https://registry.npmjs.org/@azure%2fmcp/4.0.0-beta.3). Requires Node 22+ and a supported native platform. This beta package has not been live-tested with Hermes; the native connection check must succeed before reporting ready.
+
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, `AZURE_TOKEN_CREDENTIALS=prod` all in `~/.hermes/.env`, `chmod 600`
-- [ ] Secrets NOT in `config.yaml` and NOT echoed in chat (only `${AZURE_*}` indirection in YAML)
-- [ ] SP scoped least-privilege (Reader unless writes explicitly requested)
-- [ ] MCP registered via Path A (stdio `@azure/mcp`) or ARM REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart); 12s sleep to allow npx download
-- [ ] Logs show `registered N tool(s) for 'azure'` within 30s, no `DefaultAzureCredential failed`
-- [ ] Smoke test: SP-token mint + `GET /subscriptions` returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, env-reload, and MCP registration failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

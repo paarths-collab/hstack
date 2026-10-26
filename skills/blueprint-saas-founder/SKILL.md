@@ -80,6 +80,23 @@ For any access that supports writing, keep `read_only` unless the user explains
 the write use case and explicitly approves it. `safe_operations: automatic`
 never relaxes approval for external messages or destructive actions.
 
+Several of these integration skills (Stripe, PostHog, Sentry, Datadog, Calendly, Linear, mem0 ...) are still legacy procedures that carry the line
+`> **Compatibility:** legacy procedure ...` and have not been re-verified on Hermes 0.22.5. Check the shortlist before you recommend it, and tell the user which
+entries are legacy; `/blueprint-install` refuses them unless the user sets `ALLOW_LEGACY=1` knowingly.
+
+```bash
+SELECTED="integration-stripe integration-posthog integration-sentry integration-github"   # the shortlist, as skill names
+HSTACK_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+for n in $SELECTED; do
+  for d in "$HSTACK_ROOT/skills" "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.hermes/skills" "$HOME/.openclaw/skills"; do
+    if [ -f "$d/$n/SKILL.md" ]; then
+      if grep -q '^> \*\*Compatibility:\*\* legacy procedure' "$d/$n/SKILL.md"; then echo "LEGACY: $n (not re-verified on Hermes 0.22.5)"; fi
+      break
+    fi
+  done
+done
+```
+
 ## Step 3 — Resolve delivery and automation safely
 
 Map the user’s delivery choice before composing the plan:

@@ -116,9 +116,22 @@ function splitList(value) {
   return trimmed.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+// The version string exactly as the target observed it (hstack-target.sh parse_version prints the Hermes token
+// verbatim), or "unknown" when it cannot be recorded faithfully. Never truncated to a supported x.y.z:
+// `0.15.2.1` and `0.15.2.dev3` are different runtimes and must fail runtimeVersionSupported. The grammar is the
+// receipt schema's runtime_version pattern.
 function normaliseVersion(raw) {
-  const match = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]{1,32})?)/.exec(raw ?? "");
-  return match ? match[1] : "unknown";
+  return typeof raw === "string" && /^\d+\.\d+\.\d+(?:[-+.][0-9A-Za-z.-]{1,32})?$/.test(raw.trim()) ? raw.trim() : "unknown";
+}
+
+/** Operator-facing explanation for a failed gateway reload, from the target's fixed reason code. */
+function reloadHint(kv) {
+  const reason = `${kv.error ?? ""} ${kv.detail ?? ""}`;
+  if (/restart_refused_or_failed/.test(reason)) {
+    return "Hermes refused or failed the gateway restart (typically live sessions); the reload is retried with -y only when the operator opts in with interruptLiveSessions, which interrupts those sessions";
+  }
+  if (/instance_unchanged/.test(reason)) return "the gateway instance_id did not change, so nothing was restarted";
+  return "";
 }
 
 function safeToken(raw) {
@@ -139,7 +152,7 @@ const ENV_PREV = new Set(["present", "absent"]);
  * Build the full ordered op list with exact commands (secrets redacted), expected previous state per op
  * and the recovery point. `inspection` may be null (CLI review before any contact with the target).
  */
-export function buildReview({ blueprint, contract, operator, txnId, scriptBody = null, skillsRoot = DEFAULT_SKILLS_ROOT, inspection = null }) {
+export function buildReview({ blueprint, contract, operator, txnId, scriptBody = null, skillsRoot = DEFAULT_SKILLS_ROOT, inspection = null, interruptLiveSessions = false }) {
   const input = validateOperatorInput(contract, operator);
   const graph = deriveExecutionGraph(blueprint, contract, operator);
   const hash = planHash(graph);
@@ -185,7 +198,8 @@ export function buildReview({ blueprint, contract, operator, txnId, scriptBody =
     graph.managed_skills.map((name) => `${name}: ${prevSkill(name)}`).join("; "));
   add("config:apply", "live", opApply({ txn: txnId, cron: { id: graph.schedule.id, schedule: input.schedule, prompt: contract.schedule.prompt } }),
     `env swap for ${keys.join(", ")} and cron entry ${graph.schedule.id}: ${prevCron}`);
-  add("gateway:reload", "live", opReload({ txn: txnId }), "gateway stop then run (never restart)");
+  add("gateway:reload", "live", opReload({ txn: txnId, interruptLiveSessions }),
+    interruptLiveSessions ? "restart WITH -y: live sessions are interrupted (operator opt-in); readiness needs a new instance" : "restart without -y: refused (reload fails) while sessions are live; readiness needs a new instance");
   add("verify:target", "read", opVerify({
     txn: txnId, destinationFp: input.destinationFingerprint, allowVar: contract.destination.allow_var,
     destVar: contract.destination.env_key, cronId: graph.schedule.id, schedule: input.schedule, skills: graph.managed_skills,
@@ -250,6 +264,7 @@ export class Transaction {
   #preApplyRestoreAllowed = false;
   #cronStatus = "unknown";
   #approved = null;
+  #interruptLiveSessions = false;
   #helperReady = false;
   #operation = null;
 
@@ -276,6 +291,8 @@ export class Transaction {
     this.#skillsRoot = options.skillsRoot ?? DEFAULT_SKILLS_ROOT;
     this.#validator = options.validator ?? validateBlueprintStructure;
     this.#allowNonLinux = options.allowNonLinuxTarget === true;
+    // Explicit operator opt-in to `gateway restart -y` (interrupts live sessions). Default: never.
+    this.#interruptLiveSessions = options.interruptLiveSessions === true;
   }
 
   // ---- read-only views -----------------------------------------------------------------------
@@ -642,6 +659,7 @@ export class Transaction {
       scriptBody: existsSync(this.#scriptPath) ? readTargetScript(this.#scriptPath) : null,
       skillsRoot: this.#skillsRoot,
       inspection: this.#inspection,
+      interruptLiveSessions: this.#interruptLiveSessions,
     });
   }
 
@@ -866,7 +884,7 @@ export class Transaction {
     const steps = [
       { op: opSkillsSync({ txn, names: graph.managed_skills, tar }), ids: ["skills:sync"] },
       { op: opApply({ txn, cron }), ids: [...contract.managed_env_keys.map((key) => `env:${key}`), `cron:${cron.id}`] },
-      { op: opReload({ txn }), ids: ["gateway:reload"] },
+      { op: opReload({ txn, interruptLiveSessions: this.#interruptLiveSessions }), ids: ["gateway:reload"] },
     ];
 
     // Write-ahead: persisted BEFORE the first live mutation.
@@ -888,13 +906,13 @@ export class Transaction {
       }
       const evidence = this.#evidence(`apply-${step.op.op}`, res.stdout);
       if (res.code !== 0) {
-        const detail = `${step.op.op} exited ${res.code}: ${res.kv.error ?? ""} ${res.kv.detail ?? ""}`;
+        const detail = `${step.op.op} exited ${res.code}: ${res.kv.error ?? ""} ${res.kv.detail ?? ""}${step.op.op === "reload" && reloadHint(res.kv) ? `; ${reloadHint(res.kv)}` : ""}`;
         this.#save((next) => {
           step.ids.forEach((id) => this.#setOp(next, id, "failed"));
           this.#setCheck(next, "apply", "fail", "target-state", detail, evidence);
           this.#move(next, "rollback_required");
         }, "rollback_required");
-        return { ok: false, state: this.state, failed_op: step.op.op, detail: this.#safeText(detail) };
+        return { ok: false, state: this.state, failed_op: step.op.op, detail: this.#safeText(detail, 480) };
       }
       const cronStatus = res.kv[`cron_${cron.id}`];
       if (step.op.op === "reload" && res.kv.reloaded !== "1") {
@@ -1094,7 +1112,7 @@ export class Transaction {
       // Files and cron are back; the RUNNING gateway may still hold the new environment, so reload it.
       let reload = null;
       try {
-        reload = await this.#exec(opReload({ txn: this.txnId }));
+        reload = await this.#exec(opReload({ txn: this.txnId, interruptLiveSessions: this.#interruptLiveSessions }));
       } catch { /* unknown outcome: recorded below */ }
       const reloaded = reload !== null && reload.code === 0 && reload.kv.reloaded === "1";
       const reloadEvidence = reload ? this.#evidence("restore-reload", reload.stdout) : null;
@@ -1109,14 +1127,14 @@ export class Transaction {
       }
       const detail = reload === null
         ? "files restored and verified, but the outcome of the gateway reload is unknown (transport failure); the running gateway may still hold the new environment"
-        : `files restored and verified, but the gateway reload failed (exit ${reload.code}: ${reload.kv.error ?? "no reloaded=1"}); the running gateway may still hold the new environment`;
+        : `files restored and verified, but the gateway reload failed (exit ${reload.code}: ${reload.kv.error ?? "no reloaded=1"} ${reload.kv.detail ?? ""})${reloadHint(reload.kv) ? `; ${reloadHint(reload.kv)}` : ""}; the running gateway may still hold the new environment`;
       this.#save((next) => {
         this.#setCheck(next, "restoration", "pass", "target-state", "restore re-verified against the recorded hashes", evidence);
         this.#setCheck(next, "gateway-reloaded", reload === null ? "unknown" : "fail", "target-state", detail, reloadEvidence);
         next.recovery.restoration_verified = false;
         this.#move(next, "manual_recovery_required");
       }, "manual_recovery_required");
-      return { ok: false, state: this.state, detail: this.#safeText(detail) };
+      return { ok: false, state: this.state, detail: this.#safeText(detail, 480) };
     }
     let status = "fail";
     let detail;
@@ -1166,6 +1184,12 @@ export class Transaction {
     const graph = deriveExecutionGraph(options.blueprint, options.contract, tx.#operator);
     if (planHash(graph) !== loaded.plan_hash || contractHash(options.contract) !== loaded.contract_hash) {
       throw new TransactionError("resume_mismatch", "the supplied blueprint/contract/operator input does not reproduce the receipt's plan_hash");
+    }
+    // The receipt says which transport its steps ran on; continuing on another kind would let a run that
+    // started over ssh finish (and verify) while claiming ssh for steps a simulated transport executed.
+    if (loaded.target_profile.transport_used !== tx.#transport.kind) {
+      throw new TransactionError("resume_transport_mismatch",
+        `the receipt records transport '${loaded.target_profile.transport_used}' but the supplied transport is '${tx.#transport.kind}'; resume on the same kind of transport or start a new transaction`);
     }
     tx.#graph = graph;
     tx.#planHash = loaded.plan_hash;

@@ -1,0 +1,25 @@
+name: Markdown bash lint
+
+# The deploy procedures are bash blocks inside Markdown (skills/**/SKILL.md, CLAUDE.md,
+# reference/TROUBLESHOOTING.md ...), which `**.sh` shellcheck globs never see.
+# scripts/lint-md-bash.sh runs `bash -n` over those fenced blocks; it documents that it
+# "runs locally and in CI", but no workflow ran it.
+
+on:
+  push:
+    paths: ["**/*.md", "scripts/lint-md-bash.sh", ".github/workflows/lint-md-bash.yml"]
+  pull_request:
+    paths: ["**/*.md", "scripts/lint-md-bash.sh", ".github/workflows/lint-md-bash.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: bash blocks in Markdown parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint fenced bash blocks
+        run: bash scripts/lint-md-bash.sh

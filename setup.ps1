@@ -78,7 +78,11 @@ function Get-HstackLinkTarget {
     if (-not $t) { return $null }
     $t = [string]$t
     if ($t.StartsWith('\??\')) { $t = $t.Substring(4) }
-    if (-not [IO.Path]::IsPathRooted($t)) { $t = Join-Path (Split-Path -Parent $Path) $t }
+    if (-not [IO.Path]::IsPathRooted($t)) {
+        # Split-Path -Parent /var is empty on Unix; .NET preserves the filesystem root.
+        $parent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))
+        $t = Join-Path $parent $t
+    }
     return [IO.Path]::GetFullPath($t)
 }
 
@@ -724,7 +728,7 @@ foreach ($dir in Get-ChildItem -Directory $SkillsSrc) {
 }
 Write-Host "Registered $count skills."
 
-$ClaudeMd = if ($env:CLAUDE_MD_PATH) { $env:CLAUDE_MD_PATH } else { Join-Path (Join-Path $UserHome ".claude") "CLAUDE.md" }
+$ClaudeMd = if ($env:CLAUDE_MD_PATH) { Resolve-HstackAbs $env:CLAUDE_MD_PATH } else { Join-Path (Join-Path $UserHome ".claude") "CLAUDE.md" }
 $markStart = "<!-- hstack:start -->"; $markEnd = "<!-- hstack:end -->"
 $section = @"
 $markStart
@@ -733,8 +737,12 @@ $markStart
 One command to deploy and operate a self-hosted Hermes Agent. Run /hermes-deploy for the full
 setup. Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /hermes-soul /hermes-home
 /hermes-cron. Platforms: /platform-telegram /platform-discord /platform-whatsapp /platform-slack
-/platform-mattermost. Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup.
-Pin Hermes v0.15.2; enforce allowlists and keep secrets in .env with chmod 600.
+/platform-mattermost /platform-teams /platform-google-chat /platform-signal.
+Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup.
+Enforce allowlists and keep secrets in .env with chmod 600.
+Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Use the native catalog/MCP or installed skill route documented for each integration. Reload with
+/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $markEnd
 "@
 

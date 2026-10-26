@@ -6,16 +6,38 @@
 // Env:
 //   TRAFFIC_TOKEN  a token with repo Administration:Read (fine-grained PAT) or
 //                  classic PAT with `repo` scope. The default GITHUB_TOKEN does
-//                  NOT work for the traffic API (returns 403).
+//                  NOT work for the traffic API (returns 403). REQUIRED: without it the
+//                  script exits 1 and writes nothing, so a missing secret shows up as a
+//                  red workflow run instead of a green one that only bumps a timestamp.
 //   REPO           owner/name (defaults to GITHUB_REPOSITORY or paarths-collab/hstack)
+//   METRICS_DIR    directory holding clone-traffic.json / .svg to read and write
+//                  (default: the directory of this script). The workflow runs the script
+//                  from the main checkout and points this at the metrics-data worktree.
+//   GITHUB_API_URL API base (default https://api.github.com; set by GitHub Actions)
+//
+// Flags:
+//   --no-fetch     no token needed: re-render the SVG from the existing JSON and write
+//                  nothing else (the JSON, including its "updated" stamp, is left alone).
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 
 const repo  = process.env.REPO || process.env.GITHUB_REPOSITORY || "paarths-collab/hstack";
 const token = process.env.TRAFFIC_TOKEN;
-const file  = fileURLToPath(new URL("./clone-traffic.json", import.meta.url));
-const svgFile = fileURLToPath(new URL("./clone-traffic.svg", import.meta.url));
+const apiBase = (process.env.GITHUB_API_URL || "https://api.github.com").replace(/\/+$/, "");
+const noFetch = process.argv.includes("--no-fetch");
+const metricsDir = process.env.METRICS_DIR
+  ? resolve(process.env.METRICS_DIR)
+  : fileURLToPath(new URL(".", import.meta.url));
+const file  = join(metricsDir, "clone-traffic.json");
+const svgFile = join(metricsDir, "clone-traffic.svg");
+
+if (!token && !noFetch) {
+  console.error("ERROR: TRAFFIC_TOKEN is not set - refusing to touch the history. Add the repository secret " +
+    "(see metrics/README.md), or pass --no-fetch to only re-render the SVG from the existing data.");
+  process.exit(1);
+}
 
 // Load existing history (or empty scaffold)
 const hist = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
@@ -23,11 +45,11 @@ hist.repo  = repo;
 hist.days  = hist.days  || {};
 hist.note  = hist.note  || "Daily GitHub clone traffic, persisted past GitHub's 14-day window.";
 
-// ── Fetch from GitHub API (skip gracefully if no token) ───────────────────────
-if (!token) {
-  console.warn("WARN: TRAFFIC_TOKEN not set — skipping API fetch, regenerating SVG from existing data.");
+// ── Fetch from GitHub API (skipped only with --no-fetch) ──────────────────────
+if (noFetch) {
+  console.log("--no-fetch: skipping the API call, re-rendering the SVG from existing data.");
 } else {
-  const res = await fetch(`https://api.github.com/repos/${repo}/traffic/clones`, {
+  const res = await fetch(`${apiBase}/repos/${repo}/traffic/clones`, {
     headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "hstack-metrics" },
   });
   if (!res.ok) { console.error(`ERROR: traffic API ${res.status} — ${await res.text()}`); process.exit(1); }
@@ -47,9 +69,11 @@ hist.totals = {
   // sum of per-day unique cloners — a person who clones on two days counts twice.
   unique_cloners_approx: dates.reduce((s, k) => s + hist.days[k].uniques, 0),
 };
-hist.updated = new Date().toISOString();
-
-writeFileSync(file, JSON.stringify(hist, null, 2) + "\n");
+if (!noFetch) {
+  hist.updated = new Date().toISOString();
+  mkdirSync(metricsDir, { recursive: true });
+  writeFileSync(file, JSON.stringify(hist, null, 2) + "\n");
+}
 console.log(`Tracked ${hist.totals.days} days · ${hist.totals.clones} clones · ~${hist.totals.unique_cloners_approx} unique cloners`);
 
 // ── Generate SVG chart (star-history style — cumulative line) ─────────────────
@@ -152,5 +176,6 @@ const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height=
   ${watermark}
 </svg>`;
 
+mkdirSync(metricsDir, { recursive: true });
 writeFileSync(svgFile, svgContent + "\n");
-console.log(`SVG chart written → metrics/clone-traffic.svg`);
+console.log(`SVG chart written -> ${svgFile}`);

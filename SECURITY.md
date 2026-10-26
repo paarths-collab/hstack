@@ -114,7 +114,7 @@ We reason about hstack under six adversary types. For each, we state the assumed
 
 **Defends against.**
 - We don't. **The VPS root is our root of trust.** Every credential Hermes uses is by design decryptable from `~/.hermes/.env` because Hermes reads it at gateway start.
-- We do minimize blast radius: `chmod 600 ~/.hermes/.env`, secrets never in `config.yaml` (world-readable), never in shell history (no `echo $TOKEN`), never in chat.
+- We do minimize blast radius: `chmod 600 ~/.hermes/.env`, secrets never in `config.yaml` (world-readable), never in the local ssh command line or shell history (no `echo $TOKEN`; skills send secrets to the VPS over ssh stdin), never in chat. Residual exposure, stated precisely: when a skill writes with `hermes config set KEY "$v"`, the value is briefly in the argv of that `hermes` process on the VPS, readable through `/proc` by other local users or root; the stdin-fed `.env` upsert avoids this.
 
 **Residual risk.** If root is compromised, every vendor token in `.env` is stolen. Mitigation is process: nightly `/hermes-backup` off-host, immediate rotation (see [Secret rotation playbook](#secret-rotation-playbook)) on any suspicion.
 
@@ -149,10 +149,10 @@ Every SKILL.md that this validator gates on:
 4. **DRY_RUN preview.** Before any write, the skill prints exactly what will happen. Only lengths and prefixes of secrets are shown — the full value is never echoed.
 5. **`chmod 600 ~/.hermes/.env` after every write.** Enforced by [`scripts/validate-skills.sh`](scripts/validate-skills.sh).
 6. **Env-var indirection in `config.yaml`.** Configs reference `${VAR_NAME}`, never inline the secret.
-7. **`gateway stop && gateway run` for env changes.** Never `restart` — restart doesn't reliably re-read `.env`.
+7. **`gw_reload` after env/config changes.** `hermes gateway restart --detach`, then `hermes gateway ensure --json` must exit 0 with `"state":"ready"` and a new `instance_id`; a refusal because of live sessions is reported and only overridden by the operator with `GW_INTERRUPT=1`. A restarted gateway re-reads `.env` (`gateway/run.py:1583-1585` in Hermes v0.22.5).
 8. **Verification in gateway logs.** Skills poll for the "registered" line before returning success.
 9. **Live smoke test inside the VPS.** The smoke test runs from the VPS, so the token never leaves the box.
-10. **`rollback()` function.** Auto-invoked on any assertion failure; unsets env, removes MCP registration, restores the prior `config.yaml`, and restarts the gateway.
+10. **`rollback()` function.** Auto-invoked on any assertion failure; unsets env, removes MCP registration, restores the prior `.env` and `config.yaml`, and reloads the gateway (restart, then readiness proven by `gateway ensure --json`).
 
 Auditing this list on your own deploy: `bash scripts/validate-skills.sh --skill=<name>`.
 
@@ -179,7 +179,7 @@ Auditing this list on your own deploy: `bash scripts/validate-skills.sh --skill=
 ### How they get deleted
 
 - `hermes config unset KEY` or `sed -i '/^KEY=/d' ~/.hermes/.env`.
-- After deletion: `gateway stop && gateway run` (never restart).
+- After deletion: reload with the skills' `gw_reload` helper (`gateway restart --detach`, then `gateway ensure --json` ready).
 
 ### Length + prefix disclosure in dry-runs
 
@@ -202,7 +202,7 @@ Rotate credentials **immediately** when any of these are true:
 
 1. Log in to the vendor console. Create a **new** token with the same scopes as the old one. Copy it once.
 2. On the VPS: `hermes config set <KEY> '<new-value>'`.
-3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon` — never `restart`.
+3. Reload the gateway: `hermes -p default gateway restart --detach`, then require `hermes -p default gateway ensure --json --timeout 60` to exit 0 (the skills' `gw_reload` helper).
 4. Confirm the smoke test in that skill's Step 9 passes.
 5. In the vendor console, revoke the **old** token.
 6. Grep VPS logs for the old token prefix: `grep -r '<old-prefix>' /var/log ~/.hermes 2>/dev/null`. If it appears anywhere, purge that log file.

@@ -1,338 +1,337 @@
 ---
 name: integration-gitlab
-description: Connect GitLab (repos, MRs, issues, CI/CD pipelines) to a self-hosted Hermes Agent over SSH. Wires the community static-token MCP server or REST API, with the OAuth-only first-party MCP documented as a hands-on alternative. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect gitlab to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-gitlab — connect GitLab to a remote Hermes (SSH-first)
+# /integration-gitlab — connect gitlab over SSH
 
-You are the engineer connecting GitLab (GitLab.com, Self-Managed, or Dedicated) to a
-self-hosted Hermes agent on the user's VPS. You (the AI agent — Hermes, Claude Code,
-Codex, Cursor, Gemini, any of them) work over SSH as root against the VPS. The user only
-does the things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the personal access token (PAT) in the GitLab UI and pick scopes.
-2. (Path B only) Approve the OAuth Dynamic Client Registration consent in a browser.
+## Before you start — gather (ask once)
 
-Everything else — token validation, sidecar boot, MCP registration, gateway reload,
-verification — runs on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Authorize GitLab.com through native OAuth. This catalogue entry is GitLab.com only; self-managed instances must use a separately reviewed endpoint and are outside this recipe.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** GitLab has two MCP realities:
-
-- The **official GitLab MCP server** (`<base>/api/v4/mcp`, GitLab 18.6+) is **OAuth 2.0
-  Dynamic Client Registration only** — static `glpat-` tokens are rejected. It also
-  requires GitLab Duo plus beta/experimental features on the instance. Hermes' generic
-  header-auth wiring cannot mint or refresh OAuth tokens, so this is **Path C**, not the
-  default.
-- The **one-click path** is the community server `@zereight/mcp-gitlab` running as a
-  sidecar with a static PAT, exposing a streamable-HTTP endpoint Hermes can register
-  normally. This is **Path A**.
-- The **always-works fallback** is storing the PAT and calling `<base>/api/v4` directly
-  with `PRIVATE-TOKEN`. This is **Path B**.
-
-Default to Path A. Choose Path C only if the user explicitly wants first-party OAuth.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$GITLAB_BASE` | Base URL, e.g. `https://gitlab.com` or self-managed host | The user |
-| `$GITLAB_TOKEN` | Personal access token (`glpat-...`) | `$GITLAB_BASE/-/user_settings/personal_access_tokens` → Add new token. Scopes: `read_api` for read-only agents, `api` if the agent must write/comment/trigger pipelines. Set a short expiry. |
-
-Set `GITLAB_API="$GITLAB_BASE/api/v4"` once gathered.
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-Before any wiring, validate the PAT against the REST API — one curl confirms token,
-base URL, and scope in a single shot, and gives a clean error if any of the three is
-wrong:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /tmp/gl_user -w 'user=%{http_code}\n' \
-    -H 'PRIVATE-TOKEN: $GITLAB_TOKEN' '$GITLAB_API/user'
-  grep -o '\"username\":\"[^\"]*\"' /tmp/gl_user || true
-"
-```
-
-`200` on `/user` → token + base URL are correct. `401` → bad/expired token or wrong
-base URL. Abort and re-mint before continuing.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci gitlab" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "GitLab is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Validate PAT against $GITLAB_API/user (already done in Step 1)
-  2. Write GITLAB_TOKEN (length ${#GITLAB_TOKEN}, prefix ${GITLAB_TOKEN:0:6}...) via 'hermes config set'
-  3. Write GITLAB_API_URL=$GITLAB_API via 'hermes config set'
-  4. chmod 600 ~/.hermes/.env
-  5. Path A: docker run @zereight/mcp-gitlab@2.1.28 sidecar on :3000
-     Register MCP: hermes mcp add gitlab --url http://gitlab-mcp:3000/mcp
-  6. Reload gateway: hermes gateway stop && hermes gateway run
-  7. Verify in logs: grep -i "registered.*gitlab"
-  8. Smoke test: GET $GITLAB_API/projects?membership=true&per_page=1 -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set GITLAB_TOKEN '$GITLAB_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set GITLAB_API_URL '$GITLAB_API'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^GITLAB_TOKEN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: GITLAB_TOKEN not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter — `glpat-` tokens are alnum/`-` but the pattern stays safe if GitLab
-> ever changes format):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^GITLAB_TOKEN=' ~/.hermes/.env || printf 'GITLAB_TOKEN=\n' >> ~/.hermes/.env
->   sed -i 's|^GITLAB_TOKEN=.*|GITLAB_TOKEN=$GITLAB_TOKEN|' ~/.hermes/.env
->   grep -q '^GITLAB_API_URL=' ~/.hermes/.env || printf 'GITLAB_API_URL=\n' >> ~/.hermes/.env
->   sed -i 's|^GITLAB_API_URL=.*|GITLAB_API_URL=$GITLAB_API|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the MCP server
-
-Pick the path that matches your auth posture. Path A is the default one-click flow.
-
-### Path A (preferred) — community static-token MCP via HTTP sidecar
-
-Run `@zereight/mcp-gitlab` as a sidecar on the host (or in the same compose network as
-Hermes), pinned to a verified version. Set `GITLAB_READ_ONLY_MODE=true` when the PAT is
-`read_api` so the server refuses writes that would 403 anyway.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  docker rm -f gitlab-mcp 2>/dev/null || true
-  docker run -d --name gitlab-mcp \
-    -e GITLAB_PERSONAL_ACCESS_TOKEN='$GITLAB_TOKEN' \
-    -e GITLAB_API_URL='$GITLAB_API' \
-    -e STREAMABLE_HTTP=true \
-    -p 3000:3000 \
-    node:20-alpine \
-    npx -y @zereight/mcp-gitlab@2.1.28
-"
-```
-
-Then register the sidecar endpoint with Hermes. The sidecar holds the PAT itself, so the
-Hermes-side endpoint usually needs no extra bearer — but if you front it with a gateway
-that requires one, use placeholder injection with the `|` sed delimiter:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add gitlab \
-    --url 'http://gitlab-mcp:3000/mcp' \
-    --transport streamable-http
-"
-```
-
-If your sidecar is behind a TLS gateway that requires `Authorization: Bearer <token>`,
-register with a placeholder and inject:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add gitlab \
-    --url 'https://<your-host>/mcp' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-  sed -i 's|placeholder|'\"\$GITLAB_TOKEN\"'|g' ~/.hermes/config.yaml
-"
-```
-
-### Path B (always-works fallback) — REST API direct, no MCP
-
-The PAT is already written to `~/.hermes/.env`. Any generic HTTP tool/skill can now hit
-`$GITLAB_API/...` with `PRIVATE-TOKEN: $GITLAB_TOKEN`. Useful URL building blocks:
-
-- `GET $GITLAB_API/user` — identity check
-- `GET $GITLAB_API/projects?membership=true` — your projects
-- `GET $GITLAB_API/projects/:id/merge_requests?state=opened` — open MRs
-- `GET $GITLAB_API/projects/:id/issues?state=opened` — open issues
-- `POST $GITLAB_API/projects/:id/pipeline` — trigger CI (needs `api` scope)
-
-Auth header: `PRIVATE-TOKEN: $GITLAB_TOKEN` (recommended) or `Authorization: Bearer $GITLAB_TOKEN`.
-
-### Path C (first-party, hands-on) — official OAuth MCP
-
-The first-party server lives at `$GITLAB_BASE/api/v4/mcp` (HTTP transport, GitLab 18.6+).
-It is **OAuth 2.0 Dynamic Client Registration only** — no static-token mode. Prereqs the
-GitLab admin must enable first: **GitLab Duo** + **beta and experimental features** on
-the instance. Then point an OAuth-capable MCP client at `$GITLAB_BASE/api/v4/mcp`; the
-client performs DCR and the user approves the app in the browser. Hermes' generic
-header-auth wiring cannot mint or refresh that token, so this path is hands-on and not
-set-and-forget. Do **not** attempt to register `/api/v4/mcp` with the `glpat-` token —
-it will be rejected.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*gitlab|MCP server.*gitlab.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: gitlab registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-gitlab
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: gitlab not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-(Path B users: skip this step — there's no MCP to register. Go straight to Step 8.)
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X GET '$GITLAB_API/projects?membership=true&per_page=1' \
-    -H \"PRIVATE-TOKEN: \$GITLAB_TOKEN\"
-")
-case "$HTTP" in
-  200) echo "OK: GitLab API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but scope insufficient. Re-mint with 'api' if writes needed."; exit 1 ;;
-  429) echo "WARN: rate-limited. Honor Retry-After; not a wiring failure." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from GitLab API. Check manually." ;;
-esac
-```
-
-`200` with `[]` means the token works but the account has no projects — not a failure
-of wiring.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove gitlab 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "docker rm -f gitlab-mcp 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset GITLAB_TOKEN 2>/dev/null || \
-    sed -i '/^GITLAB_TOKEN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset GITLAB_API_URL 2>/dev/null || \
-    sed -i '/^GITLAB_API_URL=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. GitLab is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/gitlab.json mcp-tokens/gitlab.client.json mcp-tokens/gitlab.meta.json mcp-tokens/gitlab.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/gitlab.json mcp-tokens/gitlab.client.json mcp-tokens/gitlab.meta.json mcp-tokens/gitlab.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/gitlab.json mcp-tokens/gitlab.client.json mcp-tokens/gitlab.meta.json mcp-tokens/gitlab.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=gitlab
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])gitlab([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
+```
+
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: gitlab; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default mcp install gitlab' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *gitlab .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login gitlab`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-gitlab.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring `$GITLAB_BASE/api/v4/mcp` with a `glpat-` token | First-party MCP is **OAuth-only**; static tokens are rejected | Use Path A (community sidecar) or Path B (REST) |
-| 2 | Scope mismatch → silent 403 on writes | `read_api` lets the agent browse but every create/comment/trigger returns 403 | Mint with `api` if the agent acts; set `GITLAB_READ_ONLY_MODE=true` on the sidecar when token is read-only |
-| 3 | Wrong API base | Base must end in `/api/v4`. Self-managed on a subpath (`https://host/gitlab`) needs `https://host/gitlab/api/v4` | A 404 on `/user` usually means missing/wrong `/api/v4` suffix |
-| 4 | PAT = the owner's full blast radius | Inherits the creator's membership and permissions across every group/project | Mint from a dedicated bot/service account, not a human admin; set short expiry |
-| 5 | GitLab.com rate limits | Chatty agent → `429` | Honor `Retry-After`; self-managed limits are admin-configured |
-| 6 | Unpinned community MCP version | `npx -y @zereight/mcp-gitlab` (no tag) pulls latest; tool surface can change | Pin to verified `@2.1.28`; bump deliberately after re-checking the package page |
-| 7 | OAuth tokens (Path C) expire/refresh | Hermes header-auth cannot refresh them | Path C is not set-and-forget; default to Path A |
-| 8 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 9 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline → invalid env | Always `hermes config set` (or the safe sed pattern in Step 4) |
-| 10 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by Hermes runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 11 | sed with `/` delimiter on tokens | Future GitLab token formats may contain `/+=` | Always use `\|` delimiter |
-| 12 | Container vs host confusion | Adding keys / setting config in the wrong layer | Always `whoami; hostname` first; Step 1 detects automatically |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Self-managed URL | The pinned catalogue entry targets GitLab.com | Use a separately reviewed recipe for self-managed GitLab |
+| 2 | Legacy proxy | gitlab-mcp:3000 is not a host dependency here | Use native HTTP catalogue registration |
+| 3 | PAT confusion | This recipe uses native OAuth | Do not store an unnecessary PAT |
+| 4 | Repository access | The OAuth account defines accessible projects | Authorize the intended identity |
+| 5 | Pipeline writes | MCP tools may trigger changes | Require the requested operation before acting |
+| 6 | Installed entry | Native install can finish before authorization | Require mcp test |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/gitlab/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/gitlab/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] PAT validated against `$GITLAB_API/user` (HTTP 200) before any wiring
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `GITLAB_TOKEN` + `GITLAB_API_URL` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Chosen path is honest: Path A (community static-token MCP) wired, Path B (REST) documented, or Path C (OAuth) acknowledged as hands-on
-- [ ] Token scope matches intent (`read_api` for read-only, `api` for write); sidecar has `GITLAB_READ_ONLY_MODE=true` when read-only
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'gitlab'` within 30s (Path A only)
-- [ ] Smoke test: `GET $GITLAB_API/projects?membership=true` returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

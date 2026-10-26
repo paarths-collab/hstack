@@ -81,7 +81,7 @@ def instructions(config, next_commands):
         "   Preview reads GitHub only; review prints a plan. Installation and the canary are separate explicit operations.",
         "5. After credentials capture, run preview, inspect the actual report, then review. Pass the printed plan_hash to install and canary.",
         "6. Observe the actual Telegram message separately. An API acknowledgement is not evidence that a person read it.", "",
-        "The target must already run the exact supported Hermes candidate, its installed systemd gateway, Python 3.9+ with timezone data and an exclusive default profile.",
+        "The target must already run the exact supported Hermes release (0.22.5), its installed systemd gateway, Python 3.9+ with timezone data and an exclusive default profile.",
         "Preparation does not install or upgrade these prerequisites. Reusing an installed ID with a different plan requires migration review.",
         "Use --instance to give another copy of the same report a different name. Omitted instance selectors in runtime commands address only the legacy installation.", "",
     ]

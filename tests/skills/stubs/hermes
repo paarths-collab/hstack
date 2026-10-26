@@ -1,35 +1,87 @@
 #!/bin/bash
-# Test double of the Hermes CLI "adapter surface" the skills call. It is NOT Hermes and is not evidence
-# about the real CLI: each behaviour below is an assumption written down so the skill blocks have
-# something deterministic to run against. It lives ONLY in $HOME/.local/bin of the simulated VPS, so a
-# remote() that forgets to put that directory on PATH cannot find it (as on a real non-login ssh shell).
+# Test double of the Hermes CLI the skills call. It is NOT Hermes and is not evidence about the real CLI.
 #
-# Surface (anything else logs "unknown" and exits 99):
+# 1. SYNTAX is real: every invocation is first checked against the actual Hermes v0.22.5 argparse
+#    builders vendored in tests/skills/fixtures/hermes-v0.22.5 (syntax-only harness
+#    tests/skills/helpers/native-parser.py). An unknown flag or subcommand fails exactly like argparse
+#    (usage on stderr, exit 2), so a skill that calls `gateway run --daemon` or `mcp add --auth-header`
+#    cannot pass these tests.
+# 2. BEHAVIOUR is an assumption written down so the skill blocks have something deterministic to run
+#    against. The implemented behaviours are listed below; anything else logs "unknown" and exits 99.
+#    Per-command behaviour that is not defined here lives in $HOME/.local/hermes.d/<command>.sh (copied from
+#    tests/skills/stub-commands by the sandbox); such a file defines hermes_cmd() which receives the argv
+#    after the global -p option.
+#
+# It lives ONLY in $HOME/.local/bin of the simulated VPS, so a remote() that forgets to put that directory on
+# PATH cannot find it (as on a real non-login ssh shell).
+#
+# Surface:
 #   --version
 #   config set KEY [--] VALUE   UPPER_SNAKE -> ~/.hermes/.env (upsert), dotted -> ~/.hermes/config.yaml
+#   config get KEY [--json] [--raw]   .env value / config.yaml value or mapping (see the get) case; knob fail.get)
 #   config show                 prints config.yaml
-#   mcp add NAME [--command C] [--args A] [--url U] [--env K=V] [--auth-header H] [--auth-scheme S]
-#   mcp remove NAME | mcp list  (state is the "mcp.NAME:" blocks of config.yaml)
-#   gateway stop | run [--daemon] | start | status | install
+#   mcp add NAME [--command C] [--args A...] [--url U] [--env K=V...] [--auth oauth|header] [--preset P]
+#   mcp remove NAME | mcp list | mcp test NAME  (state is the "mcp.NAME:" blocks of config.yaml; add is interactive:
+#                       it reads its confirmations from stdin and saves NOTHING when stdin is closed - see the mcp) case)
+#   gateway stop [-y] | start | install | status | list | run (blocks: exits 99) | restart [--detach] [-y] | ensure
 #   logs [gateway] [-n N]       prints $HOME/logs.txt (or a default healthy log)
 #   -z PROMPT                   prints $HOME/infer.out (default "OK")
 #   setup --non-interactive
 #   cron list | create SCHEDULE PROMPT | remove ID
 #
+# Gateway model (state files under ~/.hermes): gateway.state = running|stopped; gateway.instance = a counter
+# that changes on every (re)start and is reported as "instance_id" by `gateway ensure --json`. `restart`
+# without --detach and without an installed service (state/gateway.install) would run the gateway in the
+# calling shell; the stub exits 99 for it instead of blocking.
+#
 # New files are created with the ambient umask (like the real CLI would), so the skills must chmod 600
 # themselves. Logs: logs/hermes-argv.log (tab-joined argv, includes values), logs/events.log (no values).
 # Knobs (empty files under $HOME/knobs):
 #   fail.<point>        the call logs, prints an error, exits 1. Points: version, set, set.<KEY>, mcp.add,
-#                       mcp.remove, gateway.run, gateway.stop, gateway.install, gateway.status, logs,
-#                       infer, setup, cron.create
+#                       mcp.remove, mcp.test, mcp.probe (add/test cannot connect), gateway.stop, gateway.start, gateway.restart, gateway.ensure,
+#                       gateway.install, gateway.status, logs, infer, setup, cron.create
+#   (file $HOME/hermes.version, when present, replaces the `--version` output)
 #   fail.set_nth        file holding N: the Nth `config set` of the run fails
 #   strict_negnum       a value like -100123 without `--` before it is rejected as an unknown option
 #   quote_env           values are written to .env as KEY="value"
-#   inject_allowall     after TELEGRAM_BOT_TOKEN is written, GATEWAY_ALLOW_ALL_USERS="true" is appended
+#   inject_allowall     after TELEGRAM_BOT_TOKEN, SIGNAL_HTTP_URL or WHATSAPP_DM_POLICY is written, GATEWAY_ALLOW_ALL_USERS="true" is appended
+#                       (or after any key named, one per line, in the knob file itself)
 #   status_override     file whose content `gateway status` prints; status_exit holds its exit code
+#   live_sessions       stop/restart refuse (exit 1, like the no-TTY refusal) unless -y/--yes/--interrupt
+#   restart_noop        restart exits 0 but starts nothing (the instance id does not change)
+#   ensure_exit         file holding N: `gateway ensure` exits N (5 starting, 6 draining, 3/4/7 refused) with a
+#                       matching non-ready JSON line
 set -u
 # Profile binding is logged independently; adapter argv/event assertions retain their command shape.
 mkdir -p "$HOME/logs"
+# Real syntax check first (see the header). Failures exit with argparse's status (2) and message.
+# `pm` never reaches argparse: hermes_cli/main.py:679-683 hands `sys.argv[1:2] == ["pm"]` (after the profile flag is stripped) to pm.cli,
+# so the argparse harness has nothing to check for it. Its behaviour lives in stub-commands/pm.sh.
+_first=${1:-}; if [ "$_first" = -p ] && [ "${2:-}" = default ]; then _first=${3:-}; fi
+# The parse is a pure function of argv and the vendored fixtures, so its verdict (status + argparse's message) is cached in the directory named by
+# $HOME/.hstack-native/cache (set by helpers/sandbox.mjs; under os.tmpdir(), shared by all sandboxes). The key covers argv, the harness and
+# fixtures/hermes-v0.22.5/provenance.json, so a changed fixture or harness is never answered from a stale entry. No directory = no cache.
+nat_parse_check() {
+  local parser fixture cdir key out rc
+  parser=$(cat "$HOME/.hstack-native/parser"); fixture=$(cat "$HOME/.hstack-native/fixture")
+  cdir=$(cat "$HOME/.hstack-native/cache" 2>/dev/null || true)
+  key=""
+  if [ -n "$cdir" ]; then
+    key=$( { cksum < "$parser"; cksum < "$fixture/provenance.json"; printf '%s\0' "$@"; } | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null; } | cut -d' ' -f1)
+    if [ -n "$key" ] && [ -f "$cdir/$key" ]; then
+      rc=$(sed -n 1p "$cdir/$key"); sed 1d "$cdir/$key" >&2; return "${rc:-2}"
+    fi
+  fi
+  out=$(python3 -I "$parser" "$fixture" -- "$@" 2>&1 >/dev/null); rc=$?
+  [ -z "$out" ] || printf '%s\n' "$out" >&2
+  if [ -n "$key" ] && mkdir -p "$cdir" 2>/dev/null; then
+    { echo "$rc"; [ -z "$out" ] || printf '%s\n' "$out"; } > "$cdir/$key.$$" 2>/dev/null && mv -f "$cdir/$key.$$" "$cdir/$key" 2>/dev/null || true
+  fi
+  return "$rc"
+}
+if [ "$_first" != pm ] && [ -r "$HOME/.hstack-native/parser" ] && ! nat_parse_check "$@"; then
+  exit 2
+fi
 if [ "${1:-}" = -p ] && [ "${2:-}" = default ]; then
   printf 'default\n' >> "$HOME/logs/hermes-profile.log"
   shift 2
@@ -72,13 +124,16 @@ upsert_cfg() { # KEY VALUE
   cat "$CFG.tmp" > "$CFG"
   rm -f "$CFG.tmp"
 }
-mcp_names() { [ -f "$CFG" ] && sed -n 's/^mcp\.\([^:]*\):.*$/\1/p' "$CFG"; }
+mcp_names() { # "mcp.NAME:" blocks (what `mcp add` writes here) and the flat "mcp_servers.NAME.<field>:" lines (what `config set` writes)
+  [ -f "$CFG" ] || return 0
+  { sed -n 's/^mcp\.\([^:]*\):.*$/\1/p' "$CFG"; sed -n 's/^mcp_servers\.\([^.]*\)\..*$/\1/p' "$CFG"; } | awk '!s[$0]++'
+}
 gw_state() { cat "$H/gateway.state" 2>/dev/null || echo stopped; }
 
 case "${1:-}" in
   --version)
     event --version; inject version
-    echo "hermes 0.22.5" ;;
+    if [ -f "$HOME/hermes.version" ]; then cat "$HOME/hermes.version"; else echo "hermes 0.22.5"; fi ;;
   config)
     case "${2:-}" in
       set)
@@ -103,61 +158,312 @@ case "${1:-}" in
         inject set; inject "set.$key"
         if printf '%s' "$key" | grep -Eq '^[A-Z][A-Z0-9_]*$'; then
           upsert_env "$key" "$val"
-          if [ -f "$K/inject_allowall" ] && [ "$key" = TELEGRAM_BOT_TOKEN ]; then
+          if [ -f "$K/inject_allowall" ] && { [ "$key" = TELEGRAM_BOT_TOKEN ] || [ "$key" = SIGNAL_HTTP_URL ] || [ "$key" = WHATSAPP_DM_POLICY ] || grep -qxF -- "$key" "$K/inject_allowall"; }; then
             printf 'GATEWAY_ALLOW_ALL_USERS="true"\n' >> "$ENVF"
           fi
         else
-          upsert_cfg "$key" "$val"
+          # Native config set accepts a structured mcp_servers.<name> mapping. Keep the model's flat storage,
+          # replacing the entire old entry and expanding JSON objects so list/test observe the same server.
+          if printf '%s' "$key" | grep -Eq '^mcp_servers\.[A-Za-z0-9_-]+$' && [ "${val#\{}" != "$val" ]; then
+            printf '%s' "$val" | python3 -c '
+import json, pathlib, sys
+p, key = pathlib.Path(sys.argv[1]), sys.argv[2]
+value = json.load(sys.stdin)
+if not isinstance(value, dict):
+    raise SystemExit(1)
+name = key.split(".", 1)[1]
+lines, skip = [], False
+for line in (p.read_text().splitlines() if p.exists() else []):
+    if line == "mcp." + name + ":":
+        skip = True
+        continue
+    if skip and line.startswith(" "):
+        continue
+    skip = False
+    if line.startswith(key + ".") or line.startswith(key + ":"):
+        continue
+    lines.append(line)
+def emit(prefix, item):
+    if isinstance(item, dict):
+        for k, v in item.items():
+            emit(prefix + "." + k, v)
+    else:
+        text = str(item).lower() if isinstance(item, bool) else ",".join(map(str,item)) if isinstance(item, list) else str(item)
+        lines.append(prefix + ": " + text)
+emit(key, value)
+p.write_text("\n".join(lines) + "\n")
+' "$CFG" "$key" || exit 1
+          else
+            upsert_cfg "$key" "$val"
+          fi
+        fi ;;
+      get)
+        # config get KEY [--json] [--raw]. BEHAVIOUR is an assumption written from hermes_cli/config.py:3536-3581 (v0.22.5): an unset key
+        # exits 1 with "Config key not set: KEY" on stderr; an UPPER_SNAKE name reads ~/.hermes/.env, a dotted name reads the (flat
+        # "a.b.c: v" test) config.yaml merged over the default security.allow_lazy_installs=true; a mapping prints as one JSON object with
+        # --json; credential-shaped env names (*_API_KEY, *_TOKEN, *_SECRET) are masked unless --raw. Knob: fail.get.
+        shift 2; gkey=""; gjson=0; graw=0
+        for a in "$@"; do case "$a" in --json) gjson=1 ;; --raw) graw=1 ;; *) gkey=$a ;; esac; done
+        event config get "$gkey"; inject get
+        if printf '%s' "$gkey" | grep -Eq '^[A-Z][A-Z0-9_]*$'; then
+          gv=$(sed -n "s/^$gkey=//p" "$ENVF" 2>/dev/null | tail -n1 | sed 's/^"//; s/"$//')
+          [ -n "$gv" ] || { echo "Config key not set: $gkey" >&2; exit 1; }
+          case "$gkey" in *_API_KEY|*_TOKEN|*_SECRET) [ "$graw" = 1 ] || gv="***" ;; esac
+          printf '%s\n' "$gv"
+        else
+          python3 -I - "$CFG" "$gkey" "$gjson" <<'PY' || exit $?
+import json, sys
+cfg, key, as_json = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+flat = {"security.allow_lazy_installs": True}
+def coerce(v):
+    v = v.strip()
+    if v in ("true", "false"):
+        return v == "true"
+    try:
+        return int(v)
+    except ValueError:
+        return v
+try:
+    for line in open(cfg):
+        if ": " in line and not line.startswith(" "):
+            k, v = line.rstrip("\n").split(": ", 1)
+            flat[k] = coerce(v)
+except FileNotFoundError:
+    pass
+if key in flat:
+    value = flat[key]
+else:
+    pre = key + "."
+    sub = {k[len(pre):]: v for k, v in flat.items() if k.startswith(pre)}
+    if not sub:
+        print("Config key not set: " + key, file=sys.stderr)
+        sys.exit(1)
+    value = {}
+    for k, v in sub.items():
+        cur = value
+        parts = k.split(".")
+        for p in parts[:-1]:
+            cur = cur.setdefault(p, {})
+        cur[parts[-1]] = v
+if as_json or isinstance(value, dict):
+    print(json.dumps(value))
+elif isinstance(value, bool):
+    print("true" if value else "false")
+else:
+    print(value)
+PY
         fi ;;
       show)
         event config show
         cat "$CFG" 2>/dev/null || true ;;
+      unset)
+        # config unset KEY. BEHAVIOUR is an assumption written from hermes_cli/config.py:3584-3626 (v0.22.5): an UPPER_SNAKE name
+        # is removed from ~/.hermes/.env, any other name is a flat "a.b: v" line of config.yaml; a key that was not set exits 1
+        # with "Config key not set: KEY" on stderr, otherwise it prints "Unset KEY from <file>" and exits 0 (the real line has a
+        # check-mark prefix). Knob: fail.unset.
+        shift 2; ukey=${1:-}
+        event config unset "$ukey"; inject unset
+        if printf '%s' "$ukey" | grep -Eq '^[A-Z][A-Z0-9_]*$'; then
+          grep -q "^$ukey=" "$ENVF" 2>/dev/null || { echo "Config key not set: $ukey" >&2; exit 1; }
+          { grep -v "^$ukey=" "$ENVF" || true; } > "$ENVF.tmp"; cat "$ENVF.tmp" > "$ENVF"; rm -f "$ENVF.tmp"
+          echo "Unset $ukey from $ENVF"
+        else
+          grep -q "^$ukey: " "$CFG" 2>/dev/null || { echo "Config key not set: $ukey" >&2; exit 1; }
+          { grep -v "^$ukey: " "$CFG" || true; } > "$CFG.tmp"; cat "$CFG.tmp" > "$CFG"; rm -f "$CFG.tmp"
+          echo "Unset $ukey from $CFG"
+        fi ;;
       *) event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
     esac ;;
   mcp)
+    # --- hermes mcp {add,remove,list,test}: BEHAVIOUR is an assumption modelled on hermes_cli/mcp_config.py (v0.22.5). ---
+    # add:    [exists -> "Overwrite? [y/N]" default NO] ; HTTP: "Does this server require authentication? [Y/n]" (default YES, so a
+    #         closed stdin answers yes) ; --auth header uses MCP_<NAME>_API_KEY from .env when set (headers: Authorization:
+    #         Bearer ${MCP_<NAME>_API_KEY}) ; probe (3 tools) ; "Enable all 3 tools? [Y/n/select]" - a closed stdin or n CANCELS and
+    #         nothing is saved, exit 0 ; saved with enabled: true. A failed probe asks "Save config anyway? [y/N]" (default NO):
+    #         yes saves it as enabled: false. Stdio entries skip the authentication question. --env is stdio-only.
+    # test:   exit 0 connected, 1 connection failed (also: a ${VAR} in url/headers that is unset in .env), 3 not in config.
+    # list:   one row per server: "  name  transport  tools  (check mark) enabled | (cross) disabled".
+    # remove: asks "Remove server? [Y/n]" (closed stdin = yes). Knobs: fail.mcp.add, fail.mcp.remove, fail.mcp.test, fail.mcp.probe.
+    mcp_field() { # NAME KEY -> value of "  KEY: value" inside the mcp.NAME: block, else the flat mcp_servers.NAME.KEY line
+      local v
+      case $2 in
+        headers) v=$(sed -n "s/^mcp_servers\\.$1\\.headers\\.[^:]*: //p" "$CFG" 2>/dev/null | tr '\n' ' ') ;;
+        *) v=$(sed -n "s/^mcp_servers\\.$1\\.$2: //p" "$CFG" 2>/dev/null | head -n1) ;;
+      esac
+      [ -n "$v" ] || v=$(awk -v n="mcp.$1:" -v k="  $2: " '$0==n{on=1; next} on && /^[^ ]/{on=0} on && index($0,k)==1{print substr($0,length(k)+1); exit}' "$CFG" 2>/dev/null)
+      printf '%s\n' "$v"
+    }
+    env_get() { sed -n "s/^$1=//p" "$ENVF" 2>/dev/null | tail -n1 | sed 's/^"//; s/"$//'; }
+    refs_unset() { # prints the first ${VAR} found in "$1" that has no value in .env
+      local s=$1 v
+      while :; do
+        case $s in *'${'*'}'*) ;; *) return 1 ;; esac
+        v=${s#*'${'}; v=${v%%'}'*}
+        [ -n "$(env_get "$v")" ] || { printf '%s' "$v"; return 0; }
+        s=${s#*'}'}
+      done
+    }
+    ask_yes() { # DEFAULT(y|n): read one answer; a closed stdin gives the default (like _confirm)
+      local line
+      if IFS= read -r line; then
+        line=$(printf '%s' "$line" | tr 'A-Z' 'a-z')
+        [ -z "$line" ] && { [ "$1" = y ]; return; }
+        case $line in y|yes) return 0 ;; *) return 1 ;; esac
+      fi
+      [ "$1" = y ]
+    }
     case "${2:-}" in
       add)
         name=${3:-}; shift 3
         event mcp add "$name"; inject mcp.add
-        if mcp_names | grep -qxF -- "$name"; then echo "hermes: mcp server '$name' already exists" >&2; exit 1; fi
+        url=""; cmd=""; args=""; envs=""; auth=""
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            --url) url=${2:-}; shift 2 ;;
+            --command) cmd=${2:-}; shift 2 ;;
+            --auth) auth=${2:-}; shift 2 ;;
+            --preset|--connect-timeout) shift 2 ;;
+            --args) shift; while [ $# -gt 0 ]; do args="${args:+$args,}$1"; shift; done ;;
+            --env) shift; while [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; do envs="${envs:+$envs,}$1"; shift; done ;;
+            *) shift ;;
+          esac
+        done
+        if [ -n "$url" ] && [ -n "$envs" ]; then echo "  x --env is only supported for stdio MCP servers (--command or stdio presets)"; exit 0; fi
+        if [ -z "$url" ] && [ -z "$cmd" ]; then echo "  x Must specify --url <endpoint>, --command <cmd>, or --preset <name>"; exit 0; fi
+        if mcp_names | grep -qxF -- "$name"; then
+          printf '  Server %s already exists. Overwrite? [y/N]: ' "'$name'"
+          ask_yes n || { echo; echo "  Cancelled."; exit 0; }
+        fi
+        headers=""
+        if [ -n "$url" ] && [ "$auth" != oauth ]; then
+          printf '  Does this server require authentication? [Y/n]: '
+          if ask_yes y && { [ "$auth" = header ] || [ -z "$auth" ]; }; then
+            ek=MCP_$(printf '%s' "$name" | tr 'a-z' 'A-Z' | sed 's/[^A-Z0-9_]/_/g')_API_KEY
+            if [ -z "$(env_get "$ek")" ]; then
+              IFS= read -r tok || tok=""
+              [ -n "$tok" ] && upsert_env "$ek" "$tok"
+            fi
+            [ -n "$(env_get "$ek")" ] && headers="Authorization: Bearer \${$ek}"
+          fi
+        fi
+        ok=1
+        if [ -f "$K/fail.mcp.probe" ]; then ok=0; fi
+        if [ "$auth" = oauth ] && [ ! -f "$H/mcp-oauth/$name.json" ]; then ok=0; fi   # --auth oauth skips the auth question; no cached token = the probe cannot sign in
+        if [ -n "$url" ] && [ -n "$headers" ]; then [ -z "$(refs_unset "$headers")" ] || ok=0; fi
+        if [ "$ok" = 0 ]; then
+          echo "  x Failed to connect: injected probe failure (test double)"
+          printf '  Save config anyway (you can test later)? [y/N]: '
+          if ask_yes n; then enabled=false; else echo; exit 0; fi
+        else
+          echo "  Connected! Found 3 tool(s) from '$name':"
+          printf '  Enable all 3 tools? [Y/n/select]: '
+          if IFS= read -r choice; then
+            choice=$(printf '%s' "$choice" | tr 'A-Z' 'a-z')
+            case $choice in n|no|s|select) echo "  Cancelled - server not saved."; exit 0 ;; esac
+          else
+            echo; echo "  Cancelled."; exit 0
+          fi
+          enabled=true
+        fi
+        if [ -f "$CFG" ]; then
+          awk -v n="mcp.$name:" '$0==n{skip=1; next} skip && /^[[:space:]]/{next} {skip=0; print}' "$CFG" > "$CFG.tmp"
+          cat "$CFG.tmp" > "$CFG"; rm -f "$CFG.tmp"
+        fi
         {
           echo "mcp.$name:"
-          while [ $# -gt 0 ]; do
-            case "$1" in
-              --command|--args|--url|--env|--auth-header|--auth-scheme|--placeholder-token)
-                printf '  %s: %s\n' "${1#--}" "${2:-}"; shift 2 ;;
-              *) shift ;;
-            esac
-          done
-        } >> "$CFG" ;;
+          [ -n "$url" ] && printf '  url: %s\n' "$url"
+          [ -n "$auth" ] && [ -n "$url" ] && printf '  auth: %s\n' "$auth"
+          [ -n "$headers" ] && printf '  headers: %s\n' "$headers"
+          [ -n "$cmd" ] && printf '  command: %s\n' "$cmd"
+          [ -n "$args" ] && printf '  args: %s\n' "$args"
+          [ -n "$envs" ] && printf '  env: %s\n' "$envs"
+          printf '  enabled: %s\n' "$enabled"
+        } >> "$CFG"
+        echo "  Saved '$name' to config.yaml (3/3 tools enabled)" ;;
       remove)
         event mcp remove "${3:-}"; inject mcp.remove
-        if [ -f "$CFG" ]; then
-          awk -v n="mcp.${3:-}:" '$0==n{skip=1; next} skip && /^[[:space:]]/{next} {skip=0; print}' "$CFG" > "$CFG.tmp"
-          cat "$CFG.tmp" > "$CFG"; rm -f "$CFG.tmp"
-        fi ;;
+        if ! mcp_names | grep -qxF -- "${3:-}"; then echo "  x Server '${3:-}' not found in config."; exit 0; fi
+        printf '  Remove server %s? [Y/n]: ' "'${3:-}'"
+        ask_yes y || { echo; echo "  Cancelled."; exit 0; }
+        awk -v n="mcp.${3:-}:" -v p="mcp_servers.${3:-}." '$0==n{skip=1; next} skip && /^[[:space:]]/{next} {skip=0} index($0,p)==1{next} {print}' "$CFG" > "$CFG.tmp"
+        cat "$CFG.tmp" > "$CFG"; rm -f "$CFG.tmp"
+        echo "  Removed '${3:-}' from config" ;;
       list)
         event mcp list
-        mcp_names ;;
+        if [ -z "$(mcp_names)" ]; then echo "  No MCP servers configured."; exit 0; fi
+        echo "  MCP Servers:"
+        printf '  %-16s %-30s %-12s %-10s\n' Name Transport Tools Status
+        for n in $(mcp_names); do
+          t=$(mcp_field "$n" url); a=$(mcp_field "$n" args)
+          if [ -z "$t" ]; then t=$(mcp_field "$n" command); [ -n "$a" ] && t="$t $(printf '%s' "$a" | tr ',' ' ' | cut -d' ' -f1-2)"; fi
+          [ -n "$t" ] || t="?"
+          [ "${#t}" -gt 28 ] && t="$(printf '%s' "$t" | cut -c1-25)..."
+          if [ "$(mcp_field "$n" enabled)" = false ]; then st="x disabled"; else st="v enabled"; fi
+          printf '  %-16s %-30s %-12s %s\n' "$n" "$t" all "$st"
+        done ;;
+      test)
+        name=${3:-}
+        event mcp test "$name"; inject mcp.test
+        if ! mcp_names | grep -qxF -- "$name"; then echo "  x Server '$name' not found in config."; exit 3; fi
+        if [ -f "$K/fail.mcp.probe" ]; then echo "  x Connection failed (0.1s): injected probe failure (test double)"; exit 1; fi
+        if [ "$(mcp_field "$name" auth)" = oauth ] && [ ! -f "$H/mcp-oauth/$name.json" ]; then
+          echo "  x Connection failed (0.1s): MCP OAuth for '$name': non-interactive environment and no cached tokens found. Run \`hermes mcp login $name\` interactively first"; exit 1; fi
+        miss=$(refs_unset "$(mcp_field "$name" url) $(mcp_field "$name" headers)") && {
+          echo "  x Connection failed (0.0s): MCP server '$name': \${$miss} in url/headers is not set in this profile's .env or secret source"; exit 1; }
+        echo "  v Connected (12ms)"; echo "  v Tools discovered: 3" ;;
+      catalog|picker|install|login|reauth|configure|config|"")
+        if [ -f "$HOME/.local/hermes.d/mcp.sh" ]; then
+          # shellcheck disable=SC1090
+          . "$HOME/.local/hermes.d/mcp.sh"; hermes_cmd "$@"; exit $?
+        fi
+        event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
       *) event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
     esac ;;
   gateway)
-    case "${2:-}" in
-      stop)    event gateway stop; inject gateway.stop; echo stopped > "$H/gateway.state" ;;
-      run)     event gateway run; inject gateway.run; echo running > "$H/gateway.state" ;;
-      start)   event gateway start; inject gateway.start; echo running > "$H/gateway.state" ;;
+    sub=${2:-}
+    flags=" ${*:3} "
+    yes=0; case "$flags" in *" -y "*|*" --yes "*|*" --interrupt "*) yes=1 ;; esac
+    new_instance() { n=$(cat "$H/gateway.instance" 2>/dev/null || echo 0); echo $((n + 1)) > "$H/gateway.instance"; echo running > "$H/gateway.state"; }
+    case "$sub" in
+      stop)
+        event gateway stop; inject gateway.stop
+        if [ -f "$K/live_sessions" ] && [ "$yes" = 0 ]; then echo "Refusing to stop the gateway: 1 live session(s) would be interrupted." >&2; exit 1; fi
+        echo stopped > "$H/gateway.state" ;;
+      start)   event gateway start; inject gateway.start; new_instance ;;
+      restart)
+        event gateway restart; inject gateway.restart
+        if [ -f "$K/live_sessions" ] && [ "$yes" = 0 ]; then echo "Refusing to restart the gateway: 1 live session(s) would be interrupted." >&2; exit 1; fi
+        if [ ! -f "$HOME/state/gateway.install" ]; then
+          case "$flags" in *" --detach "*) ;; *) echo "hermes(stub): restart without --detach and without an installed service would run the gateway in this shell and block" >&2; exit 99 ;; esac
+        fi
+        [ -f "$K/restart_noop" ] || new_instance ;;
+      run)     event gateway run; echo "hermes(stub): gateway run is the foreground command and would block" >&2; exit 99 ;;
       ensure)
-        event gateway ensure; inject gateway.ensure; inject gateway.run
-        echo running > "$H/gateway.state"
-        printf '{"state":"ready","reason_code":"ready","endpoint":{}}\n' ;;
+        event gateway ensure; inject gateway.ensure
+        if [ -f "$K/ensure_exit" ]; then
+          rc=$(cat "$K/ensure_exit")
+          case "$rc" in 5) st=starting; rs=deadline ;; 6) st=draining; rs=restart_wait ;; 3) st=incompatible; rs=runtime_protocol ;; 4) st=inaccessible; rs=authorization ;; *) st=inaccessible; rs=conflict ;; esac
+          printf '{"client_code_sha":"stub","endpoint":null,"reason_code":"%s","state":"%s"}\n' "$rs" "$st"
+          exit "$rc"
+        fi
+        [ "$(gw_state)" = running ] || new_instance
+        printf '{"client_code_sha":"stub","endpoint":{"api_origin":"","authority_epoch":1,"capabilities":[],"code_sha":"stub","control_home":"%s","instance_id":"inst-%s","profile_id":"default","runtime_protocol":1,"supervisor":"none"},"reason_code":null,"state":"ready"}\n' "$H" "$(cat "$H/gateway.instance")" ;;
       install) event gateway install; inject gateway.install; echo installed >> "$HOME/state/gateway.install" ;;
+      list)
+        # hermes_cli/gateway.py:1688-1721 (_gateway_list): "Gateways:" then one row per profile, marker + name (+ " (current)")
+        # and either "PID n" / "served by the default multiplexer" or "not running". Only the default profile exists here.
+        event gateway list
+        echo "Gateways:"
+        if [ "$(gw_state)" = running ]; then echo "  ✓ default (current)         — PID 4242"; else echo "  ✗ default (current)         — not running"; fi ;;
       status)
         event gateway status; inject gateway.status
         if [ -f "$K/status_override" ]; then
           cat "$K/status_override"
           [ -f "$K/status_exit" ] && exit "$(cat "$K/status_exit")"
+        elif [ "$(gw_state)" = running ]; then
+          echo "✓ Gateway is running (PID: 4242)"
         else
-          echo "gateway $(gw_state)"
+          echo "✗ Gateway is not running"
         fi ;;
       *) event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
     esac ;;
@@ -174,15 +480,13 @@ case "${1:-}" in
   setup)
     event setup "${2:-}"; inject setup
     case "${2:-}" in --non-interactive) ;; *) echo "hermes: setup would block on a prompt" >&2; exit 5 ;; esac ;;
-  cron)
-    db=$H/cron.db
-    case "${2:-}" in
-      list)   event cron list; [ -f "$db" ] && cat "$db"; true ;;
-      create) event cron create; inject cron.create; printf 'job-%s\t%s\t%s\n' "$(($(wc -l < "$db" 2>/dev/null || echo 0) + 1))" "${3:-}" "${4:-}" >> "$db" ;;
-      remove) event cron remove; [ -f "$db" ] && { grep -v "^${3:-}	" "$db" > "$db.tmp" || true; cat "$db.tmp" > "$db"; rm -f "$db.tmp"; }; true ;;
-      *) event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
-    esac ;;
   *)
+    if [ -f "$HOME/.local/hermes.d/${1:-}.sh" ]; then
+      # shellcheck disable=SC1090
+      . "$HOME/.local/hermes.d/${1:-}.sh"
+      hermes_cmd "$@"
+      exit $?
+    fi
     event unknown "$@"
     echo "hermes: unknown command: $*" >&2
     exit 99 ;;

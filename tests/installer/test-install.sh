@@ -775,18 +775,277 @@ assert "(10) gemini partial copy: user's file is in its backup" test "$(cat "$G"
 FSHIM="$TMP_BASE/failshim"
 
 # ---------------------------------------------------------------------------
-# misc: unknown flags / IDEs stay non-fatal, --ide filter
+# misc: unknown IDE names are warnings, unknown flags are errors, --ide filter
 # ---------------------------------------------------------------------------
 new_home
-run "$BASH_BIN" "$INSTALL" --local --tier=memory --ide=claude,bogus --frobnicate
-assert_eq "(misc) unknown flag and IDE are warnings, not errors" 0 "$RC"
-assert "(misc) unknown flag warned" contains "unknown flag '--frobnicate'"
+run "$BASH_BIN" "$INSTALL" --local --tier=memory --ide=claude,bogus
+assert_eq "(misc) an unknown IDE next to a valid one is a warning, not an error" 0 "$RC"
 assert "(misc) unknown IDE warned" contains "unknown IDE 'bogus'"
 assert "(misc) only the requested IDE is wired" test ! -e "$HOME/.agents"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier=memory --ide=claude --frobnicate
+assert_eq "(misc) unknown flag exits 2" 2 "$RC"
+assert "(misc) unknown flag is named" contains "unknown flag or argument '--frobnicate'"
+assert "(misc) unknown flag prints the usage" contains "Usage:"
+assert "(misc) unknown flag installs nothing" test ! -e "$HOME/.claude"
 new_home
 run "$BASH_BIN" "$INSTALL" --local --tier=memory
 assert_eq "(misc) with no IDE present: exit 0 and nothing written" 0 "$RC"
 assert "(misc) says no IDEs detected" contains "No IDEs"
+
+# ---------------------------------------------------------------------------
+# (11) flag parsing: space form, missing values, --ide=bogus, precedence, --pick without a tty
+# ---------------------------------------------------------------------------
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier memory --ide claude
+assert_eq "(11) '--tier memory --ide claude' (space form) exits 0" 0 "$RC"
+assert "(11) space form honoured: memory tier installed" test -e "$HOME/.claude/skills/integration-mem0"
+assert "(11) space form honoured: other tiers NOT installed" test ! -e "$HOME/.claude/skills/integration-stripe"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --include notion --ide codex
+assert_eq "(11) '--include notion --ide codex' exits 0" 0 "$RC"
+assert "(11) '--ide codex' wired codex only" test -e "$HOME/.agents/skills/integration-notion" -a ! -e "$HOME/.claude"
+assert "(11) '--include notion' did not widen to everything" test ! -e "$HOME/.agents/skills/integration-stripe"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --ide claude --tier
+assert_eq "(11) a trailing '--tier' with no value exits 2" 2 "$RC"
+assert "(11) ...and says it needs a value" contains "needs a value"
+assert "(11) ...and installs nothing" test ! -e "$HOME/.claude"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier --ide=claude
+assert_eq "(11) '--tier --ide=claude' (flag where the value should be) exits 2" 2 "$RC"
+assert "(11) ...and installs nothing" test ! -e "$HOME/.claude"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier= --ide=claude
+assert_eq "(11) an empty '--tier=' exits 2" 2 "$RC"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --ide=bogus --tier=memory
+assert_eq "(11) '--ide=bogus' with no valid IDE left exits 2 (not 0)" 2 "$RC"
+assert "(11) ...and says no valid IDE" contains "no valid IDE"
+assert "(11) ...and writes nothing" test -z "$(ls -A "$HOME")"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --ide=bogus,nope --tier=memory
+assert_eq "(11) several unknown IDEs and no valid one exits 2" 2 "$RC"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier=memory --include=notion --ide=claude
+assert_eq "(11) --include with --tier exits 0" 0 "$RC"
+assert "(11) --include overriding --tier is warned about" contains "--include overrides --tier"
+assert "(11) --include wins: notion installed, memory tier not" test -e "$HOME/.claude/skills/integration-notion" -a ! -e "$HOME/.claude/skills/integration-mem0"
+new_home
+run "$BASH_BIN" "$INSTALL" --local --all --tier=memory --ide=claude
+assert "(11) --all with --tier is warned about" contains "--all given: ignoring"
+assert_eq "(11) --all wins" "$(skills_total)" "$(count_links "$HOME/.claude/skills")"
+
+# --pick without any terminal (new session: no controlling tty) falls back to --all
+no_tty() { # <cmd...>: run in a new session, stdin from /dev/null
+  if command -v python3 >/dev/null 2>&1; then
+    OUT="$(python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" 2>&1 </dev/null)"
+  elif command -v setsid >/dev/null 2>&1; then
+    # util-linux needs -w to wait for the child; busybox has no -w (and does not fork here)
+    if setsid -w true >/dev/null 2>&1; then
+      OUT="$(setsid -w "$@" 2>&1 </dev/null)"
+    else
+      OUT="$(setsid "$@" 2>&1 </dev/null)"
+    fi
+  else
+    OUT=""
+    RC=127
+    return 127
+  fi
+  RC=$?
+}
+new_home
+if no_tty "$BASH_BIN" "$INSTALL" --local --pick --ide=claude; then :; fi
+if [ "$RC" = 127 ]; then
+  printf 'SKIP: (11) --pick without a tty: neither python3 nor setsid available\n'
+else
+  assert_eq "(11) --pick without a tty exits 0" 0 "$RC"
+  assert "(11) ...with no raw /dev/tty error" test "${OUT#*/dev/tty}" = "$OUT"
+  assert "(11) ...and says it falls back to --all" contains "falling back to --all"
+  assert_eq "(11) ...and installs every skill (the documented fallback)" "$(skills_total)" "$(count_links "$HOME/.claude/skills")"
+fi
+
+# ---------------------------------------------------------------------------
+# (12) --branch on an existing depth-1 checkout; clone and update failures (local bare repo)
+# ---------------------------------------------------------------------------
+if command -v git >/dev/null 2>&1; then
+  gitc() {
+    GIT_AUTHOR_NAME=Anonymous GIT_AUTHOR_EMAIL=anonymous@example.invalid \
+      GIT_COMMITTER_NAME=Anonymous GIT_COMMITTER_EMAIL=anonymous@example.invalid \
+      GIT_CONFIG_NOSYSTEM=1 git "$@"
+  }
+  new_home # git reads no global config from the real home
+  GW="$TMP_BASE/gitwork"
+  GB="$TMP_BASE/gitbare.git"
+  GI="$TMP_BASE/gitinst"
+  mkdir -p "$GW"
+  cp -R "$ROOT/skills" "$GW/skills"
+  gitc -C "$GW" init -q
+  gitc -C "$GW" symbolic-ref HEAD refs/heads/main
+  gitc -C "$GW" add -A >/dev/null
+  gitc -C "$GW" commit -q -m base
+  gitc init -q --bare "$GB"
+  gitc -C "$GB" symbolic-ref HEAD refs/heads/main
+  gitc -C "$GW" push -q "file://$GB" main
+  gitc -C "$GW" checkout -q -b devbranch
+  echo "DEV-BRANCH-MARKER" >>"$GW/skills/hermes-deploy/SKILL.md"
+  gitc -C "$GW" commit -q -am dev
+  gitc -C "$GW" push -q "file://$GB" devbranch
+  gitc -C "$GW" checkout -q main
+  inst() { # <install.sh args...>: install from the bare repo into $GI
+    run env HSTACK_REPO_URL="file://$GB" HSTACK_INSTALL_DIR="$GI" "$BASH_BIN" "$INSTALL" "$@"
+  }
+  head_of() { gitc -C "$GI" symbolic-ref --short HEAD 2>/dev/null; }
+  inst --tier=memory --ide=claude
+  assert_eq "(12) first install clones main" 0 "$RC"
+  assert_eq "(12) ...checkout is on main" main "$(head_of)"
+  inst --tier=memory --ide=claude --branch=devbranch
+  assert_eq "(12) --branch=devbranch on the existing depth-1 checkout exits 0" 0 "$RC"
+  assert_eq "(12) ...the checkout is now on devbranch" devbranch "$(head_of)"
+  assert "(12) ...and the installed skills come from devbranch" grep -q DEV-BRANCH-MARKER "$HOME/.claude/skills/hermes-deploy/SKILL.md"
+  assert "(12) ...without a 'Could not fast-forward' warning" test "${OUT#*Could not fast-forward}" = "$OUT"
+  inst --tier=memory --ide=claude --branch main
+  assert_eq "(12) switching back (space form) exits 0" 0 "$RC"
+  assert_eq "(12) ...checkout is on main again" main "$(head_of)"
+  assert "(12) ...and the devbranch change is gone" test "$(grep -c DEV-BRANCH-MARKER "$HOME/.claude/skills/hermes-deploy/SKILL.md")" = 0
+  inst --tier=memory --ide=claude --branch=no-such-branch
+  assert "(12) a branch that does not exist exits non-zero" test "$RC" -ne 0
+  assert "(12) ...says it could not switch" contains "Could not switch"
+  assert "(12) ...and does not claim the checkout is ready" test "${OUT#*checkout ready}" = "$OUT"
+  assert_eq "(12) ...the checkout stays on main" main "$(head_of)"
+  inst --tier=memory --ide=claude '--branch=-x'
+  assert "(12) an option-like branch name is rejected" test "$RC" -ne 0
+  # a new commit on the same branch is fast-forwarded
+  echo "NEW-ON-MAIN" >"$GW/skills/hermes-deploy/NEWFILE"
+  gitc -C "$GW" add -A >/dev/null
+  gitc -C "$GW" commit -q -m more
+  gitc -C "$GW" push -q "file://$GB" main
+  inst --tier=memory --ide=claude
+  assert_eq "(12) updating the same branch exits 0" 0 "$RC"
+  assert "(12) ...and fast-forwards it" test -f "$GI/skills/hermes-deploy/NEWFILE"
+  # fetch failure on the branch we are already on: warn and continue with the old checkout
+  gitc -C "$GI" remote set-url origin "$TMP_BASE/does-not-exist.git"
+  inst --tier=memory --ide=claude
+  assert_eq "(12) offline update of the current branch: exits 0" 0 "$RC"
+  assert "(12) ...with the 'Could not fast-forward' warning" contains "Could not fast-forward"
+  # clone failure is an error, not "checkout ready"
+  run env HSTACK_REPO_URL="file://$TMP_BASE/nope.git" HSTACK_INSTALL_DIR="$TMP_BASE/gitinst2" "$BASH_BIN" "$INSTALL" --tier=memory --ide=claude
+  assert "(12) a failed clone exits non-zero" test "$RC" -ne 0
+  assert "(12) ...says the clone failed" contains "git clone of"
+  assert "(12) ...and never says 'checkout ready'" test "${OUT#*checkout ready}" = "$OUT"
+else
+  printf 'SKIP: (12) git not installed: --branch and clone-failure scenarios not run\n'
+fi
+
+# ---------------------------------------------------------------------------
+# (13) .mdc generation drops only the frontmatter block, never a body "---"
+# ---------------------------------------------------------------------------
+MR="$TMP_BASE/mdcrepo"
+mkdir -p "$MR/skills/hermes-fix"
+cp "$INSTALL" "$MR/install.sh"
+cp "$ROOT/setup-cursor" "$MR/setup-cursor"
+cp "$ROOT/setup-all" "$MR/setup-all" 2>/dev/null || true
+cat >"$MR/skills/hermes-fix/SKILL.md" <<'MDEOF'
+---
+name: hermes-fix
+description: Fixture skill with horizontal rules in the body
+---
+
+# /hermes-fix
+
+Intro text
+
+---
+
+A section after a rule.
+
+```yaml
+first: 1
+---
+second: 2
+```
+
+---
+
+Tail
+MDEOF
+cat >"$TMP_BASE/mdc.body.expected" <<'MDEOF'
+
+# /hermes-fix
+
+Intro text
+
+---
+
+A section after a rule.
+
+```yaml
+first: 1
+---
+second: 2
+```
+
+---
+
+Tail
+MDEOF
+mdc_body() { tail -n +8 "$1"; } # 5 header lines, the marker line, one blank line; then the body as written
+new_home
+run "$BASH_BIN" "$MR/install.sh" --local --include=hermes-fix --ide=cursor
+assert_eq "(13) install.sh .mdc fixture install exits 0" 0 "$RC"
+MDC="$HOME/.cursor/rules/hermes-fix.mdc"
+assert "(13) install.sh .mdc keeps every body '---' line" diff "$TMP_BASE/mdc.body.expected" <(mdc_body "$MDC")
+assert "(13) install.sh .mdc header is the Cursor frontmatter" test "$(sed -n '1p;5p' "$MDC" | tr '\n' ' ')" = "--- --- "
+assert_eq "(13) install.sh .mdc: same number of '---' lines as the source (header fences replace the originals)" \
+  "$(grep -c '^---$' "$MR/skills/hermes-fix/SKILL.md")" "$(grep -c '^---$' "$MDC")"
+new_home
+run "$BASH_BIN" "$MR/setup-cursor"
+assert_eq "(13) setup-cursor .mdc fixture install exits 0" 0 "$RC"
+assert "(13) setup-cursor .mdc keeps every body '---' line" diff "$TMP_BASE/mdc.body.expected" <(mdc_body "$HOME/.cursor/rules/hermes-fix.mdc")
+# real skills: all of their '---' lines survive
+new_home
+run "$BASH_BIN" "$INSTALL" --local --tier=memory --ide=cursor
+BADMDC=""
+for sk in hermes-deploy hermes-status integration-mem0; do
+  if [ "$(grep -c '^---$' "$ROOT/skills/$sk/SKILL.md")" != "$(grep -c '^---$' "$HOME/.cursor/rules/$sk.mdc")" ]; then BADMDC="$BADMDC $sk"; fi
+done
+assert "(13) real skills keep their body '---' lines in .mdc (bad:${BADMDC:- none})" test -z "$BADMDC"
+
+# ---------------------------------------------------------------------------
+# (14) PowerShell scripts must be pure ASCII (Windows PowerShell 5.1 reads a BOM-less file as ANSI)
+# ---------------------------------------------------------------------------
+PS_FILES="$(cd "$ROOT" && find . -name '*.ps1' -not -path './.git/*' -not -path '*/node_modules/*' | sort)"
+assert "(14) found the PowerShell scripts" test -n "$PS_FILES"
+NONASCII=""
+for f in $PS_FILES; do
+  if [ "$(LC_ALL=C tr -d '\000-\177' <"$ROOT/$f" | wc -c | tr -d ' ')" != 0 ]; then NONASCII="$NONASCII $f"; fi
+done
+assert "(14) every *.ps1 is pure ASCII (non-ASCII bytes in:${NONASCII:- none})" test -z "$NONASCII"
+assert "(14) install.ps1 header does not name the nonexistent 'hstack-install' function" \
+  test -z "$(grep -n 'iex; *hstack-install' "$ROOT/install.ps1")"
+
+# ---------------------------------------------------------------------------
+# (15) the injected instruction block targets Hermes v0.22.5 and names all 8 platforms
+# ---------------------------------------------------------------------------
+check_block() { # <script> <env var holding the md path> <file name>
+  local script="$1" var="$2" f="$TMP_BASE/blockcheck-$1.md" p ok=1
+  new_home
+  rm -f "$f"
+  run env "$var=$f" "$BASH_BIN" "$ROOT/$script"
+  assert_eq "($script) writes its instruction block (exit 0)" 0 "$RC"
+  for p in telegram discord whatsapp slack mattermost teams google-chat signal; do
+    grep -q "$p" "$f" 2>/dev/null || ok=0
+  done
+  assert "(15) $script block names all 8 platforms" test "$ok" = 1
+  assert "(15) $script block targets Hermes v0.22.5, source-verified only" grep -q 'v0.22.5 (source-verified; vendor and live gateway validation remain pending)' "$f"
+  assert "(15) $script block no longer pins 0.15.2" test -z "$(grep -n '0\.15' "$f")"
+  assert "(15) $script block gives the gateway reload recipe" grep -q "/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent" "$f"
+  assert "(15) $script block states vendor and live validation limits" grep -q "vendor and live gateway validation remain pending" "$f"
+}
+check_block setup CLAUDE_MD_PATH
+check_block setup-codex AGENTS_MD_PATH
+check_block setup-gemini GEMINI_MD_PATH
+check_block setup-openclaw OPENCLAW_MD_PATH
 
 # ---------------------------------------------------------------------------
 # (h) tier membership is exactly what the ORIGINAL installer resolved

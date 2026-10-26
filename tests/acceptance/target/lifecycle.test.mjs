@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { CRON_SPEC, TXN, TXN2, sandbox } from './helpers/sandbox.mjs';
 
-test('reload = gateway stop, then gateway run --daemon; never `restart`; needs applied (or restored)', () => {
+test('legacy reload = `gateway restart` only (0.15.2 has no `run --daemon`, no -y); needs applied (or restored)', () => {
   const sb = sandbox();
   try {
     sb.stageAll();
@@ -17,16 +17,14 @@ test('reload = gateway stop, then gateway run --daemon; never `restart`; needs a
     assert.equal(r.status, 0, r.stdout);
     assert.equal(r.kv.reloaded, '1');
     const gw = sb.stubCalls().filter((a) => a[0] === 'gateway');
-    assert.deepEqual(gw, [['gateway', 'stop'], ['gateway', 'run', '--daemon']]);
-    assert.ok(!sb.stubCalls().flat().includes('restart'));
+    assert.deepEqual(gw, [['gateway', 'restart']]);
+    assert.ok(!sb.stubCalls().flat().some((arg) => ['--daemon', 'run', 'stop', '-y', '--yes'].includes(arg)));
     assert.equal(readFileSync(join(sb.h, 'gateway.state'), 'utf8').trim(), 'running');
-    // a failing gateway run is a failure, not a success
-    const bad = sb.run(['reload', TXN], { env: { HSTACK_STUB_FAIL: 'gateway-run' } });
+    // a failing gateway restart is a failure, not a success
+    const bad = sb.run(['reload', TXN], { env: { HSTACK_STUB_FAIL: 'gateway-restart' } });
     assert.equal(bad.status, 1);
-    assert.equal(bad.kv.error, 'gateway_run_failed');
-    // stop failing is tolerated (`|| true`)
-    const tolerated = sb.run(['reload', TXN], { env: { HSTACK_STUB_FAIL: 'gateway-stop' } });
-    assert.equal(tolerated.status, 0);
+    assert.equal(bad.kv.error, 'gateway_restart_failed');
+    assert.notEqual(bad.kv.reloaded, '1');
     // reload after a restore is allowed (pick up the restored env)
     sb.restore();
     assert.equal(sb.run(['reload', TXN]).status, 0);
@@ -90,14 +88,14 @@ test('purge only after done/restored; removes only that txn dir', () => {
   } finally { sb.cleanup(); }
 });
 
-test('the script keeps its promises: umask 077, no eval, no hermes doctor/--fix/restart anywhere in the source', () => {
+test('the script keeps its promises: umask 077, no eval, no hermes doctor/--fix, no `gateway run --daemon` anywhere in the source', () => {
   const src = readFileSync(new URL('../../../packages/acceptance/target/hstack-target.sh', import.meta.url), 'utf8');
   const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   assert.match(code, /^umask 077$/m);
   assert.ok(!/\beval\b/.test(code), 'eval found');
   assert.ok(!/\bmapfile\b|\breadarray\b|declare -A|local -A/.test(code), 'bash-4-only construct found');
-  assert.ok(!/run_hermes\s+(doctor|restart)|--fix/.test(code));
-  assert.ok(!/gateway restart/.test(code));
+  assert.ok(!/run_hermes\s+doctor|--fix/.test(code));
+  assert.ok(!/--daemon|gateway run|gateway stop/.test(code), 'only `gateway restart` (legacy) or the bundled native adapter reloads the gateway');
   assert.ok(!/\bsed -i\b|\bstat --format|\breadlink -f\b|\bdate -d\b|\bgrep -P\b|\bxargs -r\b/.test(code), 'GNU-only flag found');
   assert.ok(!/ set -x|^set -x/m.test(code));
 });

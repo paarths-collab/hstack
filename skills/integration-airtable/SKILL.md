@@ -1,314 +1,337 @@
 ---
 name: integration-airtable
-description: Connect Airtable (bases, tables, records) to a self-hosted Hermes Agent over SSH. Wires Airtable's official remote MCP server with a static Personal Access Token (PAT). Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect airtable to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-airtable — connect Airtable to a remote Hermes (SSH-first)
+# /integration-airtable — connect airtable over SSH
 
-You are the engineer connecting Airtable to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the Personal Access Token in the Airtable UI.
-2. Attach the specific bases/workspaces the token is allowed to touch.
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Authorize the intended Airtable workspace through native OAuth; a PAT is not used by this path.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Airtable ships a first-party hosted remote MCP
-at `https://mcp.airtable.com/mcp` that accepts BOTH OAuth and a static Personal Access Token
-(`pat...`) via `Authorization: Bearer <pat>`. Unlike Notion's hosted MCP, this one works
-with bearer tokens — so for headless self-hosted agents we wire the hosted MCP directly
-(Path A). Path B (REST fallback) is documented in case the build can't reach the hosted MCP.
-
-Airtable also retired legacy global account API keys: only PATs (or OAuth) work now.
-A `key...`-style legacy key will fail.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$AIRTABLE_PAT` | Personal Access Token (`pat...`) | <https://airtable.com/create/tokens> → Create token |
-| Scopes | What the token can do | At minimum `data.records:read` + `schema.bases:read`; add `data.records:write` to mutate; add `schema.bases:write` ONLY if the agent must alter tables/fields |
-| Attached bases | Which bases the PAT can see | On the token page → "Add a base" → pick specific bases or workspaces (least privilege) |
-
-The PAT format is `pat<id>.<secret>` — an opaque string prefixed `pat`. It is shown
-**once**; if lost the user must regenerate. Treat anything after the `pat` prefix as opaque.
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-If you land in a `root@<hex-string>` shell (e.g. `root@dd635306c545`) you are inside a
-container — type `exit` and re-run on the host. SSH keys and `~/.hermes/.env` paths
-differ between host and container; everything below assumes the host.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci airtable" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Airtable is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Sanity check PAT against https://api.airtable.com/v0/meta/bases (no write)
-  2. Write AIRTABLE_PAT (length ${#AIRTABLE_PAT}, prefix ${AIRTABLE_PAT:0:3}...) via 'hermes config set'
-  3. chmod 600 ~/.hermes/.env
-  4. Register MCP: hermes mcp add airtable --url https://mcp.airtable.com/mcp --auth header (Authorization: Bearer)
-  5. Reload gateway: hermes gateway stop && hermes gateway run
-  6. Verify in logs: grep -i "registered.*airtable"
-  7. Smoke test: GET https://api.airtable.com/v0/meta/bases -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-First, a pre-write sanity check against Airtable REST (fast, surfaces scope/base problems
-before you touch the gateway):
-
-```bash
-PRE=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H 'Authorization: Bearer $AIRTABLE_PAT' \
-    https://api.airtable.com/v0/meta/bases
-")
-case "$PRE" in
-  200) echo "OK: PAT is live and at least one base is attached." ;;
-  401) echo "FAIL: PAT invalid or revoked."; exit 1 ;;
-  403) echo "FAIL: PAT missing schema.bases:read. Re-mint with scope."; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $PRE from /v0/meta/bases" ;;
-esac
-```
-
-Then write the secret:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set AIRTABLE_PAT '$AIRTABLE_PAT'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^AIRTABLE_PAT=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: AIRTABLE_PAT not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern. The PAT
-> contains `.` and may contain `/+=` — always use the `|` delimiter, never `/`, and never
-> `echo >>` (it can merge onto a prior line without a trailing newline):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^AIRTABLE_PAT=' ~/.hermes/.env || printf 'AIRTABLE_PAT=\n' >> ~/.hermes/.env
->   sed -i 's|^AIRTABLE_PAT=.*|AIRTABLE_PAT=$AIRTABLE_PAT|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the Airtable MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred.
-
-### Path A (preferred) — first-party hosted remote MCP with bearer PAT
-
-Airtable's official endpoint `https://mcp.airtable.com/mcp` accepts a bearer PAT, so we
-register it as an HTTP MCP with a header auth shape. The token stays in `~/.hermes/.env`
-and is referenced via `${AIRTABLE_PAT}` indirection — never inlined in `config.yaml`.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add airtable \
-    --url 'https://mcp.airtable.com/mcp' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --env 'AIRTABLE_PAT=\${AIRTABLE_PAT}'
-"
-```
-
-If the build uses the older interactive `hermes mcp add` flow, pipe a placeholder and let
-`/hermes-mcp-add` handle injection. The placeholder pattern (token containing `.` and
-possibly `/+=` is why the `|` delimiter is mandatory):
-
-```bash
-AGENT=$(ssh "$VPS_USER@$VPS_IP" 'docker ps --filter name=hermes --format "{{.Names}}" | head -1')
-ssh "$VPS_USER@$VPS_IP" "
-  printf 'y\nAuthorization\nplaceholder\n' | \
-    docker exec -i -u hermes '$AGENT' \
-      hermes mcp add airtable --url https://mcp.airtable.com/mcp --auth header
-  docker exec '$AGENT' sh -c \
-    \"sed -i 's|^MCP_AIRTABLE_API_KEY=.*|MCP_AIRTABLE_API_KEY=$AIRTABLE_PAT|' /opt/data/.env && chmod 600 /opt/data/.env\"
-"
-```
-
-### Path B (fallback) — generic HTTP tool against the Airtable REST API
-
-If the Hermes build is HTTP-MCP-only and cannot reach `mcp.airtable.com`:
-
-- **Base URL:** `https://api.airtable.com/v0/`
-- **Auth header:** `Authorization: Bearer ${AIRTABLE_PAT}`
-- **Content type:** `Content-Type: application/json`
-- **Useful endpoints:**
-  - `GET /meta/bases` — list bases the PAT can see
-  - `GET /meta/bases/{baseId}/tables` — schema for a base
-  - `GET /{baseId}/{tableId}` — list records
-  - `POST /{baseId}/{tableId}` — create records
-  - `PATCH /{baseId}/{tableId}` — update records
-
-A bare PAT in `.env` does NOT by itself connect Airtable to the agent — it only makes the
-credential available; you still need a tool or MCP that consumes it.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*airtable|MCP server.*airtable.*(ok|ready|registered)"; then
-    REGISTERED=1
-    echo "OK: airtable registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-airtable
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: airtable not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-Expect a line like `MCP server 'airtable' (HTTP): registered N tool(s): ...` — the server
-exposes tools for listing bases/tables, reading schema, and listing/creating/updating records.
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (from the VPS so the token stays on the VPS)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H \"Authorization: Bearer \$AIRTABLE_PAT\" \
-    https://api.airtable.com/v0/meta/bases
-")
-case "$HTTP" in
-  200) echo "OK: Airtable API reachable and PAT valid." ;;
-  401) echo "FAIL: PAT invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: PAT valid but missing schema.bases:read scope."; exit 1 ;;
-  429) echo "WARN: rate-limited (~5 req/s per base). Retry after backoff." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Airtable API. Check manually." ;;
-esac
-```
-
-`200` with `{"bases":[]}` means the token works but no base is attached — not a failure
-of wiring, just a user step (Pitfall 2).
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove airtable 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset AIRTABLE_PAT 2>/dev/null || \
-    sed -i '/^AIRTABLE_PAT=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Airtable is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/airtable.json mcp-tokens/airtable.client.json mcp-tokens/airtable.meta.json mcp-tokens/airtable.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/airtable.json mcp-tokens/airtable.client.json mcp-tokens/airtable.meta.json mcp-tokens/airtable.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/airtable.json mcp-tokens/airtable.client.json mcp-tokens/airtable.meta.json mcp-tokens/airtable.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=airtable
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])airtable([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
+```
+
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: airtable; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default mcp install airtable' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *airtable .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login airtable`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-airtable.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Using a legacy `key...` API key | Airtable retired global account keys; only PATs/OAuth work | Mint a PAT at `airtable.com/create/tokens` |
-| 2 | PAT works but `/meta/bases` returns `{"bases":[]}` | PAT is inert until the user "adds a base" to it | On the token page, attach the bases or workspaces the agent needs |
-| 3 | `GET /meta/bases` returns 403 even though records read fine | Missing `schema.bases:read` scope | Re-mint with `schema.bases:read` (and `data.records:read` minimum) |
-| 4 | Granting `schema.bases:write` casually | Lets the agent alter tables/fields, not just data | Grant only if truly needed; most workflows want `data.records:*` only |
-| 5 | Token shown once, then lost | Airtable does not let you reveal a PAT after creation | Regenerate; you cannot recover it |
-| 6 | sed with `/` delimiter on the PAT | PAT contains `.` and may contain `/+=` | Always use `\|` delimiter |
-| 7 | `echo "$PAT" >> .env` | Can merge onto the prior line without trailing newline; SSH-style `authorized_keys` failure mode | Always `hermes config set` (or the documented `sed` fallback) |
-| 8 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by Hermes runtime | Only `~/.hermes/.env` (or `/opt/data/.env` in container), `chmod 600` |
-| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 10 | Container vs host confusion | Adding the PAT inside the container when host expects it (or vice versa) | Always check `whoami; hostname` first; `root@<hex>` means container |
-| 11 | OAuth vs PAT confusion on the hosted MCP | The hosted MCP supports both; OAuth needs a browser dance | Use the PAT — fully scriptable |
-| 12 | Hammering Airtable with agent tool calls | ~5 req/s per base; bursts return `429` | Have the agent back off rather than retry hot |
-| 13 | Hermes not running when SSH connects | First call hangs forever | Step 1 has a hard version check that exits early |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | OAuth account | Airtable PAT is not used by this route | Authorize the intended account in Hermes |
+| 2 | Missing base | The OAuth grant may omit the required base | Review selected bases before authorizing |
+| 3 | Unexpected edits | Discovered MCP tools may modify records | Use only explicitly authorized operations |
+| 4 | Callback unreachable | Browser loopback is not the remote VPS | Forward the callback port shown by Hermes |
+| 5 | Expired session | OAuth refresh belongs to Hermes | Use native mcp login then mcp test if refresh fails |
+| 6 | Success printed | Installation can finish before OAuth is usable | Require enabled listing and mcp test |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/airtable/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/airtable/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] Pre-write `GET /v0/meta/bases` returned `200` (PAT live + scoped)
-- [ ] `AIRTABLE_PAT` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] At least one base attached to the PAT (user step verified)
-- [ ] MCP registered via Path A (hosted bearer MCP) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'airtable'` within 30s
-- [ ] Smoke test: `GET /v0/meta/bases` from the VPS returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

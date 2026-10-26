@@ -94,7 +94,7 @@ test('restore never touches the gateway; reload after restore is allowed and emi
     const rl = sb.run(['reload', TXN]);
     assert.equal(rl.status, 0, rl.stdout);
     assert.equal(rl.kv.reloaded, '1');
-    assert.deepEqual(sb.stubCalls().filter((a) => a[0] === 'gateway'), [['gateway', 'stop'], ['gateway', 'run', '--daemon']]);
+    assert.deepEqual(sb.stubCalls().filter((a) => a[0] === 'gateway'), [['gateway', 'restart']]);
     // also fine when the second restore is the "already restored" no-op
     assert.equal(sb.restore().kv.already_restored, '1');
     assert.equal(sb.run(['reload', TXN]).kv.reloaded, '1');

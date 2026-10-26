@@ -2,7 +2,7 @@
 """Offline CLI fixture for the narrow tagged v0.22.5 surface, NOT real Hermes.
 
 Uses the actual structured jobs.json layout and public argument forms; it deliberately
-does not implement legacy TSV output or gateway run --daemon. Separate upstream smoke
+does not implement legacy TSV output, and rejects `gateway run --daemon` like argparse (exit 2). Separate upstream smoke
 checks are required before claiming runtime compatibility.
 """
 import argparse
@@ -13,7 +13,9 @@ import sys
 
 args = sys.argv[1:]
 if args == ["--version"]:
-    print("Hermes Agent v0.22.5")
+    # Real format (hermes_cli/_startup_fast.py print_fast_version_info): banner, then unrelated x.y.z lines.
+    print("Hermes Agent v0.22.5 (2026.9.24) \u00b7 upstream bf0203a7\nInstall directory: /home/operator/.hermes/hermes-agent\n"
+          "Install method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0")
     raise SystemExit(0)
 if args[:2] != ["--profile", "default"]:
     raise SystemExit(90)
@@ -76,15 +78,58 @@ if args[:1] == ["cron"]:
     else:
         raise SystemExit(92)
     store.write_text(json.dumps(data))
-elif args[:2] in (["gateway", "stop"], ["gateway", "start"], ["gateway", "ensure"]):
+elif args[:1] == ["gateway"] and len(args) >= 2 and args[1] in ("stop", "start", "restart", "ensure", "run"):
+    # Option grammar copied from the v0.22.5 parsers (hermes_cli/subcommands/gateway.py:70-155). An undeclared
+    # option, notably the nonexistent `run --daemon`, is an argparse usage error: exit 2, like the real CLI.
+    parser = argparse.ArgumentParser(prog="hermes gateway " + args[1])
+    if args[1] == "stop":
+        parser.add_argument("--system", action="store_true"); parser.add_argument("--all", action="store_true")
+        parser.add_argument("-y", "--yes", "--interrupt", dest="interrupt", action="store_true")
+    elif args[1] == "restart":
+        parser.add_argument("--system", action="store_true"); parser.add_argument("--all", action="store_true")
+        parser.add_argument("--force", action="store_true"); parser.add_argument("--detach", action="store_true")
+        parser.add_argument("-y", "--yes", "--interrupt", dest="interrupt", action="store_true")
+    elif args[1] == "start":
+        parser.add_argument("--system", action="store_true"); parser.add_argument("--all", action="store_true")
+        parser.add_argument("--force", action="store_true")
+    elif args[1] == "ensure":
+        parser.add_argument("--json", action="store_true"); parser.add_argument("--timeout", default="60")
+    else:
+        for flag in ("-v", "-q", "--replace", "--force", "--no-supervise", "--external-supervisor", "--accept-hooks"):
+            parser.add_argument(flag, action="store_true")
+    options = parser.parse_args(args[2:])
+    if args[1] == "run":
+        raise SystemExit(93)  # the foreground gateway; a script must never call it, so it is not modelled
     if args[1] in os.environ.get("HSTACK_NATIVE_FAIL", "").split(","):
         raise SystemExit(1)
+    # Gateway process model: every real restart starts a new process with a fresh instance_id (uuid4 per process,
+    # gateway/run_runtime.py:144). Knobs: HSTACK_NATIVE_LIVE_SESSIONS=1 refuses a non-interactive restart without -y
+    # (gateway_lifecycle_guards.py:97-132); HSTACK_NATIVE_RESTART_NOOP=1 exits 0 without restarting (linger case,
+    # gateway.py:5499-5513); HSTACK_NATIVE_ENSURE_PENDING=N answers the first N `ensure` calls with exit 5 (pending).
+    # The first two also exist as marker files (fixture-live-sessions, fixture-restart-noop) so a test can switch them
+    # on after apply.
+    instance_file = home / "fixture-instance"
+    instance = int(instance_file.read_text()) if instance_file.exists() else 1
+    if args[1] == "restart":
+        if (os.environ.get("HSTACK_NATIVE_LIVE_SESSIONS") == "1" or (home / "fixture-live-sessions").exists()) and not options.interrupt:
+            print("Refusing to restart the gateway: 2 live session(s) would be interrupted.")
+            raise SystemExit(1)
+        if os.environ.get("HSTACK_NATIVE_RESTART_NOOP") != "1" and not (home / "fixture-restart-noop").exists():
+            instance_file.write_text(str(instance + 1))
     if args[1] == "ensure":
         commit = os.environ["HSTACK_NATIVE_COMMIT"]
-        print(json.dumps({"state": "ready", "client_code_sha": commit, "endpoint": {
+        pending = int(os.environ.get("HSTACK_NATIVE_ENSURE_PENDING", "0"))
+        pending_file = home / "fixture-pending"
+        done = int(pending_file.read_text()) if pending_file.exists() else 0
+        state, code = "ready", 0
+        if options.timeout == "60" and done < pending:
+            pending_file.write_text(str(done + 1))
+            state, code = "pending", 5
+        print(json.dumps({"state": state, "client_code_sha": commit, "endpoint": {
             "profile_id": str(home), "control_home": str(home), "supervisor": "systemd",
-            "runtime_protocol": 1, "authority_epoch": 1, "instance_id": "fixture-owner",
+            "runtime_protocol": 1, "authority_epoch": 1, "instance_id": "fixture-owner-%d" % instance,
             "code_sha": commit,
         }}))
+        raise SystemExit(code)
 else:
     raise SystemExit(93)

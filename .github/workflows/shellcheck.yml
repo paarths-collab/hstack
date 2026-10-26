@@ -7,6 +7,7 @@ on:
       - "setup-*"
       - "**.sh"
       - "tests/skills/stubs/*"
+      - "tests/skills/stub-commands/*.sh"
       - "tests/acceptance/stubs/*"
       - "packages/acceptance/target/*"
       - ".github/workflows/shellcheck.yml"
@@ -16,6 +17,7 @@ on:
       - "setup-*"
       - "**.sh"
       - "tests/skills/stubs/*"
+      - "tests/skills/stub-commands/*.sh"
       - "tests/acceptance/stubs/*"
       - "packages/acceptance/target/*"
       - ".github/workflows/shellcheck.yml"
@@ -41,7 +43,7 @@ jobs:
           # file lists work without GITHUB_OUTPUT heredoc gymnastics.
           {
             find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
-            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/*; do
+            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
               if [ -f "$f" ] && head -1 "$f" | grep -qE '(bash|sh)'; then echo "$f"; fi
             done
           } | xargs shellcheck --severity=warning
@@ -55,7 +57,7 @@ jobs:
           # -i 2: 2-space indent  -ci: case-indent  -bn: binary-op on new line
           {
             find . -name "*.sh" -not -path "*/node_modules/*" -not -path "*/.git/*"
-            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/*; do
+            for f in setup setup-* tests/acceptance/stubs/hermes packages/acceptance/target/hstack-target.sh tests/skills/stubs/* tests/skills/stub-commands/*.sh; do
               if [ -f "$f" ] && head -1 "$f" | grep -qE '(bash|sh)'; then echo "$f"; fi
             done
           } | xargs shfmt -i 2 -ci -bn -d

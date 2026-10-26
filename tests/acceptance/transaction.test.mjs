@@ -82,7 +82,7 @@ gated("happy path reaches verified only with an observed delivery; the receipt i
   for (const argv of calls) {
     const line = argv.join(" ");
     assert.ok(surface.some((entry) => line === entry || line.startsWith(`${entry} `)), `undeclared hermes call: ${line}`);
-    assert.equal(/doctor|--fix|restart/.test(line), false, line);
+    assert.equal(/doctor|--fix|--daemon|gateway run/.test(line), false, line);
   }
   const log = readFileSync(t.stubLog, "utf8");
   for (const secret of ALL_SECRET_STRINGS) assert.equal(log.includes(secret), false, "no secret in any hermes argv");

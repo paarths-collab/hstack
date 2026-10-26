@@ -1,369 +1,268 @@
 ---
 name: integration-google-workspace
-description: Connect Google Workspace (Gmail, Drive, Calendar, Docs, Sheets, Meet) to a self-hosted Hermes agent over SSH. Google is OAuth-only with no static API key, so this skill runs the self-hosted community MCP server with a service-account key for headless auth. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect google-workspace to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-google-workspace — connect Google Workspace to a remote Hermes (SSH-first)
+# /integration-google-workspace — connect google-workspace over SSH
 
-You are the engineer connecting Google Workspace to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as
-root against the VPS. Every command below runs on the VPS, not the local machine.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-The user only does the three things a machine cannot:
+## Before you start — gather (ask once)
 
-1. Create the Google Cloud project, enable APIs, and mint the service-account JSON key.
-2. As a Workspace admin, authorize the service account's client ID for the needed OAuth scopes
-   via domain-wide delegation (DWD).
-3. Hand off the JSON key file.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Select the Google services you need. Hermes ships google-workspace with native OAuth and optional gws CLI; follow that bundled skill for first-time authorization. No service-account key or public MCP container is copied by this recipe.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-Everything else — placing the credential, running the community MCP server, registering it with
-Hermes, gateway reload, verification — runs on the VPS via SSH, idempotently.
-
-**Honest auth picture (verified 2026-06):** Google Workspace has **no static API key** for
-Gmail, Drive, Calendar, Docs, or Sheets. Two real paths exist:
-
-1. **Official Google remote MCP servers** (per-product, e.g. `https://gmailmcp.googleapis.com/mcp/v1`,
-   `https://drivemcp.googleapis.com/mcp/v1`, `https://calendarmcp.googleapis.com/mcp/v1`,
-   `https://chatmcp.googleapis.com/mcp/v1`) — **OAuth 2.0 with an interactive browser redirect**.
-   No human is at a server, so this is **not headless**. Docs/Sheets also not covered.
-   Source: <https://developers.google.com/workspace/guides/configure-mcp-servers>
-2. **Self-hosted community MCP server** — `taylorwilsdon/google_workspace_mcp` (12 services
-   incl. Gmail/Drive/Calendar/Docs/Sheets/Slides/Tasks/Chat, 100+ tools, streamable-HTTP). Supports
-   **service account + domain-wide delegation** — the only **non-interactive** auth path.
-   Source: <https://github.com/taylorwilsdon/google_workspace_mcp> and <https://workspacemcp.com/docs>
-
-This skill uses path 2. Meet data is reached via Calendar events (conference links) and the
-Meet REST surface the server exposes.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$SA_SRC` | Local path to the service-account JSON key | Google Cloud Console -> IAM -> Service Accounts -> Keys -> Add key -> JSON |
-| `$IMPERSONATE` | The Workspace user the agent acts as (e.g. `agent@<domain>`) | The customer's Workspace admin chooses this identity |
-| APIs enabled | Gmail, Drive, Calendar, Docs, Sheets (and Slides/Tasks/Chat/People if wanted) | Cloud Console -> APIs & Services -> Enable APIs |
-| DWD granted | Admin authorized the SA client ID for the needed scopes | <https://admin.google.com> -> Security -> API controls -> Domain-wide delegation |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-If Hermes lives in a container, capture the container name for later steps:
-
-```bash
-AGENT=$(ssh "$VPS_USER@$VPS_IP" "docker ps --filter name=hermes --format '{{.Names}}' | head -1")
-```
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci google-workspace" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Google Workspace is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Copy service-account JSON (length: $(wc -c < "$SA_SRC") bytes) to /opt/data/gws-sa.json, chmod 600
-  2. hermes config set GOOGLE_APPLICATION_CREDENTIALS=/opt/data/gws-sa.json
-  3. hermes config set USER_GOOGLE_EMAIL=$IMPERSONATE
-  4. chmod 600 ~/.hermes/.env (and /opt/data/.env if container layout)
-  5. Run gws-mcp container (taylorwilsdon/google_workspace_mcp) on agent network, single-user
-  6. Register MCP: hermes mcp add google-workspace --url http://localhost:8000/mcp (no auth header)
-  7. Reload gateway: hermes gateway stop && hermes gateway run
-  8. Verify in logs: grep -i "registered.*google-workspace"
-  9. Smoke test: MCP initialize handshake -> expect HTTP 200
-
-The service-account JSON is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-The credential is the JSON key file itself. Copy it onto the VPS / into the container's data
-dir, then lock it down. Do NOT paste its contents into `config.yaml` and do NOT echo it.
-
-```bash
-# Copy the JSON onto the VPS, then into the container's /opt/data (sibling of /opt/data/.env)
-scp "$SA_SRC" "$VPS_USER@$VPS_IP:/tmp/gws-sa.json"
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  if [ -n \"\$AGENT\" ]; then
-    docker cp /tmp/gws-sa.json \"\$AGENT:/opt/data/gws-sa.json\"
-    docker exec \"\$AGENT\" sh -c 'chmod 600 /opt/data/gws-sa.json && chown hermes /opt/data/gws-sa.json || true'
-  else
-    install -m 600 /tmp/gws-sa.json /opt/data/gws-sa.json
-  fi
-  rm -f /tmp/gws-sa.json
-"
-```
-
-Record the config (path + impersonation email) via `hermes config set` — never `echo >>`:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set GOOGLE_APPLICATION_CREDENTIALS '/opt/data/gws-sa.json'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set USER_GOOGLE_EMAIL '$IMPERSONATE'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env 2>/dev/null || true"
-```
-
-Verify the credential file is a service-account key and the config keys landed (no value
-ever printed):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  if [ -n \"\$AGENT\" ]; then
-    docker exec \"\$AGENT\" sh -c 'grep -o \"\\\"type\\\": *\\\"service_account\\\"\" /opt/data/gws-sa.json'
-  else
-    grep -o '\"type\": *\"service_account\"' /opt/data/gws-sa.json
-  fi
-" | grep -q "service_account" \
-  || { echo "FAIL: /opt/data/gws-sa.json is not a service-account key. Rolling back."; rollback; exit 1; }
-
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^GOOGLE_APPLICATION_CREDENTIALS=' ~/.hermes/.env 2>/dev/null || echo 0")
-[ "$WROTE" = "1" ] || { echo "FAIL: GOOGLE_APPLICATION_CREDENTIALS not written. Rolling back."; rollback; exit 1; }
-```
-
-> Sed-fallback if your Hermes build has no `config set`. Pipe delimiter required — paths
-> contain `/`:
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^GOOGLE_APPLICATION_CREDENTIALS=' ~/.hermes/.env || printf 'GOOGLE_APPLICATION_CREDENTIALS=\n' >> ~/.hermes/.env
->   sed -i 's|^GOOGLE_APPLICATION_CREDENTIALS=.*|GOOGLE_APPLICATION_CREDENTIALS=/opt/data/gws-sa.json|' ~/.hermes/.env
->   grep -q '^USER_GOOGLE_EMAIL=' ~/.hermes/.env || printf 'USER_GOOGLE_EMAIL=\n' >> ~/.hermes/.env
->   sed -i 's|^USER_GOOGLE_EMAIL=.*|USER_GOOGLE_EMAIL=$IMPERSONATE|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the MCP server
-
-### Path A (preferred) — self-hosted community MCP server with service account
-
-Run `taylorwilsdon/google_workspace_mcp` in HTTP mode on the agent's Docker network so Hermes
-reaches it at `http://localhost:8000/mcp`. `--single-user` means one impersonated identity,
-no per-request OAuth — perfect for a headless agent.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  [ -n \"\$AGENT\" ] || { echo 'FAIL: no hermes container'; exit 1; }
-  docker rm -f gws-mcp 2>/dev/null || true
-  docker run -d --name gws-mcp \
-    --network container:\"\$AGENT\" \
-    -v /opt/data/gws-sa.json:/app/gws-sa.json:ro \
-    -e GOOGLE_APPLICATION_CREDENTIALS=/app/gws-sa.json \
-    -e USER_GOOGLE_EMAIL='$IMPERSONATE' \
-    -e WORKSPACE_MCP_PORT=8000 \
-    ghcr.io/taylorwilsdon/google_workspace_mcp:latest \
-    --transport streamable-http --single-user
-  sleep 5
-"
-```
-
-Pin a tag instead of `latest` once the user confirms a known-good version. Then register the
-no-auth HTTP MCP with Hermes — the JSON key authenticates server-side, so Hermes sends no
-bearer token:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  printf 'n\n' | hermes mcp add google-workspace --url 'http://localhost:8000/mcp'
-"
-```
-
-### Path B (fallback) — official OAuth remote MCP (NOT headless)
-
-Only if the user insists on first-party and accepts an interactive browser OAuth flow once
-per product. Endpoints:
-
-- Gmail:    `https://gmailmcp.googleapis.com/mcp/v1`
-- Drive:    `https://drivemcp.googleapis.com/mcp/v1`
-- Calendar: `https://calendarmcp.googleapis.com/mcp/v1`
-- Chat:     `https://chatmcp.googleapis.com/mcp/v1`
-
-Auth: OAuth 2.0 authorization-code flow with a per-client callback URI. Docs/Sheets are not
-covered. Do NOT attempt to wire these with a bearer token — they reject it. Source:
-<https://developers.google.com/workspace/guides/configure-mcp-servers>
-
-> If you later switch the community server to its **OAuth 2.1 multi-user** mode, that path
-> uses per-user bearer tokens — only then inject `MCP_GOOGLE_WORKSPACE_API_KEY` into
-> `~/.hermes/.env` via the standard `/hermes-mcp-add` sed pattern. With a service account
-> there is no token to inject.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 8
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*google-workspace|MCP server.*google-workspace.*(ok|ready|registered)"; then
-    REGISTERED=1
-    echo "OK: google-workspace registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-google-workspace
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: google-workspace not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-Success looks like: `MCP server 'google-workspace' (HTTP): registered N tool(s): ...`.
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (MCP initialize handshake, server-side)
-
-The credential never leaves the VPS — auth is the service-account JSON, handled by the MCP
-server. We verify the handshake responds 200 from inside the agent's network namespace:
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  docker exec \"\$AGENT\" sh -c 'curl -sS -o /dev/null -w \"%{http_code}\" \
-    -X POST -H \"Accept: application/json, text/event-stream\" -H \"Content-Type: application/json\" \
-    -d \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":1,\\\"method\\\":\\\"initialize\\\",\\\"params\\\":{\\\"protocolVersion\\\":\\\"2025-03-26\\\",\\\"capabilities\\\":{},\\\"clientInfo\\\":{\\\"name\\\":\\\"probe\\\",\\\"version\\\":\\\"0\\\"}}}\" \
-    http://localhost:8000/mcp'
-")
-case "$HTTP" in
-  200) echo "OK: MCP handshake succeeded. Service account is reaching Google." ;;
-  401) echo "FAIL: server says unauthorized — DWD likely missing or scopes too narrow. See Pitfalls 3/4."; rollback; exit 1 ;;
-  403) echo "FAIL: forbidden — admin has not authorized the SA client ID. See Pitfall 3."; rollback; exit 1 ;;
-  000) echo "FAIL: gws-mcp container not reachable. Check 'docker logs gws-mcp'."; rollback; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from MCP server. Check 'docker logs gws-mcp' manually." ;;
-esac
-```
-
-For end-to-end confidence, ask the user to trigger a real read from chat:
-
-```
-@<agent> using google-workspace, list my 3 most recent Gmail messages
-```
-
-A real list (or a valid empty result) is a pass. `unauthorized_client` -> DWD missing
-(Pitfall 3). `insufficient permission` -> scopes too narrow (Pitfall 4).
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove google-workspace 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "docker rm -f gws-mcp 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset GOOGLE_APPLICATION_CREDENTIALS 2>/dev/null || \
-    sed -i '/^GOOGLE_APPLICATION_CREDENTIALS=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset USER_GOOGLE_EMAIL 2>/dev/null || \
-    sed -i '/^USER_GOOGLE_EMAIL=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "
-    AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-    if [ -n \"\$AGENT\" ]; then
-      docker exec \"\$AGENT\" sh -c 'rm -f /opt/data/gws-sa.json'
-    else
-      rm -f /opt/data/gws-sa.json
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
     fi
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Google Workspace is no longer wired."
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+remote 'hermes -p default skills list --enabled-only | grep -F "google-workspace"' >/dev/null || { echo "ABORT: bundled google-workspace skill unavailable or disabled. Nothing was written."; exit 1; }
+```
+
+Use the **installed bundled** `google-workspace` instructions for authorization and narrow service scopes. Its `scripts/setup.py --check` must report AUTHENTICATED before use. Execute that script with the Hermes environment Python specified by the installed skill. Do not install dependencies using an unrelated system Python.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: google-workspace; path: bundled.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the existing Hermes-bundled Google Workspace skill and native OAuth setup.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+echo "Using the bundled connector; this recipe has no configuration writes or duplicate server to install."
+```
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default skills list --enabled-only | grep -F "google-workspace"' >/dev/null || exit 1
+```
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+Use the bundled `google-workspace` skill to run `scripts/setup.py --check` in the Hermes environment. Then request one permitted read-only operation (for example, list one Drive file) through its `scripts/google_api.py` wrapper. OAuth completion, refresh and the optional gws backend belong to Hermes. Do not report this connection ready until both the authenticated check and the read succeed.
+
+## Rollback
+
+This routing/check procedure writes nothing. The installed Google Workspace skill owns its OAuth credential files and setup recovery. Before running its first-time setup, read that skill and preserve existing native credential files as it instructs. Do not run shared rollback without a snapshot or delete a user's existing Google token.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Expecting a static API key | Google Workspace has **no** API-key auth for Gmail/Drive/Calendar/Docs/Sheets | Use service account (Path A) or OAuth (Path B); tell the user up front |
-| 2 | Picking the official remote endpoints for a server agent | They require an **interactive browser OAuth redirect**; no human is at the server. Docs/Sheets also not covered | Use the self-hosted server + service account for headless |
-| 3 | Skipping domain-wide delegation | Service account exists but admin never authorized its client ID -> every call returns `unauthorized_client` | Confirm the admin granted DWD for the exact scopes before testing |
-| 4 | Scope too narrow | Some Calendar scopes are read-only (`...events.readonly`); the agent then cannot create events | Request read/write scopes the use case needs when granting DWD |
-| 5 | Service-account JSON world-readable | It is a full credential; leaking it grants impersonation | `chmod 600 /opt/data/gws-sa.json`; never in `config.yaml`, never in chat |
-| 6 | Wiring `mcp.notion.com`-style hosted endpoints with a bearer token | Google's hosted MCPs are OAuth-only and reject bearer tokens | Use the self-hosted server (Path A) |
-| 7 | Per-user quotas / rate limits | Gmail and Drive enforce per-user API quotas; bulk reads 429 | Keep tool calls scoped; back off on 429; raise quota in Cloud Console |
-| 8 | OAuth refresh-token expiry (OAuth mode) | Unused refresh tokens expire (~6 months); unverified apps in testing ~7 days | Prefer the service account (no refresh tokens) for long-running agents |
-| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 10 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline and silently corrupt config | Always `hermes config set` |
-| 11 | Secret in `config.yaml` | World-readable; not loaded by runtime | Only `~/.hermes/.env` + the JSON at `/opt/data/gws-sa.json`, both `chmod 600` |
-| 12 | sed with `/` delimiter on paths/tokens | Paths contain `/`, tokens contain `/+=` | Always use `\|` delimiter |
-| 13 | Container vs host confusion | Skill assumed wrong layer; key written to a container that gets recreated | Always `whoami; hostname` first; persist credential via `/opt/data` volume |
-| 14 | Skipping the verify step | "Silent success" — config written, never picked up | Always wait + grep logs (Step 7) |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Bundled connector | Hermes already ships google-workspace | Use that skill instead of a duplicate MCP container |
+| 2 | OAuth files | Native setup owns google_token.json and google_client_secret.json | Preserve existing files and follow native setup recovery |
+| 3 | Service scope | The native setup supports selected Google services | Choose only the requested service set |
+| 4 | Python environment | An unrelated Python may miss Hermes dependencies | Use the Hermes environment documented by the bundled skill |
+| 5 | Optional gws | The bundled wrapper supports gws and a Python fallback | Keep that native backend choice |
+| 6 | Readiness | Presence in skills list does not prove OAuth access | Require setup.py --check and one real permitted read |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `/opt/data/gws-sa.json` is a `service_account` key, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] `GOOGLE_APPLICATION_CREDENTIALS` and `USER_GOOGLE_EMAIL` in `~/.hermes/.env`, `chmod 600`
-- [ ] Domain-wide delegation granted by the Workspace admin for the needed scopes
-- [ ] `gws-mcp` container running on the agent's Docker network, port 8000
-- [ ] MCP registered via Path A (community server, no auth header) — or Path B documented if user chose OAuth
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s)` for `google-workspace` within 30s
-- [ ] Smoke test: MCP `initialize` handshake returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway reload,
-`unauthorized_client`, and MCP registration failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

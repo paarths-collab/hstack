@@ -1,328 +1,337 @@
 ---
 name: integration-clickup
-description: Connect ClickUp (tasks, lists, docs, comments, time tracking) to a self-hosted Hermes Agent over SSH. Defaults to the static personal-token REST path; offers the OAuth-only MCP bridge as an opt-in. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, or any AI agent.
+description: Connect clickup to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-clickup — connect ClickUp to a remote Hermes (SSH-first)
+# /integration-clickup — connect clickup over SSH
 
-You are the engineer connecting ClickUp to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the personal API token in the ClickUp UI.
-2. (Optional Path B) Complete the one-time OAuth browser login for the MCP bridge.
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP/REST registration, gateway reload, verification —
-runs on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Authorize the intended ClickUp workspace through native OAuth; a personal API token is not used by this path.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** ClickUp's official MCP server
-(`https://mcp.clickup.com/mcp`) is **OAuth-only** and explicitly rejects API keys
-(<https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server>:
-"you cannot authenticate using your own API keys... We only support OAuth"). The reliable
-static-token path is the ClickUp REST API v2 with a personal `pk_` token that never
-expires. We default to the REST path (Path A below). If the user wants the full MCP
-toolset and can complete a browser login, we wire the `mcp-remote` OAuth bridge (Path B).
-MCP rate limits are also low without the paid add-on (50 calls/24h on Free, 300/24h on
-Unlimited, rolling window, non-resettable).
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$CLICKUP_API_TOKEN` | Personal API token (`pk_...`, never expires) | <https://app.clickup.com/settings/apps> → **API Token** → **Generate** → **Copy** |
-| Workspace check | At least one ClickUp workspace ("team" in the API) | Default workspace is fine |
-
-Docs: <https://developer.clickup.com/docs/authentication>
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-> **Container vs host:** if Hermes runs inside a container, every later `hermes ...`
-> command in this skill must be wrapped in `docker exec -u hermes "$AGENT" ...`. Set
-> `AGENT` once and reuse it. Adding keys/config inside a container that you then expect
-> on the host is the #1 source of "I configured it but nothing changed."
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci clickup" || echo 0)
-HAS_TOKEN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CLICKUP_API_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if { [ "$ALREADY" -gt 0 ] || [ "$HAS_TOKEN" -gt 0 ]; } && [ "${FORCE:-0}" != "1" ]; then
-  echo "ClickUp is already wired (mcp=$ALREADY, token=$HAS_TOKEN). Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Verify token via GET https://api.clickup.com/api/v2/user (token len=${#CLICKUP_API_TOKEN}, prefix=${CLICKUP_API_TOKEN:0:3}...)
-  2. Write CLICKUP_API_TOKEN to ~/.hermes/.env via 'hermes config set'
-  3. chmod 600 ~/.hermes/.env
-  4. Register REST integration (Path A) OR mcp-remote OAuth bridge (Path B, opt-in)
-  5. Reload gateway: hermes gateway stop && hermes gateway run --daemon
-  6. Verify in logs: grep -i "registered.*clickup"
-  7. Smoke test: GET https://api.clickup.com/api/v2/team -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-ClickUp's REST v2 takes the personal token as a **raw** `Authorization` header — NOT
-`Bearer`-prefixed. We pre-flight against `/user` before wiring anything, so a bad token
-never gets stored.
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "curl -sS -o /dev/null -w '%{http_code}' \
-  -H 'Authorization: $CLICKUP_API_TOKEN' \
-  https://api.clickup.com/api/v2/user")
-case "$HTTP" in
-  200) echo "OK: token verified against /user." ;;
-  401) echo "FAIL: token rejected (OAUTH_017). Re-mint at app.clickup.com/settings/apps."; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from /user. Aborting before writing secret."; exit 1 ;;
-esac
-
-ssh "$VPS_USER@$VPS_IP" "hermes config set CLICKUP_API_TOKEN '$CLICKUP_API_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CLICKUP_API_TOKEN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: CLICKUP_API_TOKEN not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; `pk_` tokens are alnum but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^CLICKUP_API_TOKEN=' ~/.hermes/.env || printf 'CLICKUP_API_TOKEN=\n' >> ~/.hermes/.env
->   sed -i 's|^CLICKUP_API_TOKEN=.*|CLICKUP_API_TOKEN=$CLICKUP_API_TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
->
-> Never `echo "CLICKUP_API_TOKEN=..." >> ~/.hermes/.env` — if the previous line lacks a
-> trailing newline, the variable glues onto it and the runtime ignores it.
-
----
-
-## Step 5 — register the ClickUp integration
-
-Pick the path that matches the user's needs. **Path A is the default.**
-
-### Path A (preferred, default) — REST API v2 with the static personal token
-
-No MCP server is registered. The agent reaches ClickUp through the REST API v2 via a
-generic HTTP/REST tool. Settings the agent needs:
-
-- **Base URL:** `https://api.clickup.com/api/v2`
-- **Auth header:** `Authorization: ${CLICKUP_API_TOKEN}` (raw — **no** `Bearer` prefix)
-- **Content type (POST/PUT):** `Content-Type: application/json`
-- **Workspace endpoint:** `GET /team` (ClickUp's API calls workspaces "teams")
-- **Common scopes:** `/team/{team_id}/space`, `/space/{space_id}/list`, `/list/{list_id}/task`
-
-If your Hermes build supports declarative REST tools, register one:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add clickup \
-    --type rest \
-    --base-url 'https://api.clickup.com/api/v2' \
-    --auth-header 'Authorization' \
-    --auth-value '\${CLICKUP_API_TOKEN}' \
-    --auth-scheme '' \
-    2>/dev/null || true
-"
-```
-
-If the build does not support declarative REST registration, leave the token in
-`~/.hermes/.env` — generic HTTP skills and chat-driven `curl` will use it via
-`${CLICKUP_API_TOKEN}` indirection.
-
-### Path B (opt-in) — official OAuth MCP server via `mcp-remote` bridge
-
-Only do this if the user explicitly wants the full MCP toolset AND can complete a one-time
-browser login. The server is `https://mcp.clickup.com/mcp` and speaks OAuth 2.1 + PKCE
-only — there is no static bearer token to inject, so `/hermes-mcp-add`'s probe + sed-inject
-flow does NOT apply.
-
-ClickUp's own headless-client guidance is to bridge with `mcp-remote`, which runs the
-OAuth flow once and caches the grant
-(<https://developer.clickup.com/docs/connect-an-ai-assistant-to-clickups-mcp-server-1>):
-
-```bash
-# Run inside the container if Hermes is containerized; opens a browser login URL on first run.
-ssh -t "$VPS_USER@$VPS_IP" "
-  if docker ps --format '{{.Names}}' | grep -q hermes; then
-    AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-    docker exec -it -u hermes \"\$AGENT\" npx -y mcp-remote https://mcp.clickup.com/mcp
-  else
-    npx -y mcp-remote https://mcp.clickup.com/mcp
-  fi
-"
-```
-
-Stop here and let the user complete the browser login — a machine cannot do this for
-them. Once the grant is cached, register the bridged **stdio** server with Hermes per
-`/hermes-mcp-add` (stdio command form, not HTTP-header form):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add clickup \
-    --command npx \
-    --args '-y,mcp-remote,https://mcp.clickup.com/mcp'
-"
-```
-
-There is **no** `MCP_CLICKUP_API_KEY` to set — auth is the cached OAuth grant on disk.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*clickup|MCP server.*clickup.*(ok|ready)|REST.*clickup.*loaded"; then
-    REGISTERED=1
-    echo "OK: clickup registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-clickup
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-if [ "$REGISTERED" = "0" ] && [ "${PATH_A_REST_ONLY:-1}" = "0" ]; then
-  echo "FAIL: clickup not in logs after 30s. Rolling back."
-  rollback
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
+
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-# Path A with no declarative REST registration emits no log line; that's OK — Step 8 is the gate.
-```
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (inside the VPS so the token stays there)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H \"Authorization: \$CLICKUP_API_TOKEN\" \
-    https://api.clickup.com/api/v2/team
-")
-case "$HTTP" in
-  200) echo "OK: ClickUp REST reachable and token valid." ;;
-  401) echo "FAIL: token invalid or Bearer-prefixed by mistake. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but missing scope. Re-mint with full access."; exit 1 ;;
-  429) echo "WARN: rate-limited. ClickUp plan-based limits hit; back off and retry."; ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from ClickUp /team. Check manually." ;;
-esac
-```
-
-`200` with a `teams` array (even with one workspace) is a pass. If Path B was chosen,
-also trigger a real call from chat: `@<agent> using clickup, list my spaces`.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove clickup 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset CLICKUP_API_TOKEN 2>/dev/null || \
-    sed -i '/^CLICKUP_API_TOKEN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. ClickUp is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/clickup.json mcp-tokens/clickup.client.json mcp-tokens/clickup.meta.json mcp-tokens/clickup.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/clickup.json mcp-tokens/clickup.client.json mcp-tokens/clickup.meta.json mcp-tokens/clickup.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/clickup.json mcp-tokens/clickup.client.json mcp-tokens/clickup.meta.json mcp-tokens/clickup.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=clickup
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])clickup([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
+```
+
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: clickup; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default mcp install clickup' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *clickup .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login clickup`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-clickup.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring `https://mcp.clickup.com/mcp` with the `pk_` token | The official MCP is **OAuth-only**; bearer tokens are rejected | Use REST (Path A) or the `mcp-remote` OAuth bridge (Path B) |
-| 2 | Sending `Authorization: Bearer pk_...` on REST v2 | Personal tokens take the **raw** value; `Bearer` prefix returns 401 `OAUTH_017` | `Authorization: $CLICKUP_API_TOKEN` with no prefix |
-| 3 | Confusing personal tokens with OAuth access tokens | OAuth access tokens DO use `Bearer`; personal tokens do NOT | Personal = raw; OAuth = `Bearer` |
-| 4 | Hitting the MCP rate limit | 50 calls/24h Free, 300/24h Unlimited+, rolling window, non-resettable | Budget calls; prefer REST for high-volume; buy the add-on if needed |
-| 5 | Looking for "workspace" in the API | ClickUp's API calls workspaces **"teams"** | `/team` returns workspaces; ids feed space/folder/list lookups |
-| 6 | MCP behavior changes mid-deploy | The MCP server is **public beta** — endpoint and tool set may shift | Re-verify against the docs if a tool stops resolving |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> ~/.hermes/.env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` (or the `printf '\n%s\n'` + sed pattern) |
-| 9 | Token in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by Hermes runtime | Only `~/.hermes/.env` (or `/opt/data/.env` in-container), `chmod 600` |
-| 10 | sed with `/` delimiter on tokens | `pk_` is alnum but other ClickUp creds may include `/+=` | Always use `\|` delimiter |
-| 11 | Container vs host confusion | Configured Hermes inside a container; host's hermes never sees it | `whoami; hostname` first; if containerized, wrap every `hermes ...` in `docker exec -u hermes "$AGENT" ...` |
-| 12 | Skipping the verify step | "Silent success" — config written, never picked up | Step 8 hard-gates on a real 200 |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Token confusion | The old personal token proxy is replaced by OAuth | Use the native ClickUp grant |
+| 2 | Workspace mismatch | The OAuth account controls accessible workspaces | Check the chosen workspace |
+| 3 | Extra proxy | mcp-remote duplicates Hermes HTTP support | Use the native catalogue entry |
+| 4 | Task mutations | Connected tools can change work data | Only execute requested changes |
+| 5 | Refresh failures | Hermes owns OAuth token refresh | Diagnose with native mcp login and test |
+| 6 | Partial installation | Catalogue installation can succeed without tools | Require the explicit native health check |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/clickup/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/clickup/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `CLICKUP_API_TOKEN` in `~/.hermes/.env` (or `/opt/data/.env` in-container), `chmod 600`, **not** in `config.yaml` or chat
-- [ ] OAuth-only MCP limitation stated to the user; if they chose Path B, the `mcp-remote` browser login completed and the bridged stdio server registered
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs grepped for `registered.*clickup` (Path B) or smoke-test gate satisfies Path A
-- [ ] Smoke test: `GET https://api.clickup.com/api/v2/team` returned `200` with a `teams` array
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, env-reload, and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

@@ -8,8 +8,8 @@ A container running a **real `sshd`** acts as the VPS. The host drives it with t
   `remote()`, `VPS_USER=operator`, `VPS_IP=127.0.0.1`.
 
 ```
-HSTACK_DOCKER=1 node --test tests/acceptance/docker/     # needs docker, ssh, ssh-keygen, node >= 18, python3, bash
-node --test tests/acceptance/docker/                     # every test is SKIPPED: "skipped: HSTACK_DOCKER=1 not set"
+HSTACK_DOCKER=1 node --test tests/acceptance/docker/*.test.mjs   # needs docker, ssh, ssh-keygen, node >= 18, python3, bash
+node --test tests/acceptance/docker/*.test.mjs                   # every test is SKIPPED: "skipped: HSTACK_DOCKER=1 not set"
 HSTACK_DOCKER=1 HSTACK_DOCKER_KEEP=1 node --test ...     # keep the built image for faster re-runs
 ```
 
@@ -26,7 +26,7 @@ the image is removed at the end unless `HSTACK_DOCKER_KEEP=1`.
 | `hstack-target.sh`, the skill's bash | **real** (the shipped files) |
 | `hermes` | **bash test double** `tests/acceptance/stubs/hermes`, installed only at `/home/operator/.local/bin/hermes` |
 | `curl` / Telegram | **bash test double** `image/curl-stub` (answers `getMe` for one fake token; logs the token *length*). The container also resolves `api.telegram.org`, `api.github.com`, `github.com` to `127.0.0.1` |
-| `image/hermes-tg-shim` | in front of the stub **only for the Telegram test**: `config set K -- V`, `gateway status`, `logs gateway -n N`. These are assumptions about Hermes, not evidence about it |
+| `image/hermes-tg-shim` | in front of the stub **only for the Telegram test**; a Python argparse mirror of the v0.22.5 commands the skill calls (`--version` report, `config set/unset`, `gateway status/restart/ensure`, `logs gateway -n N --since Ns`, `send`, `pairing list`), with a new `instance_id` per restart. Undeclared options exit 2 like argparse (so `gateway run --daemon` fails); state changes are delegated to the stub. Test-double assumptions about Hermes, not evidence about it |
 
 ## Isolation
 
@@ -51,7 +51,7 @@ the image is removed at the end unless `HSTACK_DOCKER_KEEP=1`.
    with an observer that fires the cron job over ssh and reads the stub outbox => `verified`; the receipt validates,
    says `transport_used: ssh`, contains no synthetic secret; no secret in any host ssh argv, any target process argv
    (sampled from `/proc/*/cmdline`), or the hermes argv log; secrets only in `.env` (mode 600) and `.hermes/.hstack/`.
-6. Forced `cron-create` / `gateway-run` failure after apply => `rollback_required` => `restored_verified`; the prior
+6. Forced `cron-create` / `gateway-restart` failure after apply => `rollback_required` => `restored_verified`; the prior
    secret is back byte-for-byte (sha256 computed *inside* the container); unrelated skill dir, env keys and cron job untouched.
 7. A user edit of a managed key after apply => `manual_recovery_required`, nothing overwritten, nothing deleted.
 8. Telegram skill (real blocks, Steps 0-9): bad token aborts at the gate before any write; good token => the curl

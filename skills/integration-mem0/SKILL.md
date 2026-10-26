@@ -1,44 +1,11 @@
 ---
 name: integration-mem0
-description: Connect Mem0 (universal memory layer for AI agents — add/search/update/delete persistent memories scoped by user_id/agent_id/run_id) to a self-hosted Hermes Agent over SSH. Uses Mem0's official first-party hosted MCP at mcp.mem0.ai with a static m0- bearer key. Optional self-hosted OSS fallback documented (no /v1/ prefix, port 8888). Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, Gemini CLI, and OpenClaw.
+description: Set up mem0 on a host-installed Hermes 0.22.5 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
 ---
 
-# /integration-mem0 — connect Mem0 memory to a remote Hermes (SSH-first)
+# /integration-mem0 — connect mem0 to Hermes over SSH
 
-You are the engineer connecting Mem0 (a persistent memory layer that lets any AI agent
-remember users, conversations, preferences, and code across sessions) to a self-hosted
-Hermes agent on the user's VPS. You (the AI agent — Hermes, Claude Code, Codex, Cursor,
-Gemini, OpenClaw, any of them) work over SSH as root against the VPS. The user does one
-thing a machine cannot: mint the `m0-` API key at https://app.mem0.ai.
-
-Everything else — key storage, live MCP + REST verification, gateway reload, live add +
-search smoke test — runs on the VPS via SSH, idempotently with a rollback path.
-
-**Honest auth picture (verified 2026-06):** Mem0 ships an **official first-party** remote
-MCP at `https://mcp.mem0.ai/mcp` with **bearer auth** (headless-friendly — perfect for
-Hermes). Sources:
-- https://docs.mem0.ai/platform/mem0-mcp
-- https://github.com/mem0ai/mem0-mcp
-
-**Two paths:**
-
-- **Path A (default — hosted platform):** `https://mcp.mem0.ai/mcp` + `https://api.mem0.ai/v1/`
-  REST. Free tier includes a monthly memory quota; check current pricing at
-  https://mem0.ai/pricing. Data lives on Mem0's infrastructure.
-- **Path B (opt-in — self-hosted OSS):** stand up the Mem0 OSS server at
-  `http://<vps>:8888` (or bind to `127.0.0.1:8888` on the Hermes VPS). No `/v1/` prefix
-  on the OSS endpoints (`POST /memories`, `POST /search`, ...). Data stays on your box.
-  Fully documented at https://docs.mem0.ai/open-source/features/rest-api.
-
-**Memory scoping:** Mem0 memories are keyed by `user_id`, `agent_id`, and/or `run_id`. For
-Hermes, `user_id` is typically the messaging-platform user (Telegram numeric ID, Slack
-Member ID, etc.); `agent_id` is `hermes` or the SOUL persona name; `run_id` is a
-conversation/session ID. Set a sane convention up front — mixing schemes across sessions
-fragments memory recall.
-
-**Key format:** Mem0 platform keys start with `m0-`. Never inline in URLs, never in chat.
-
----
+> **Compatibility:** source-verified for Hermes **0.22.5**, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
 
 ## Before you start — gather (ask once, in one batch)
 
@@ -50,339 +17,452 @@ fragments memory recall.
 | `$MEM0_ORG_ID` *(Path A — optional)* | Org ID for team-scoped memories | https://app.mem0.ai → Org settings |
 | `$MEM0_PROJECT_ID` *(Path A — optional)* | Project ID to scope this agent's memories | https://app.mem0.ai → Project settings |
 | `$MEM0_HOST` *(Path B — required)* | Self-hosted OSS host `http://127.0.0.1:8888` | Your Mem0 OSS deploy (docker compose from https://github.com/mem0ai/mem0) |
-| `$WIRE_PATH` *(optional)* | `A` (hosted, default) or `B` (self-hosted OSS) | Free tier limits vs data locality tradeoff |
 
-Confirm SSH access:
 
-```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+Use one shell session. `DRY_RUN=1` runs the read-only gates and prints the plan, then exits before snapshot or configuration writes. `FORCE=1` permits replacing existing MCP configuration after snapshot; existing native skill directories are always preserved.
 
----
 
-## Step 1 — verify Hermes is reachable on the VPS
+## Step 0 — shared remote, lifecycle and recovery helpers
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    HERMES="$(command -v hermes)"
-  elif [ -x "$HOME/.local/bin/hermes" ]; then
-    HERMES="$HOME/.local/bin/hermes"
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    HERMES="docker exec $AGENT hermes"
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-mem0
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
+
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
   else
-    echo "FAIL: hermes not found on host or in container"; exit 1
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-  echo "Using: $HERMES"
-  $HERMES --version
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
+}
+# Reject line breaks, quote/backslash characters and controls: values also become curl config lines.
+secret_line_ok() {
+  [ -n "$1" ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^[!-~]+$' || return 1
+  case "$1" in *'"'*|*"'"*|*'\'*) return 1 ;; esac
+}
+# No response body or credential is logged. JSON errors on HTTP 200 are failures too.
+api_check() {
+  local reply
+  reply=$(remote 'curl -q -fsS --connect-timeout 10 --max-time 25 --config -' 2>/dev/null) || return 1
+  printf '%s' "$reply" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert not (isinstance(d,dict) and (d.get("errors") or d.get("error") or d.get("success") is False))' 2>/dev/null
+}
+# Extra native-skill artifacts are owned separately; canonical rollback still restores env/config bytes.
+restore_native_skill() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+p="$HOME/.hermes/skills/$SKILL_NAME-runtime"
+[ -f "$d/native-created" ] || exit 0
+[ "$(cat "$d/native-created")" = "$SKILL_NAME-runtime" ] || exit 1
+if [ -e "$p/SKILL.md" ] || [ -L "$p/SKILL.md" ]; then
+  [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ] && [ -f "$d/native.cksum" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ] || { echo "native skill changed; keep the active snapshot and inspect it" >&2; exit 1; }
+  # Never recursively delete this directory: a concurrent user file remains intact.
+  rm "$p/SKILL.md"
+fi
+[ ! -d "$p" ] || rmdir "$p"
+rm "$d/native-created" "$d/native.cksum"
+REMOTE
+}
+fail_change() {
+  echo "FAIL: $1. Restoring the previous configuration."
+  restore_native_skill || { echo "Native skill restoration failed; active recovery point retained." >&2; exit 1; }
+  rollback || { echo "Rollback incomplete; active recovery point retained." >&2; exit 1; }
+  exit 1
+}
+
 ```
 
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
+## Step 1 — verify SSH, Hermes version and host prerequisites
 
 ```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci mem0" || echo 0)
-HAS_KEY=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MCP_MEM0_API_KEY=m0-' ~/.hermes/.env 2>/dev/null" || echo 0)
-HAS_HOST=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MEM0_HOST=http' ~/.hermes/.env 2>/dev/null" || echo 0)
-if [ "$ALREADY" -gt 0 ] && { [ "$HAS_KEY" = "1" ] || [ "$HAS_HOST" = "1" ]; } && [ "${FORCE:-0}" != "1" ]; then
-  echo "Mem0 already wired. Set FORCE=1 to rewire."
+remote 'whoami; hostname' || { echo "ABORT: SSH failed. Nothing was written."; exit 1; }
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 || exit 1
+  hermes -p default --version
+') || { echo "ABORT: install Hermes on the VPS host first; container-only installations are unsupported. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure supports Hermes 0.22.5 only. Nothing was written."; exit 1;
+}
+remote 'command -v curl >/dev/null && command -v python3 >/dev/null' || {
+  echo "ABORT: install curl and python3 on the host first. Nothing was written."; exit 1;
+}
+
+```
+
+## Step 2 — check ownership and an existing healthy integration
+
+```bash
+WIRE_PATH=${WIRE_PATH:-A}
+# An unchanged runtime file from the previous successful run is safe to reuse.
+if ! [ "$WIRE_PATH" = A ] && [ "${FORCE:-0}" != 1 ] && remote 'bash -s' <<'REMOTE'
+set -e
+p="$HOME/.hermes/skills/integration-mem0-runtime"
+d="$HOME/.hermes/.hstack-backup/integration-mem0.prev"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ]
+[ -f "$d/.complete" ] && [ -f "$d/native.cksum" ] && [ -f "$p/SKILL.md" ] || exit 1
+[ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ]
+hermes -p default skills list --source local --enabled | grep -F -- 'integration-mem0-runtime' >/dev/null
+REMOTE
+then
+  echo "Managed native skill is unchanged and discoverable. Nothing was written."
+  exit 0
+fi
+remote 'test ! -L "$HOME/.hermes/skills"' || { echo "ABORT: skills directory is a symlink; preserved. Nothing was written."; exit 1; }
+remote 'test ! -e "$HOME/.hermes/skills/integration-mem0-runtime" && test ! -L "$HOME/.hermes/skills/integration-mem0-runtime"' || {
+  echo "ABORT: existing native skill preserved; inspect it rather than replacing it. Nothing was written."; exit 1;
+}
+if [ "$WIRE_PATH" = A ] && [ "${FORCE:-0}" != 1 ] && remote "hermes -p default mcp list | grep -E '^ *mem0 .*enabled'" >/dev/null 2>&1 && remote 'hermes -p default mcp test mem0' >/dev/null 2>&1; then
+  echo "mem0 is enabled and passed native mcp test. Nothing was written."
   exit 0
 fi
 ```
 
----
+## Step 3 — HARD GATE: read-only credential and consent checks
 
-## Step 3 — HARD GATE (path-specific validation + live API verification)
+All vendor calls in this step run from the VPS. Secrets travel over SSH stdin, not SSH
+arguments. A failed gate stops before `snapshot` and before any configuration write.
+The calls authenticate or read data; none sends a message, changes vendor state or
+performs a paid model request.
 
 ```bash
-PATH_CHOSEN=${WIRE_PATH:-A}
-
-if [ "$PATH_CHOSEN" = "A" ]; then
-  # Key format
-  printf '%s' "$MEM0_API_KEY" | grep -qE '^m0-[A-Za-z0-9_-]+$' \
-    || { echo "ABORT: MEM0_API_KEY must start with 'm0-' (Mem0 platform key)."; exit 1; }
-  [ "${#MEM0_API_KEY}" -ge 20 ] \
-    || { echo "ABORT: MEM0_API_KEY looks too short."; exit 1; }
-
-  # Live REST /v1/memories/ HEAD-style check: search with empty query, expect 200 or 400 (never 401)
-  RESP=$(curl -sS --max-time 10 -o /tmp/mem0.json -w '%{http_code}' \
-    -X POST 'https://api.mem0.ai/v1/memories/search/' \
-    -H "Authorization: Token $MEM0_API_KEY" \
-    -H 'Content-Type: application/json' \
-    -d '{"query":"ping","user_id":"hstack-preflight","limit":1}' 2>/dev/null) || RESP=000
-  case "$RESP" in
-    200|400) echo "Mem0 platform REST OK." ;;
-    401|403) echo "ABORT: Mem0 rejected the key ($RESP). Re-check https://app.mem0.ai → Settings → API Keys."; exit 1 ;;
-    *) echo "ABORT: unexpected HTTP $RESP from Mem0 REST."; cat /tmp/mem0.json | head -3; exit 1 ;;
-  esac
-  rm -f /tmp/mem0.json
-
-  # Live MCP initialize with bearer
-  INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"0"}}}'
-  MCP_RESP=$(curl -sS --max-time 15 \
-    -H 'Accept: application/json, text/event-stream' \
-    -H 'Content-Type: application/json' \
-    -H "Authorization: Bearer $MEM0_API_KEY" \
-    -d "$INIT" \
-    'https://mcp.mem0.ai/mcp' 2>/dev/null) || true
-  printf '%s' "$MCP_RESP" | grep -q '"result"' \
-    && echo "Mem0 hosted MCP OK." \
-    || { echo "ABORT: Mem0 MCP probe failed. Body:"; echo "$MCP_RESP" | head -3; exit 1; }
-fi
-
-if [ "$PATH_CHOSEN" = "B" ]; then
-  # OSS host format
-  printf '%s' "$MEM0_HOST" | grep -qE '^https?://[^[:space:]]+[^/]$' \
-    || { echo "ABORT: MEM0_HOST must be http(s)://host[:port], no trailing slash."; exit 1; }
-
-  # OSS uses no /v1/ prefix — POST /search direct
-  RESP=$(curl -sS --max-time 10 -o /tmp/mem0.json -w '%{http_code}' \
-    -X POST "$MEM0_HOST/search" \
-    -H 'Content-Type: application/json' \
-    -d '{"query":"ping","user_id":"hstack-preflight"}' 2>/dev/null) || RESP=000
-  case "$RESP" in
-    200|400) echo "Mem0 OSS REST OK at $MEM0_HOST." ;;
-    404) echo "ABORT: 404 — is your OSS server on /v1/? OSS does NOT use /v1/ (use POST /search, POST /memories). Re-check server."; exit 1 ;;
-    *) echo "ABORT: unexpected HTTP $RESP from $MEM0_HOST/search."; cat /tmp/mem0.json | head -3; exit 1 ;;
-  esac
-  rm -f /tmp/mem0.json
-fi
+WIRE_PATH=${WIRE_PATH:-A}
+MEM0_HOST=${MEM0_HOST:-http://127.0.0.1:8888}
+case "$WIRE_PATH" in A)
+secret_line_ok "${MEM0_API_KEY:-}" || { echo "ABORT: missing or unsafe MEM0_API_KEY. Nothing was written."; exit 1; }
+{
+  printf 'url = "%s"\n' "https://api.mem0.ai/v1/memories/search/"
+  printf 'header = "Authorization: Token %s"\n' "$MEM0_API_KEY"
+  printf 'header = "Content-Type: application/json"\n'
+  printf 'data = "%s"\n' '{\"query\":\"ping\",\"user_id\":\"hstack-preflight\",\"limit\":1}'
+} | api_check || { echo "ABORT: read-only vendor credential check failed. Nothing was written."; exit 1; }
+;; B)
+printf '%s' "$MEM0_HOST" | grep -Eq '^(https://[A-Za-z0-9.-]+(:[0-9]+)?|http://(127[.]0[.]0[.]1|localhost)(:[0-9]+)?)$' || { echo "ABORT: unsafe self-hosted Mem0 URL. Nothing was written."; exit 1; }
+{ printf 'url = "%s/search"\n' "$MEM0_HOST"; printf 'header = "Content-Type: application/json"\n'; printf 'data = "%s"\n' '{\"query\":\"ping\",\"user_id\":\"hstack-preflight\"}'; } | api_check || { echo "ABORT: self-hosted Mem0 search failed. Nothing was written."; exit 1; }
+MEM0_API_KEY=
+;; *) echo "ABORT: WIRE_PATH must be A or B. Nothing was written."; exit 1 ;; esac
 ```
 
----
-
-## Step 4 — DRY RUN preview (always show before writing)
+## Step 4 — review the dry run before the first write
 
 ```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  Path: $PATH_CHOSEN
-
-  Path A (hosted platform):
-    1. Write MCP_MEM0_API_KEY (length ${#MEM0_API_KEY}, prefix m0-) via 'hermes config set'
-    2. (optional) Write MEM0_ORG_ID + MEM0_PROJECT_ID for team/project scoping
-    3. chmod 600 ~/.hermes/.env
-    4. Register MCP: hermes mcp add mem0 --url https://mcp.mem0.ai/mcp --auth-header Authorization --auth-scheme Bearer
-    5. Reload gateway: stop + run
-    6. Verify in logs: grep "registered.*mem0"
-    7. Smoke test: add + search a memory round-trip
-
-  Path B (self-hosted OSS):
-    1. Write MEM0_HOST ($MEM0_HOST) via 'hermes config set'
-    2. chmod 600 ~/.hermes/.env
-    3. No MCP registration (OSS server is REST-only); generic HTTP tool reads MEM0_HOST
-    4. Reload gateway: stop + run
-    5. Smoke test: POST /memories then POST /search — expect 200 both
-
-Key is NEVER printed in plaintext beyond a length + prefix.
-EOF
+printf 'DRY RUN: configure %s on %s@%s; credential length=%s (value hidden).\n' "$SKILL_NAME" "$VPS_USER" "$VPS_IP" "${#MEM0_API_KEY}"
+printf '%s\n' 'Snapshot env/config; write private values through stdin; register native MCP or publish a native skill; verify discovery; restart and require a new ready gateway instance; retire snapshot.'
+[ "${DRY_RUN:-0}" != 1 ] || exit 0
 ```
 
-Wait for confirmation (or `AUTO_APPROVE=1`).
+Review the concrete plan. Continue under the user's existing setup authorization. Native
+OAuth may require the user to approve the vendor login in a browser; never fabricate
+that approval. Catalog tool exclusions remain those supplied by the pinned Hermes
+manifest. Do not replace OAuth with a short-lived bearer or invent a refresh cron.
 
----
-
-## Step 5 — write secrets (chmod 600)
+## Step 5 — snapshot and write private configuration
 
 ```bash
-if [ "$PATH_CHOSEN" = "A" ]; then
-  ssh "$VPS_USER@$VPS_IP" "hermes config set MCP_MEM0_API_KEY '$MEM0_API_KEY'"
-  if [ -n "${MEM0_ORG_ID:-}" ]; then
-    ssh "$VPS_USER@$VPS_IP" "hermes config set MEM0_ORG_ID '$MEM0_ORG_ID'"
-  fi
-  if [ -n "${MEM0_PROJECT_ID:-}" ]; then
-    ssh "$VPS_USER@$VPS_IP" "hermes config set MEM0_PROJECT_ID '$MEM0_PROJECT_ID'"
-  fi
-  ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-  WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MCP_MEM0_API_KEY=m0-' ~/.hermes/.env" || echo 0)
-  [ "$WROTE" = "1" ] || { echo "FAIL: Mem0 key not written. Rolling back."; rollback; exit 1; }
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+printf '%s\n' "$MEM0_API_KEY" | remote 'IFS= read -r v && hermes -p default config set MCP_MEM0_API_KEY "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing MCP_MEM0_API_KEY failed"
+printf '%s\n' "$MEM0_HOST" | remote 'IFS= read -r v && hermes -p default config set MEM0_HOST "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing MEM0_HOST failed"
+```
+
+Secrets remain in `.env`, mode 600. Any references in `config.yaml` use `${VAR}`
+indirection. Never print a configured secret or use `sed` to inline it into YAML.
+
+## Step 6 — install and verify the integration
+
+```bash
+if [ "$WIRE_PATH" = A ]; then
+printf 'y\n' | remote 'hermes -p default mcp remove mem0' >/dev/null 2>&1 || fail_change "previous MCP removal failed"
+printf 'y\ny\n' | remote 'hermes -p default mcp add mem0 --url https://mcp.mem0.ai/mcp --auth header' >/dev/null || fail_change "MCP registration failed"
+remote "hermes -p default mcp list | grep -E '^ *mem0 .*enabled'" >/dev/null || fail_change "MCP is absent or disabled (an install/add exit 0 alone is not proof)"
+remote 'hermes -p default mcp test mem0' >/dev/null 2>&1 || fail_change "MCP connection or tool discovery failed"
 fi
-if [ "$PATH_CHOSEN" = "B" ]; then
-  ssh "$VPS_USER@$VPS_IP" "hermes config set MEM0_HOST '$MEM0_HOST'"
-  ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-fi
-echo "Mem0 config confirmed in ~/.hermes/.env."
-```
-
-> Sed fallback (pipe delimiter):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^MCP_MEM0_API_KEY=' ~/.hermes/.env || printf 'MCP_MEM0_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^MCP_MEM0_API_KEY=.*|MCP_MEM0_API_KEY=$MEM0_API_KEY|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
-Never `echo >>`. Never put the key in `config.yaml`.
-
+if ! [ "$WIRE_PATH" = A ]; then
+# Changing to the REST route retires the old native MCP inside the same env/config transaction.
+printf 'y\n' | remote 'hermes -p default mcp remove mem0' >/dev/null 2>&1 || fail_change "previous-route MCP removal failed"
+remote 'bash -s' <<'REMOTE' || fail_change "native skill publication failed"
+set -e
+umask 077
+name=integration-mem0
+d="$HOME/.hermes/.hstack-backup/$name"
+p="$HOME/.hermes/skills/$name-runtime"
+[ -f "$d/.complete" ] || exit 1
+[ ! -e "$p" ] && [ ! -L "$p" ] || { echo "Refusing to replace an existing native skill" >&2; exit 1; }
+mkdir -p "$HOME/.hermes/skills"
+t=$(mktemp "$d/native.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'NATIVE_SKILL'
+---
+name: integration-mem0-runtime
+description: Read mem0 data using the configured private credentials. Use for mem0 requests; require explicit approval before any write or paid action.
 ---
 
-## Step 6 — register the MCP (Path A only)
+# mem0 from Hermes
 
-```bash
-if [ "$PATH_CHOSEN" = "A" ]; then
-  ssh "$VPS_USER@$VPS_IP" "
-    hermes mcp add mem0 \
-      --url 'https://mcp.mem0.ai/mcp' \
-      --auth-header 'Authorization' \
-      --auth-scheme 'Bearer' \
-      --placeholder-token 'placeholder'
-  "
-  ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|\${MCP_MEM0_API_KEY}|g' ~/.hermes/config.yaml"
-fi
-```
+Use the terminal tool on this host. Read credentials privately from ~/.hermes/.env.
+Never paste them into a chat, URL, process arguments or logs. The following code performs
+only a read-only check. Adapt it to the user's requested read using the same vendor host
+and authentication; request approval before POST/PUT/PATCH/DELETE that changes state.
+Memory-search POSTs retrieve data only. Adding, editing or deleting a memory requires a separate request.
 
-Path B has no MCP to register. The agent's generic HTTP/tool layer reads `MEM0_HOST` and
-uses these endpoints (OSS — no `/v1/` prefix):
+~~~bash
+python3 - <<'PYTHON'
+from pathlib import Path
+import os,json,shlex,stat,urllib.request,urllib.parse,base64,subprocess
+p=Path.home()/".hermes"/".env"
+assert p.is_file() and not p.is_symlink() and stat.S_IMODE(p.stat().st_mode)==0o600, "Credentials must be a private regular file (600)"
+e={}
+wanted=['MCP_MEM0_API_KEY', 'MEM0_HOST']
+for line in p.read_text().splitlines():
+ if "=" not in line or line.lstrip().startswith("#"): continue
+ key,value=line.split("=",1)
+ if key.startswith("export "): key=key[7:]
+ key=key.strip()
+ if key not in wanted: continue
+ parts=shlex.split(value,comments=False)
+ e[key]=" ".join(parts)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+opener=urllib.request.build_opener(NoRedirect())
+def request_json(req):
+ u=urllib.parse.urlsplit(req.full_url)
+ assert not u.username and not u.password and not u.fragment
+ assert u.scheme=="https" or (u.scheme=="http" and u.hostname in ("127.0.0.1","localhost")), "Use HTTPS or loopback HTTP"
+ with opener.open(req,timeout=25) as r:
+  assert r.status==200, "Unexpected vendor status"
+  data=r.read(1048577)
+  assert len(data)<=1048576, "Vendor response exceeds 1 MiB; narrow the read"
+  return json.loads(data)
+host=e.get("MEM0_HOST","http://127.0.0.1:8888")
+url="https://api.mem0.ai/v1/memories/search/" if e.get("MCP_MEM0_API_KEY") else host+"/search"
+headers={"Content-Type":"application/json"}
+if e.get("MCP_MEM0_API_KEY"): headers["Authorization"]="Token "+e["MCP_MEM0_API_KEY"]
+data=json.dumps({"query":"ping","user_id":"hstack-preflight","limit":1}).encode()
+req=urllib.request.Request(url,data=data,headers=headers)
+try:
+ print(json.dumps(request_json(req)))
+except Exception:
+ raise SystemExit("Read-only vendor request failed; inspect permissions/network without printing credentials.")
+PYTHON
+~~~
 
-- `POST /memories` — add memory (body: `{"messages":[...],"user_id":"...","agent_id":"..."}`)
-- `POST /search` — search (body: `{"query":"...","user_id":"...","limit":10}`)
-- `GET /memories/<id>` — get one
-- `PUT /memories/<id>` — update
-- `DELETE /memories/<id>` — delete
-- `POST /reset` — nuke all memories
-
----
-
-## Step 7 — reload the gateway (stop + run, NOT restart)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 8 — verify registration (Path A) + smoke test
-
-```bash
-if [ "$PATH_CHOSEN" = "A" ]; then
-  REGISTERED=0
-  for i in $(seq 1 6); do
-    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
-         | grep -qiE "registered.*tool.*mem0|MCP server.*mem0.*(ok|ready)"; then
-      REGISTERED=1; echo "OK: mem0 MCP registered."; break
-    fi
-    sleep 5
-  done
-  [ "$REGISTERED" = "1" ] || { echo "FAIL: mem0 not in logs after 30s. Rolling back."; rollback; exit 1; }
+Do not print access tokens or private configuration when troubleshooting. A live read from the intended account is required before claiming vendor compatibility.
+NATIVE_SKILL
+chmod 600 "$t"
+cksum < "$t" > "$d/native.cksum"
+# Record intent before publication; rollback removes only the matching new file.
+printf '%s\n' "$name-runtime" > "$d/native-created"
+mkdir "$p"
+# Atomic no-clobber publication; a concurrent existing file cannot be overwritten.
+ln "$t" "$p/SKILL.md"
+cmp -s "$t" "$p/SKILL.md"
+chmod 600 "$p/SKILL.md"
+REMOTE
+remote "hermes -p default skills list --source local --enabled | grep -F -- 'integration-mem0-runtime'" >/dev/null || fail_change "native skill not discoverable"
 fi
 ```
 
----
+Catalog MCPs use Hermes's own OAuth flow, endpoint and curated tool filters. Any custom
+stdio package is executed on the host with the user's permissions; review its published
+package/version before installation. Hermes parser verification establishes argument
+syntax, not third-party package behavior. A native REST skill is installed into Hermes's
+actual `skills/` directory and checked with `skills list`, rather than saved as inert
+API notes. Existing native skill files are preserved. On failure, only the checksummed
+file created by this run is removed; an edited or foreign file stops automatic cleanup.
 
-## Step 9 — live add + search round-trip (from inside the container)
-
-```bash
-if [ "$PATH_CHOSEN" = "A" ]; then
-  ADD_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-      -X POST 'https://api.mem0.ai/v1/memories/' \
-      -H \"Authorization: Token \$MCP_MEM0_API_KEY\" \
-      -H 'Content-Type: application/json' \
-      -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hstack smoke test\"}],\"user_id\":\"hstack-smoke\"}'
-  ")
-  SEARCH_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-      -X POST 'https://api.mem0.ai/v1/memories/search/' \
-      -H \"Authorization: Token \$MCP_MEM0_API_KEY\" \
-      -H 'Content-Type: application/json' \
-      -d '{\"query\":\"hstack\",\"user_id\":\"hstack-smoke\",\"limit\":1}'
-  ")
-  echo "Smoke: add=$ADD_HTTP search=$SEARCH_HTTP (both should be 200)"
-  { [ "$ADD_HTTP" = "200" ] && [ "$SEARCH_HTTP" = "200" ]; } \
-    || { echo "FAIL: smoke test. Rolling back."; rollback; exit 1; }
-fi
-
-if [ "$PATH_CHOSEN" = "B" ]; then
-  ADD_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-      -X POST \"\$MEM0_HOST/memories\" \
-      -H 'Content-Type: application/json' \
-      -d '{\"messages\":[{\"role\":\"user\",\"content\":\"hstack smoke test\"}],\"user_id\":\"hstack-smoke\"}'
-  ")
-  SEARCH_HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-    curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-      -X POST \"\$MEM0_HOST/search\" \
-      -H 'Content-Type: application/json' \
-      -d '{\"query\":\"hstack\",\"user_id\":\"hstack-smoke\"}'
-  ")
-  echo "Smoke: add=$ADD_HTTP search=$SEARCH_HTTP"
-  { [ "$ADD_HTTP" = "200" ] && [ "$SEARCH_HTTP" = "200" ]; } \
-    || { echo "FAIL: smoke test. Rolling back."; rollback; exit 1; }
-fi
-echo "OK: Mem0 add + search round-trip succeeded."
-```
-
----
-
-## Rollback (auto-runs on any failure above)
+## Step 7 — restart and require native readiness
 
 ```bash
-rollback() {
-  if [ "${PATH_CHOSEN:-A}" = "A" ]; then
-    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove mem0 2>/dev/null || true"
-    ssh "$VPS_USER@$VPS_IP" "
-      sed -i '/^MCP_MEM0_API_KEY=/d;
-              /^MEM0_ORG_ID=/d;
-              /^MEM0_PROJECT_ID=/d' ~/.hermes/.env
-    "
-  else
-    ssh "$VPS_USER@$VPS_IP" "sed -i '/^MEM0_HOST=/d' ~/.hermes/.env"
-  fi
-  ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env && hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Revoke the key at https://app.mem0.ai → Settings → API Keys if compromised."
-}
+gw_reload >/dev/null || fail_change "gateway did not restart into a new ready instance"
 ```
 
----
+`gateway ensure --json` must exit 0 and report `"state":"ready"`; pending/draining
+states are retried. The helper captures the old instance even during draining and
+refuses to call the same process a successful reload. With live sessions, restart may
+refuse. Set `GW_INTERRUPT=1` only under the user's explicit permission to interrupt.
+
+## Step 8 — finish and keep recovery evidence
+
+```bash
+finish || fail_change "snapshot retirement failed"
+echo "Setup complete: native discovery and gateway readiness verified; vendor live proof exists only if these checks actually ran on the user's host."
+```
+
+The procedure runs the read-only vendor gate before writing. For an end-to-end user
+acceptance check, ask Hermes to use the newly configured integration to read one visible
+record. Confirm the account/tenant/region is correct. That live result is separate from
+this repository's source/parser and sandbox evidence; do not claim it while authoring.
+
+## Recovery
+
+Before `finish`, call `restore_native_skill` then `rollback` in this same shell to restore
+previous env/config bytes and remove only this run's native skill. A failed restoration
+keeps the active recovery point; repair the fault and retry. After successful `finish`,
+the previous snapshot is private at `.hstack-backup/$SKILL_NAME.prev`. Inspect it before
+manual undo; do not replace a newer active snapshot or remove an edited runtime skill.
+No vendor records are created by setup, so there is no vendor-side smoke-test data to
+clean up. Native OAuth caches are managed by Hermes and are outside the env/config
+snapshot: rollback does not revoke tokens or overwrite an existing OAuth authorization.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Using OSS endpoints with `/v1/` prefix | OSS server has NO `/v1/` prefix; only the hosted platform does | Path B uses `POST /memories`, `POST /search` (no /v1/); Step 3 catches 404s |
-| 2 | Using platform endpoints without `/v1/` | Hosted platform requires `/v1/`; drops otherwise 404 | Path A uses `/v1/memories/`, `/v1/memories/search/` |
-| 3 | Confusing `Authorization: Token` (REST) with `Authorization: Bearer` (MCP) | Mem0 REST uses `Token`, MCP uses `Bearer` — mixing them causes 401s | Step 3 uses correct scheme per surface; Step 9 verifies both |
-| 4 | Mixing user_id / agent_id / run_id schemes across sessions | Memories fragment — recall returns partial data | Set convention up front: `user_id`=platform user, `agent_id`=SOUL name, `run_id`=session |
-| 5 | Free-tier quota exhaustion | Adds start failing silently after monthly cap | Monitor at https://app.mem0.ai; upgrade or switch to Path B (self-hosted OSS) |
-| 6 | Key in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600`; `${MCP_MEM0_API_KEY}` indirection in yaml |
-| 7 | Self-hosted OSS server on 0.0.0.0 | World-readable memory store — private conversations exposed | Bind to `127.0.0.1:8888` on the Hermes VPS; use SSH tunnel for external access |
-| 8 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
-| 9 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
-| 10 | sed with `/` delimiter on URLs | URLs contain `/` | Always `\|` delimiter |
-| 11 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
-| 12 | POST /reset on production data | Wipes ALL memories for the org/user — irreversible | Never call /reset from the agent; only from a manual scripted context |
-| 13 | Missing user_id on add/search | Memories get global scope, mixed across users | Always pass user_id (and agent_id if multi-agent) |
-| 14 | Cross-DC memory expectations | Platform memories are stored where the org is provisioned | For multi-region latency, use Path B on the same continent as the VPS |
-
----
+| # | Pitfall | Correct behavior |
+|---|---------|------------------|
+| 1 | Wrong Hermes release or profile | Exact 0.22.5 host/default gate before writes; other installations need a separately reviewed procedure. |
+| 2 | Treating exit 0 from `mcp add`/login as connection proof | Require an enabled entry plus `mcp test`; cancellation and a saved disabled entry do not count. |
+| 3 | Putting secrets into SSH arguments or YAML | Send values as stdin, keep `.env` private and use variable references. |
+| 4 | Using a missing background flag or log substring as health | Use the shared restart/ensure helpers and require a changed instance ID. |
+| 5 | Replacing the previous secret on a failed reconfiguration | Snapshot exact bytes first, then restore both files; never just delete the key. |
+| 6 | Skipping the read-only preflight on a missing dependency | Abort before snapshot; install the documented host prerequisite and rerun. |
+| 7 | Overwriting a hand-authored Hermes skill | Refuse the existing path, preserve it, and remove only a new file with its recorded checksum. |
+| 8 | Confusing source tests with real service evidence | Record actual host/vendor acceptance separately; credentials, browser consent and a server are still required. |
+| 9 | Running write or paid smoke tests | Use only the read-only check; a write or paid request requires explicit task authorization. |
+| 10 | Confusing read-only-looking usernames with access enforcement | Verify server grants/ACLs; scoped accounts remain the real permission boundary. |
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
-- [ ] Idempotency check ran (skipped if already wired, unless `FORCE=1`)
-- [ ] HARD GATE passed: Path A → key starts with `m0-`, live `/v1/memories/search/` returned 200/400 (not 401), MCP `initialize` returned result; Path B → host is `http(s)://...`, live `/search` returned 200/400 (not 404)
-- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
-- [ ] Env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
-- [ ] Path A: MCP registered with `${MCP_MEM0_API_KEY}` indirection (no plaintext in yaml)
-- [ ] Path B: `MEM0_HOST` documented for generic REST tool; no MCP registration
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Path A: logs show `registered N tool(s) for 'mem0'` within 30s
-- [ ] Live add + search round-trip returned 200 both
-- [ ] `user_id` / `agent_id` / `run_id` convention agreed with user
-- [ ] Rollback function defined; key revocation URL included
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, memory
-scoping, and Mem0 REST/MCP failure modes.
+- [ ] Hermes 0.22.5 host/default release verified before configuration changes.
+- [ ] Read-only vendor credential and consent gates passed from the target host.
+- [ ] Private credentials written over stdin with mode 600; config uses references.
+- [ ] Native catalog/custom MCP is enabled and passes `mcp test`, or the real runtime skill is discoverable.
+- [ ] Gateway restart produced a new ready instance through native JSON readiness.
+- [ ] Previous env/config bytes remain in a verified private snapshot.
+- [ ] User-visible integration read performed on the real host before claiming live success.

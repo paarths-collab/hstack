@@ -20,13 +20,13 @@
     "supported_versions": [
       "0.22.5"
     ],
-    "versions_source": "VERSIONS.txt#HERMES_CANDIDATE_VERSION"
+    "versions_source": "VERSIONS.txt#HERMES_VERSION"
   },
   "adapters": {
     "github": {
       "skill": "integration-github",
       "access": "read_only",
-      "mcp_pkg": "@modelcontextprotocol/server-github@2025.10.30",
+      "mcp_pkg": "@modelcontextprotocol/server-github@2025.4.8",
       "mcp_pkg_source": "VERSIONS.txt#GITHUB_MCP_PKG"
     },
     "telegram": {
@@ -66,8 +66,8 @@
     "cron create",
     "cron remove",
     "cron run",
-    "gateway stop --yes",
-    "gateway start",
+    "gateway restart --detach",
+    "gateway restart -y --detach",
     "gateway ensure",
     "config set"
   ],
@@ -82,5 +82,5 @@
     "untrusted-input-boundary"
   ],
   "delivery_semantics": "best-effort; duplicates possible after retry; exactly-once is not claimed",
-  "scope_note": "Unpromoted Hermes 0.22.5 candidate for one exclusive default-profile Linux target. Source and offline checks do not prove live behavior. A verified receipt proves only its listed checks and observed delivery at recorded times; exactly-once delivery is not claimed."
+  "scope_note": "Source-verified (not live-verified) Hermes 0.22.5 target for one exclusive default-profile Linux target. Source and offline checks do not prove live behavior. A verified receipt proves only its listed checks and observed delivery at recorded times; exactly-once delivery is not claimed."
 }

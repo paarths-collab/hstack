@@ -5,9 +5,9 @@
 //   review    <blueprint.json> [contract.json] --host <h> --user <u> --chat-id <id> --schedule '<cron>'
 // None of them touches the network. `review` prints the exact, reviewable op list.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { DEFAULT_CONTRACT_PATH, loadContract } from "./contract.js";
 import { readTargetScript } from "./artifacts.js";
@@ -119,6 +119,19 @@ export async function main(argv, io = { out: (text) => process.stdout.write(`${t
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * True when this module is the process entry point. Node resolves symlinks for import.meta.url but leaves
+ * process.argv[1] as typed, so compare real paths: the npm bin shim and macOS /tmp are symlinks.
+ */
+export function isEntryPoint(moduleUrl = import.meta.url, entry = process.argv[1]) {
+  if (!entry) return false;
+  try {
+    return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(path.resolve(entry));
+  } catch {
+    return moduleUrl === pathToFileURL(entry).href;
+  }
+}
+
+if (isEntryPoint()) {
   process.exitCode = await main(process.argv.slice(2));
 }

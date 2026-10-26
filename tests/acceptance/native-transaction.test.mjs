@@ -8,6 +8,7 @@ import { readTargetScript } from "../../packages/acceptance/artifacts.js";
 import { loadContract, REPO_ROOT } from "../../packages/acceptance/contract.js";
 import { sha256Hex, validateReceipt } from "../../packages/acceptance/receipt.js";
 import { DEFAULT_SCRIPT_PATH, Transaction } from "../../packages/acceptance/transaction.js";
+import { opReload } from "../../packages/acceptance/ops.js";
 import { ALL_SECRET_STRINGS, FIXTURE_SKILLS, OPERATOR, SECRET_VALUES, Target, makeBlueprint, readAllReceiptText } from "./helpers/harness.mjs";
 
 const contract = loadContract(path.join(REPO_ROOT, "acceptance/founder-brief-github-telegram.hermes-0.22.5.candidate.contract.json"));
@@ -18,7 +19,7 @@ const jobs = (target) => {
   return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")).jobs : [];
 };
 
-async function appliedNative(target, observer = null) {
+async function appliedNative(target, observer = null, txOptions = {}) {
   symlinkSync(fixture, path.join(target.home, ".local/bin/hermes"));
   const scriptPath = path.join(target.root, "reviewed-target.sh");
   const script = readTargetScript(DEFAULT_SCRIPT_PATH);
@@ -26,7 +27,7 @@ async function appliedNative(target, observer = null) {
   const transport = target.transport({ env: { HSTACK_NATIVE_COMMIT: commit, PYTHONDONTWRITEBYTECODE: "1" } });
   const tx = new Transaction({
     blueprint: makeBlueprint(), contract, operator: OPERATOR, transport, receiptDir: target.receipts,
-    skillsRoot: FIXTURE_SKILLS, scriptPath, allowNonLinuxTarget: true, observer,
+    skillsRoot: FIXTURE_SKILLS, scriptPath, allowNonLinuxTarget: true, observer, ...txOptions,
   });
   assert.equal((await tx.validate()).ok, true);
   assert.equal((await tx.inspect()).ok, true);
@@ -83,5 +84,67 @@ test("candidate Transaction rollback restores its native cron and env changes th
     assert.deepEqual(jobs(target), []);
     assert.equal(tx.receipt.recovery.restoration_verified, true);
     assert.equal(validateReceipt(tx.receipt, { requiredChecks: contract.required_checks }).valid, true);
+  } finally { target.cleanup(); }
+});
+
+const gatewayLines = (target) => target.stubCalls().filter((argv) => argv[2] === "gateway").map((argv) => argv.slice(2).join(" "));
+const check = (receipt, id) => receipt.checks.find((item) => item.id === id);
+
+test("rollback with live sessions and no opt-in restores the files but does NOT claim a reload: manual_recovery_required names the opt-in", async () => {
+  const target = new Target({ hermes: false });
+  try {
+    const originalEnv = target.env();
+    const tx = await appliedNative(target);
+    writeFileSync(path.join(target.hermesDir, "fixture-live-sessions"), "");
+    const outcome = await tx.rollback();
+    assert.equal(outcome.ok, false);
+    assert.equal(tx.state, "manual_recovery_required");
+    assert.equal(target.env(), originalEnv, "files are restored even though the gateway could not be reloaded");
+    assert.equal(check(tx.receipt, "restoration").status, "pass");
+    assert.equal(check(tx.receipt, "gateway-reloaded").status, "fail");
+    assert.match(check(tx.receipt, "gateway-reloaded").detail, /restart_refused_or_failed/);
+    assert.match(check(tx.receipt, "gateway-reloaded").detail, /interruptLiveSessions/);
+    assert.match(outcome.detail, /interruptLiveSessions/);
+    assert.equal(tx.receipt.recovery.restoration_verified, false);
+    assert.equal(gatewayLines(target).some((line) => /restart -y|--yes/.test(line)), false, "-y is never sent without the opt-in");
+    assert.equal(validateReceipt({ ...tx.receipt, state: "restored_verified" }, { requiredChecks: contract.required_checks }).valid, false);
+  } finally { target.cleanup(); }
+});
+
+test("with the operator's interruptLiveSessions opt-in, rollback reloads with -y even while sessions are live", async () => {
+  const target = new Target({ hermes: false });
+  try {
+    const tx = await appliedNative(target, null, { interruptLiveSessions: true });
+    writeFileSync(path.join(target.hermesDir, "fixture-live-sessions"), "");
+    assert.equal((await tx.rollback()).ok, true);
+    assert.equal(tx.state, "restored_verified");
+    assert.equal(check(tx.receipt, "gateway-reloaded").status, "pass");
+    assert.ok(gatewayLines(target).includes("gateway restart -y --detach"), gatewayLines(target).join(" | "));
+    // the reviewed op list shows the flag only when the opt-in is set
+    const shown = (flag) => opReload({ txn: "abcd1234efgh", interruptLiveSessions: flag }).remote;
+    assert.doesNotMatch(shown(false), /interrupt-live-sessions/);
+    assert.match(shown(true), /--interrupt-live-sessions/);
+  } finally { target.cleanup(); }
+});
+
+test("an unchanged gateway instance_id after restart is not a reload: apply fails into rollback_required, rollback ends in manual_recovery_required", async () => {
+  const target = new Target({ hermes: false });
+  try {
+    symlinkSync(fixture, path.join(target.home, ".local/bin/hermes"));
+    writeFileSync(path.join(target.hermesDir, "fixture-restart-noop"), "");
+    const scriptPath = path.join(target.root, "reviewed-target.sh");
+    writeFileSync(scriptPath, readTargetScript(DEFAULT_SCRIPT_PATH));
+    const transport = target.transport({ env: { HSTACK_NATIVE_COMMIT: commit, PYTHONDONTWRITEBYTECODE: "1" } });
+    const tx = new Transaction({ blueprint: makeBlueprint(), contract, operator: OPERATOR, transport, receiptDir: target.receipts, skillsRoot: FIXTURE_SKILLS, scriptPath, allowNonLinuxTarget: true });
+    await tx.validate(); await tx.inspect(); await tx.reviewChanges((review) => review.plan_hash); await tx.stage(SECRET_VALUES);
+    const applied = await tx.apply();
+    assert.equal(applied.ok, false);
+    assert.equal(applied.failed_op, "reload");
+    assert.equal(tx.state, "rollback_required");
+    assert.match(applied.detail, /native_instance_unchanged/);
+    const rolled = await tx.rollback();
+    assert.equal(rolled.ok, false, "the gateway still cannot be shown to have restarted");
+    assert.equal(tx.state, "manual_recovery_required");
+    assert.match(check(tx.receipt, "gateway-reloaded").detail, /instance_unchanged|instance_id did not change/);
   } finally { target.cleanup(); }
 });

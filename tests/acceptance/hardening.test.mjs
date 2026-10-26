@@ -254,7 +254,7 @@ test("a verified restore is followed by a gateway reload, recorded as gateway-re
 
 test("files restored but the gateway reload failed => manual_recovery_required with that detail (never restored_verified)", async () => {
   for (const [name, reload, status] of [
-    ["non-zero exit", { code: 1, stdout: "error=gateway_run_failed\n" }, "fail"],
+    ["non-zero exit", { code: 1, stdout: "error=gateway_restart_failed\n" }, "fail"],
     ["exit 0 without reloaded=1", { stdout: "something=else\n" }, "fail"],
     ["unknown outcome", { transportError: true }, "unknown"],
   ]) {
@@ -499,13 +499,14 @@ describe("against the real hstack-target.sh (sandbox)", { concurrency: 3 }, () =
     assertReceiptClean(assert, t, resumed);
   });
 
-  gated("rollback reloads the gateway after the restore (stop, then run --daemon) and records gateway-reloaded", async (t) => {
+  gated("rollback reloads the gateway after the restore (`gateway restart`) and records gateway-reloaded", async (t) => {
     const { tx } = await driveToApplied(t);
     const callsBefore = t.stubCalls().length;
     const outcome = await tx.rollback();
     assert.equal(outcome.ok, true);
     const after = t.stubCalls().slice(callsBefore).map((c) => c.join(" "));
-    assert.ok(after.indexOf("gateway stop") >= 0 && after.indexOf("gateway run --daemon") > after.indexOf("gateway stop"), after.join(" | "));
+    assert.ok(after.includes("gateway restart"), after.join(" | "));
+    assert.equal(after.some((line) => /--daemon|gateway run|gateway stop/.test(line)), false, after.join(" | "));
     assert.equal(check(tx.receipt, "gateway-reloaded").status, "pass");
     assert.equal(existsSync(t.gatewayPath) && readFileSync(t.gatewayPath, "utf8").trim(), "running");
   });

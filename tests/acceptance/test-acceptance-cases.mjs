@@ -103,15 +103,13 @@ gated("case 2: restart, simulated reboot and rerun leave exactly one managed cro
   const unrelatedBefore = t.cron().split("\n").filter((line) => line && !line.includes("[hstack:"));
   assert.deepEqual(unrelatedBefore, ["job-0\t30 2 * * *\tunrelated nightly job"]);
 
-  // restart: stop then run, never `restart`
+  // reload: `gateway restart` (0.15.2 has no `gateway run --daemon`, no -y)
   const restart = await t.transport().exec(bindHelper(opReload({ txn: first.tx.txnId }), first.tx.receipt.artifacts.script_sha256));
   assert.equal(restart.code, 0, restart.stdout);
   assert.equal(readFileSync(t.gatewayPath, "utf8").trim(), "running");
   const argv = t.stubCalls().map((call) => call.join(" "));
-  const stop = argv.lastIndexOf("gateway stop");
-  const run = argv.lastIndexOf("gateway run --daemon");
-  assert.ok(stop >= 0 && run > stop, "gateway stop precedes gateway run --daemon");
-  assert.equal(argv.some((line) => /restart/.test(line)), false);
+  assert.ok(argv.lastIndexOf("gateway restart") >= 0, argv.join(" | "));
+  assert.equal(argv.some((line) => /--daemon|gateway run|gateway stop/.test(line)), false, "only `gateway restart` reloads the gateway");
 
   // simulated reboot: volatile process state is gone, persistent state (env, cron.db, skills) survives
   rmSync(t.gatewayPath, { force: true });
@@ -287,13 +285,13 @@ gated("case 4: the cron connector fails after staging and env swap => restored_v
 });
 
 gated("case 4: the gateway fails to come back after the change => restored_verified once the gateway can be reloaded", async (t) => {
-  const tx = await failureAfterStaging(t, "gateway-run");
+  const tx = await failureAfterStaging(t, "gateway-restart");
   assert.equal(tx.receipt.apply.ops.find((o) => o.op_id === "gateway:reload").status, "failed");
   assert.equal(tx.receipt.apply.ops.find((o) => o.op_id === "skills:sync").status, "ok");
 });
 
 gated("case 4: files restored but the gateway STILL cannot be reloaded => manual_recovery_required, never restored_verified", async (t) => {
-  const { tx, rolled, envBefore, before } = await failureAfterStaging(t, "gateway-run", { healedForRollback: false });
+  const { tx, rolled, envBefore, before } = await failureAfterStaging(t, "gateway-restart", { healedForRollback: false });
   assert.equal(rolled.ok, false);
   assert.equal(tx.state, "manual_recovery_required");
   assert.deepEqual(readFileSync(t.envPath), envBefore, "the files were restored byte for byte");
@@ -305,10 +303,8 @@ gated("case 4: files restored but the gateway STILL cannot be reloaded => manual
   assert.equal(receipt.recovery.restoration_verified, false);
 });
 
-gated("case 4: a runtime upgrade between apply and verify fails runtime-version => rollback => restored_verified", async (t) => {
+gated("case 4: a runtime upgrade between apply and verify fails runtime-version => recovery refuses the unknown runtime", async (t) => {
   t.seed({ priorBot: FAKE.botOld });
-  const envBefore = readFileSync(t.envPath);
-  const before = userStateHash(t);
   const normal = t.transport();
   const upgraded = t.transport({ env: { HSTACK_STUB_VERSION: "0.16.0" } });
   const state = { upgraded: false };
@@ -321,10 +317,12 @@ gated("case 4: a runtime upgrade between apply and verify fails runtime-version 
   assert.equal(tx.state, "rollback_required");
   assert.equal(check(tx.receipt, "runtime-version").status, "fail");
   assert.match(check(tx.receipt, "runtime-version").detail, /observed 0\.16\.0 after apply/);
-  assert.equal((await tx.rollback()).ok, true);
-  assert.equal(tx.state, "restored_verified");
-  assert.deepEqual(readFileSync(t.envPath), envBefore);
-  assert.equal(userStateHash(t), before);
+  const appliedState = userStateHash(t);
+  assert.equal((await tx.rollback()).ok, false);
+  assert.equal(tx.state, "manual_recovery_required");
+  assert.equal(userStateHash(t), appliedState, "unknown runtime is refused before any restore mutation");
+  assert.equal(tx.receipt.recovery.restoration_verified, false);
+  assert.ok(tx.receipt.recovery.backup_ref, "retain the recovery point for the original runtime or manual reconciliation");
   assertReceiptClean(assert, t, tx);
 });
 

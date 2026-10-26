@@ -16,35 +16,42 @@
 #      different version.
 
 # --- Hermes runtime ---
-# Legacy fixture baseline; this is not a claim of live-runtime compatibility.
-# Promote a candidate only after the real-target golden path has stayed green
-# for 7+ consecutive days. Candidate source/offline checks alone do not qualify.
-HERMES_VERSION=0.15.2
-# Deprecated legacy setting; candidate installation must use its immutable URL below.
-HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/main/install.sh
-# Explicit opt-in migration candidate, never an automatic replacement for the baseline.
-HERMES_CANDIDATE_VERSION=0.22.5
-HERMES_CANDIDATE_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
-HERMES_CANDIDATE_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh
-HERMES_CANDIDATE_INSTALLER_SHA256=99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674
+# HERMES_VERSION is the one release the skills and the report packs target: Hermes v0.22.5 (tag v0.22.5).
+# It is SOURCE-verified (tagged interfaces read; offline fixtures and loopback tests pass) and NOT live-verified:
+# no real-target golden path has been run on it yet. A "live-verified" claim needs the real-target golden path
+# green for 7+ consecutive days plus explicit review (compatibility/hermes.json "promotion" keeps that policy);
+# source or offline checks alone never qualify.
+HERMES_VERSION=0.22.5
+HERMES_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
+# Immutable (commit-addressed) installer; never use a branch URL such as .../main/install.sh.
+HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/scripts/install.sh
+HERMES_INSTALLER_SHA256=99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674
+# Hermes 0.15.2 (upstream tag v2026.5.29.2): used ONLY by the legacy offline acceptance contract
+# (acceptance/founder-brief-github-telegram.contract.json) and its test fixtures. No skill targets it.
+HERMES_LEGACY_FIXTURE_VERSION=0.15.2
 
 # --- MCP servers we spawn as stdio commands ---
 # Format: <NAME>_MCP_PKG=<npm-or-pypi-package>@<pinned-version>
 # Bumping npm packages: run `npm view <pkg> versions --json` and pick the
 # latest patch on the same minor.
 
-BRAVE_SEARCH_MCP_PKG=@brave/brave-search-mcp-server@1
+BRAVE_SEARCH_MCP_PKG=@brave/brave-search-mcp-server@2.1.4
 NOTION_MCP_PKG=@notionhq/notion-mcp-server@1
 STRIPE_MCP_PKG=@stripe/mcp@0.9
-GITHUB_MCP_PKG=@modelcontextprotocol/server-github@2025.10.30
+# npm: this exact version exists (latest is 2025.4.8) but the registry marks the package DEPRECATED ("no longer supported"). Not smoke-tested.
+GITHUB_MCP_PKG=@modelcontextprotocol/server-github@2025.4.8
 LINEAR_MCP_PKG=@linear-oauth/mcp@0.3
 
 # uvx-run Python MCP servers
-OBSIDIAN_MCP_PKG=mcp-obsidian==1.4.0
+# PyPI: exists (latest 0.2.3). Not smoke-tested.
+OBSIDIAN_MCP_PKG=mcp-obsidian==0.2.3
 POSTGRES_MCP_PKG=postgres-mcp==0.5.0
 REDIS_MCP_PKG=mcp-redis==0.2.0
 QDRANT_MCP_PKG=mcp-server-qdrant==0.6.0
-E2B_MCP_PKG=e2b-code-interpreter==1.5.0
+E2B_MCP_PKG=e2b-mcp-server==0.1.1
+ELEVENLABS_MCP_PKG=elevenlabs-mcp==0.12.2
+AWS_MCP_PKG=mcp-proxy-for-aws==1.6.2
+AZURE_MCP_PKG=@azure/mcp@4.0.0-beta.3
 SENTRY_MCP_PKG=sentry-mcp-server==0.4.0
 
 # --- SDKs Hermes calls out to (for skills that talk to first-party SDKs) ---

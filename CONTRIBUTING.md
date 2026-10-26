@@ -243,8 +243,8 @@ DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   1. Write <KEYS> to ~/.hermes/.env (length ${#VAR}, prefix ${VAR:0:4}...)
   2. chmod 600 ~/.hermes/.env
   3. <MCP registration or REST doc creation>
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify env loaded: env | grep -c '^<PREFIX>_' inside the gateway
+  4. Reload gateway: gw_reload (hermes -p default gateway restart --detach, then gateway ensure --json must report ready)
+  5. Verify: the gateway log / mcp test shows the integration connected
   6. Smoke test: <exact endpoint + expected code>
 
 Secrets are NEVER printed in plaintext.
@@ -317,30 +317,26 @@ The doc file is what makes the vendor's surface useful without an MCP wrapper.
 
 ### Step 7 — reload the gateway
 
+Use the shared Step 0 helper from `templates/SKILL.template.md` (copied byte-for-byte; `tests/skills/static.test.mjs` enforces identity):
+
 ```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready. Rolling back."; rollback; exit 1; }
 ```
 
-**Never** `gateway restart`. Restart does not reliably re-read `.env`.
+`gw_reload` runs `hermes -p default gateway restart --detach` and then requires `hermes -p default gateway ensure --json --timeout 60` to exit 0 with
+`"state":"ready"` and a new `instance_id` (Hermes v0.22.5: `hermes_cli/gateway.py:5454-5536`, `hermes_cli/gateway_runtime_cli.py:8-37`). `gateway run` is the
+foreground command and `--daemon` does not exist. Never decide health by grepping `gateway status` text: the stopped gateway prints
+`✗ Gateway is not running`. A restart that live sessions refuse (no TTY) is reported, not overridden; `GW_INTERRUPT=1` adds `-y`.
 
 ### Step 8 — verify env is loaded
 
 ```bash
-LOADED=$(ssh "$VPS_USER@$VPS_IP" '
-  AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-  if [ -n "$AGENT" ]; then
-    docker exec "$AGENT" env | grep -c "^VENDOR_"
-  else
-    hermes gateway env 2>/dev/null | grep -c "^VENDOR_"
-  fi
-')
+# `hermes gateway env` does not exist. Count the names this skill wrote in ~/.hermes/.env (values are never printed):
+LOADED=$(remote "grep -c '^VENDOR_' ~/.hermes/.env || true")
 [ "$LOADED" = "N" ] || { echo "FAIL: expected N vars, saw $LOADED. Rolling back."; rollback; exit 1; }
 ```
 
-Where `N` = the exact count of vars this skill writes. Off-by-one here is the most common failure I catch in review.
+Where `N` = the exact count of vars this skill writes. (A restarted gateway loads that file at start, `gateway/run.py:1583-1585`; whether the running gateway accepted them is shown by the skill's native check, e.g. `hermes -p default mcp test`.) Off-by-one here is the most common failure I catch in review.
 
 ### Step 9 — live smoke test
 
@@ -367,7 +363,7 @@ rollback() {
     done
     hermes mcp remove <vendor-slug> 2>/dev/null || true
     rm -f /opt/data/<vendor>-rest.md
-    hermes gateway stop; sleep 2; hermes gateway run --daemon
+    : # the gateway is reloaded by the skill's gw_reload helper after this restore, never by a hand-written stop/run here
   "
   echo "Rolled back. <Vendor> is no longer wired."
 }
@@ -401,7 +397,7 @@ Minimum 6 checkboxes. Every one an assertion the skill validated during its run.
 - [ ] Live pre-flight returned 200
 - [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
 - [ ] Secret in `~/.hermes/.env`, `chmod 600`
-- [ ] Gateway reloaded with `stop` + `run`
+- [ ] Gateway reloaded with `gw_reload` (`restart --detach`, then `ensure --json` ready with a new instance)
 - [ ] Env verified: N `VENDOR_*` vars in gateway
 - [ ] Live smoke test succeeded
 - [ ] Rollback function defined and proven
@@ -459,7 +455,7 @@ What a reviewer looks for, in the order they look for it:
 4. **HARD GATE actually gates.** A reviewer's most common finding: pre-flight is there but returns success on the "wrong" 200. Rebuild your mental model of what "the wrong 200" looks like for the vendor you're wiring.
 5. **DRY_RUN discloses only length + short prefix** of every secret variable.
 6. **`chmod 600` present** after any `~/.hermes/.env` write.
-7. **`gateway stop && gateway run`** — never `restart`.
+7. **`gw_reload`** (restart --detach, then `gateway ensure --json` must be ready). No daemon flag exists on `gateway run`; never a `gateway status` text grep.
 8. **Rollback is a real inverse** — undoes exactly what the skill created, no more (leave user data), no less (don't leave the MCP registered).
 9. **Pitfalls rows are real**, not theoretical. Reviewers may ask you to remove theoretical ones.
 10. **Definition of done matches the skill body.** Every checkbox corresponds to an assertion Step made.

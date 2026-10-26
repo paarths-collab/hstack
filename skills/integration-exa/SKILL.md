@@ -1,282 +1,333 @@
 ---
 name: integration-exa
-description: Connect Exa (semantic web search, company/person research, code context, web crawl) to a self-hosted Hermes Agent over SSH using Exa's official remote MCP server with a static x-api-key. Idempotent and rollback-safe. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI).
+description: Connect exa to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-exa — connect Exa to a remote Hermes (SSH-first)
+# /integration-exa — connect exa over SSH
 
-You are the engineer connecting Exa to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. Every command in this skill runs on the VPS, not on the
-local machine. The user only does the one thing a machine cannot: mint the Exa API key
-in the dashboard.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently, with a working rollback on any failure.
+## Before you start — gather (ask once)
 
-**Honest auth picture (verified 2026-06):** Exa ships an official **remote** MCP server at
-`https://mcp.exa.ai/mcp`. It authenticates with a **static API key** via the `x-api-key`
-header (the REST API also accepts `Authorization: Bearer <key>`). No OAuth dance, no
-session token rotation — this is the headless-friendly path. The remote MCP `initialize`
-handshake accepts unauthenticated requests; auth is enforced on `tools/call`, so a
-"Connected!" line on registration is not proof — only the smoke test in Step 8 is.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. EXA_API_KEY and BILLING_ACKNOWLEDGED=1. A one-result search is read-only but consumes paid/search quota; no probe runs without that explicit cost gate.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-Sources: <https://exa.ai/docs/reference/exa-mcp>, <https://exa.ai/mcp>.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-Required from the user (skip any already in env):
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$EXA_API_KEY` | Exa API key (static) | <https://dashboard.exa.ai/api-keys> (sign up at <https://exa.ai> first) |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-Detect host vs container, then version-check. If you land in a container shell (hostname
-is a hex string), back out — `hermes` lives on the host or in the named container.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci exa" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Exa is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write EXA_API_KEY (length ${#EXA_API_KEY}, prefix ${EXA_API_KEY:0:4}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register MCP: hermes mcp add exa --url https://mcp.exa.ai/mcp --auth header (x-api-key)
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -i "registered.*exa"
-  6. Smoke test: POST https://api.exa.ai/search -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set EXA_API_KEY '$EXA_API_KEY'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^EXA_API_KEY=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: EXA_API_KEY not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter — Exa keys are alnum today but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^EXA_API_KEY=' ~/.hermes/.env || printf 'EXA_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^EXA_API_KEY=.*|EXA_API_KEY=$EXA_API_KEY|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the Exa MCP server
-
-Path A is preferred — Exa ships an official remote MCP that takes a static key.
-
-### Path A (preferred) — official remote MCP at `https://mcp.exa.ai/mcp`
-
-Exa's MCP enforces the `x-api-key` header (NOT `Authorization`). Register with the token
-referenced from `.env`, never inlined:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add exa \
-    --url 'https://mcp.exa.ai/mcp' \
-    --auth-header 'x-api-key' \
-    --auth-scheme '' \
-    --placeholder-token 'placeholder'
-"
-# Inject the real key into the config with pipe delimiter (safe for any token shape)
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$EXA_API_KEY\"'|g' ~/.hermes/config.yaml"
-```
-
-The resulting config entry should resemble:
-```yaml
-exa:
-  url: https://mcp.exa.ai/mcp
-  headers:
-    x-api-key: ${EXA_API_KEY}
-  enabled: true
-```
-
-Tools registered include `web_search_exa`, `company_research_exa`, `linkedin_search_exa`,
-`get_code_context_exa`, `crawling_exa`, and `deep_researcher_*`.
-
-### Path B (fallback) — generic HTTP tool against the Exa REST API
-
-If the Hermes build is stdio-MCP-only or cannot register a remote HTTP MCP:
-
-- **Base URL:** `https://api.exa.ai`
-- **Auth header:** `x-api-key: ${EXA_API_KEY}` (or `Authorization: Bearer ${EXA_API_KEY}`)
-- **Content type:** `Content-Type: application/json`
-- **Core endpoint:** `POST /search` with `{"query":"...","numResults":N}`
-
-Do NOT pick `Authorization` at the MCP `--auth-header` prompt for Path A — Exa's MCP
-example uses `x-api-key`; mixing them invites silent `401`s on `tools/call`.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*exa|MCP server.*exa.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: exa registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-exa
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: exa not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-Success line looks like:
-```
-INFO tools.mcp_tool: MCP server 'exa' (HTTP): registered N tool(s): mcp_exa_web_search_exa, mcp_exa_company_research_exa, ...
-```
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (token stays on the VPS)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X POST 'https://api.exa.ai/search' \
-    -H \"x-api-key: \$EXA_API_KEY\" \
-    -H 'Content-Type: application/json' \
-    -d '{\"query\":\"hermes agent\",\"numResults\":1}'
-")
-case "$HTTP" in
-  200) echo "OK: Exa API reachable and key valid." ;;
-  401) echo "FAIL: key invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: key valid but blocked (quota or plan)."; exit 1 ;;
-  429) echo "WARN: rate-limited. Key is valid; back off and retry." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Exa API. Check manually." ;;
-esac
-```
-
-`200` with an empty `results` array is still a wiring pass — that is just the query
-returning nothing, not a token failure.
-
-End-to-end from chat: `@<agent> using exa, search the web for "<topic>"` returns results.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove exa 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset EXA_API_KEY 2>/dev/null || \
-    sed -i '/^EXA_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Exa is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=exa
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${BILLING_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: BILLING_ACKNOWLEDGED=1 required for the quota-consuming Exa probe. Nothing was written."; exit 1; }
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${EXA_API_KEY:-}" || { echo "ABORT: EXA_API_KEY is empty or unsafe. Nothing was written."; exit 1; }
+
+printf '%s\n' "${EXA_API_KEY:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'EXA_API_KEY'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.exa.ai/search'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'x-api-key'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'EXA_API_KEY'"'"'"'"'"'"'"'"'],"Content-Type":"application/json"},json.dumps({'"'"'"'"'"'"'"'"'query'"'"'"'"'"'"'"'"': '"'"'"'"'"'"'"'"'hermes agent'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'numResults'"'"'"'"'"'"'"'"': 1}).encode())
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: exa; path: http.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env EXA_API_KEY "${EXA_API_KEY:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null 2>&1 || { rollback; exit 1; }
+remote 'hermes -p default config set mcp_servers.exa.url https://mcp.exa.ai/mcp' >/dev/null 2>&1 || { rollback; exit 1; }
+remote 'hermes -p default config set mcp_servers.exa.headers.x-api-key '"'"'Bearer ${EXA_API_KEY}'"'"'' >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default config set mcp_servers.$MCP_NAME.enabled true" >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: HTTP entry is not enabled."; rollback; exit 1; }
+```
+
+This uses the native `mcp_servers` schema. Custom header names and credential references are preserved; the generic Bearer header wizard cannot express every vendor. Config contains references, never literal credentials.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.exa.ai/search'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'x-api-key'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'EXA_API_KEY'"'"'"'"'"'"'"'"'],"Content-Type":"application/json"},json.dumps({'"'"'"'"'"'"'"'"'query'"'"'"'"'"'"'"'"': '"'"'"'"'"'"'"'"'hermes agent'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'numResults'"'"'"'"'"'"'"'"': 1}).encode())
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-exa.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Picking `Authorization` at the `--auth-header` prompt | Exa's MCP enforces `x-api-key`; bearer works on REST but mixing them yields silent `401` on `tools/call` | Type `x-api-key` exactly at the header-name prompt |
-| 2 | Treating `initialize` "Connected!" as proof | Exa accepts unauthenticated handshakes; auth is enforced on `tools/call` | Only the Step 8 smoke test (HTTP 200) proves the key works |
-| 3 | Pasting the real key into an interactive `printf` pipe | Special chars can mangle in non-TTY pipes; key gets logged in shell history | Placeholder via CLI, real value via `sed` (Step 5) |
-| 4 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by the Hermes runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 5 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 6 | `echo "...key..." >> .env` instead of `config set` | `echo >>` can merge onto a prior line without a trailing newline; sed-fix needed | Always `hermes config set`; if you must append, use `printf '\n%s\n'` |
-| 7 | sed with `/` delimiter on tokens | Future key formats may contain `/+=`; `/`-delimited sed breaks | Always use `\|` delimiter |
-| 8 | Container vs host confusion | Adding the key inside a container leaves it invisible to the host gateway | `whoami; hostname` check first; exit container shells before writing |
-| 9 | Rate limits and quota | Exa bills per search and per tool call; bursts can `429` or exhaust quota silently | Watch `hermes logs` for `429`; check usage at <https://dashboard.exa.ai> |
-| 10 | Hermes not running when SSH connects | First call hangs forever | Step 1 has a hard version check that exits early |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Cost consent | Search preflight can consume quota | Require BILLING_ACKNOWLEDGED=1 |
+| 2 | Header choice | Exa API uses x-api-key | Keep that custom header name |
+| 3 | Probe size | The preflight asks for one result | Do not expand its query volume |
+| 4 | Secret persistence | The YAML header contains only an env reference | Keep EXA_API_KEY private in .env |
+| 5 | MCP entitlement | A REST search does not prove MCP availability | Require native mcp test |
+| 6 | Unexpected redirects | A redirect could disclose a credential | Refuse redirects rather than forwarding x-api-key |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `EXA_API_KEY` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] MCP registered via Path A (remote MCP with `x-api-key`) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'exa'` within 30s
-- [ ] Smoke test: `POST https://api.exa.ai/search` from the VPS returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

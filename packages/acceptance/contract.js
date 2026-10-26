@@ -14,16 +14,31 @@ export const DEFAULT_CONTRACT_PATH = path.join(REPO_ROOT, "acceptance", "founder
 export const CANDIDATE_CONTRACT_PATH = path.join(REPO_ROOT, "acceptance", "founder-brief-github-telegram.hermes-0.22.5.candidate.contract.json");
 export const DEFAULT_VERSIONS_PATH = path.join(REPO_ROOT, "VERSIONS.txt");
 
-/** Legacy adapter surface (declared, unverified for real Hermes). */
+/**
+ * Legacy adapter surface (Hermes 0.15.2, upstream tag v2026.5.29.2; declared, unverified for real Hermes).
+ * There is no `gateway run --daemon` at that tag or any other (hermes_cli/main.py gateway parsers,
+ * v2026.5.29.2:11494-11526): the reload is `gateway restart`, which takes no -y/--yes there
+ * (v2026.5.29.2:11557-11575; hermes_cli/gateway.py `restart` branch of gateway_command, 5483-5600).
+ */
 export const KNOWN_ADAPTER_SURFACE = Object.freeze([
   "--version", "cron list", "cron create", "cron remove", "cron run",
-  "gateway stop", "gateway run --daemon", "config set",
+  "gateway restart", "config set",
 ]);
 
-/** Source-reviewed candidate surface; it is not promoted or live-runtime verified. */
+/**
+ * Hermes 0.22.5 surface (tag v0.22.5, commit bf0203a): source-reviewed, not live-verified. The reload is
+ * `gateway restart --detach` (-y is added ONLY when the operator opts in to interrupting live sessions: without it
+ * Hermes refuses a non-interactive restart while sessions are live, hermes_cli/gateway_lifecycle_guards.py:97-132,
+ * and the reload is reported as failed), then readiness is `gateway ensure --json --timeout 60`: exit 0 (5/6
+ * retried), state "ready" and a NEW instance_id than before the restart. --detach keeps a restart without an
+ * installed service from running the gateway in the foreground of the ssh shell; hermes_cli/subcommands/gateway.py:146-155,
+ * hermes_cli/gateway.py `_cmd_restart` 5454-5540, gateway_supervised_restart.py:140-151. `restart` can exit 0 without
+ * restarting (linger warning, gateway.py:5499-5513), and instance_id is a uuid4 per gateway process
+ * (gateway/run_runtime.py:144), which is why a changed instance_id is part of the proof.
+ */
 export const NATIVE_ADAPTER_SURFACE = Object.freeze([
-  "--version", "cron create", "cron remove", "cron run", "gateway stop --yes",
-  "gateway start", "gateway ensure", "config set",
+  "--version", "cron create", "cron remove", "cron run", "gateway restart --detach", "gateway restart -y --detach",
+  "gateway ensure", "config set",
 ]);
 
 export const KNOWN_CHECK_IDS = Object.freeze([
@@ -31,6 +46,8 @@ export const KNOWN_CHECK_IDS = Object.freeze([
   "unrelated-state-unchanged", "private-destination-delivery", "untrusted-input-boundary",
 ]);
 
+/** The stored cron prompt limit enforced by the target (native adapter: len(prompt) > 400 is refused). */
+const MAX_STORED_PROMPT = 400;
 const SAFE_PROMPT = /^[A-Za-z0-9 _.,:=+@%/*-]{1,400}$/;
 
 const str = (pattern, extra = {}) => ({ type: "string", pattern, ...extra });
@@ -91,7 +108,7 @@ const CONTRACT_SCHEMA = obj(
       cron_pattern: { type: "string", minLength: 1, maxLength: 64 },
       prompt: { type: "string", minLength: 1, maxLength: 400 },
     }),
-    adapter_surface: strList("^[a-z-]+( [a-z]+)?( --[a-z]+)?$"),
+    adapter_surface: strList("^[a-z-]+( [a-z]+)?( (--[a-z]+|-[a-z]))*$"),
     adapter_surface_status: { enum: ["declared-unverified-against-real-hermes"] },
     required_checks: strList("^[a-z][a-z0-9-]*$"),
     delivery_semantics: { type: "string", minLength: 1, maxLength: 300 },
@@ -137,9 +154,9 @@ export function validateContract(contract, { versions = null } = {}) {
   const c = contract;
   const runtimeSource = c.runtime.versions_source;
   const runtimeKey = runtimeSource === "VERSIONS.txt#HERMES_VERSION" ? "HERMES_VERSION"
-    : runtimeSource === "VERSIONS.txt#HERMES_CANDIDATE_VERSION" ? "HERMES_CANDIDATE_VERSION" : null;
-  if (!runtimeKey) errors.push("contract.runtime.versions_source must select the baseline or candidate Hermes pin");
-  const allowedSurface = runtimeKey === "HERMES_CANDIDATE_VERSION" ? NATIVE_ADAPTER_SURFACE : KNOWN_ADAPTER_SURFACE;
+    : runtimeSource === "VERSIONS.txt#HERMES_LEGACY_FIXTURE_VERSION" ? "HERMES_LEGACY_FIXTURE_VERSION" : null;
+  if (!runtimeKey) errors.push("contract.runtime.versions_source must select HERMES_VERSION (the 0.22.5 target) or HERMES_LEGACY_FIXTURE_VERSION");
+  const allowedSurface = runtimeKey === "HERMES_VERSION" ? NATIVE_ADAPTER_SURFACE : KNOWN_ADAPTER_SURFACE;
   for (const [name, list] of [
     ["managed_env_keys", c.managed_env_keys], ["managed_skills", c.managed_skills],
     ["adapter_surface", c.adapter_surface], ["required_checks", c.required_checks],
@@ -174,6 +191,15 @@ export function validateContract(contract, { versions = null } = {}) {
     errors.push("contract.schedule.prompt may only contain letters, digits, spaces and . , : = + @ % / * _ -");
   }
   if (c.schedule.prompt.includes("|")) errors.push("contract.schedule.prompt must not contain '|'");
+  // The target prepends `[hstack:<id>] ` (SAFE_PROMPT has no brackets, so the contract prompt never carries it), and the
+  // native adapter rejects a stored cron prompt longer than MAX_STORED_PROMPT (400) AFTER that prefix
+  // (native-hermes-v0_22_5.py desired()). A prompt that only fits without the marker would pass validation and
+  // then fail at apply, after write-ahead.
+  const marker = `[hstack:${c.schedule.id}]`;
+  const storedLength = marker.length + 1 + c.schedule.prompt.length;
+  if (storedLength > MAX_STORED_PROMPT) {
+    errors.push(`contract.schedule.prompt is ${storedLength} characters once the ${marker} marker is prepended; the limit is ${MAX_STORED_PROMPT}`);
+  }
 
   if (versions) {
     if (!runtimeKey || versions[runtimeKey] !== c.runtime.declared_version) {
@@ -200,7 +226,7 @@ function deepFreeze(value) {
 /**
  * Load and strictly validate a contract file.
  * options.versionsFile: when given (or when the default repo VERSIONS.txt exists and options.versionsFile !== null),
- * the declared Hermes version must equal its selected baseline/candidate pin,
+ * the declared Hermes version must equal its selected pin (HERMES_VERSION or HERMES_LEGACY_FIXTURE_VERSION),
  * and the GitHub MCP pin must equal VERSIONS.txt.
  */
 export function loadContract(file = DEFAULT_CONTRACT_PATH, options = {}) {

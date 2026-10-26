@@ -288,7 +288,8 @@ hs_gen_mdc() {
   echo "---"
   if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
   echo
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+  # drop only the frontmatter block (first two fence lines); later "---" lines are body
+  awk 'n < 2 && /^---[[:space:]]*$/ { n++; next } n >= 2 { print }' "$src"
 }
 
 # Cursor .mdc rule. Written through a temp file onto a fresh path, never through an
@@ -351,9 +352,13 @@ MARK_END="<!-- hstack:end -->"
 SECTION="$MARK_START
 ## hstack — self-hosted Hermes Agent deploy
 
-Hermes deployment + 50+ integration skills. Codex can invoke any /hermes-* /platform-* or
+Hermes deployment + 70+ integration skills. Codex can invoke any /hermes-* /platform-* or
 /integration-* skill via SSH against a remote VPS. Every skill is SSH-first (\$VPS_IP +
 \$VPS_USER) and idempotent. See /hermes-deploy for the full end-to-end setup.
+Platforms: telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal.
+Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Use the native catalog/MCP or installed skill route documented for each integration. Reload with
+/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"
 
 # >>> hstack-instruction-block (identical in setup, setup-codex, setup-gemini, setup-openclaw;

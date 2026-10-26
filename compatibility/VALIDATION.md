@@ -1,12 +1,13 @@
 # Workflow packs implementation and validation status
 
-Updated: **2026-10-24**. Multiple-instance implementation and local integration
-are complete, including a separately provisioned native cron source check.
+Updated: **2026-10-26**. All catalogue migration waves and multiple-instance workflow
+implementation are complete. Final local validation includes native cron source checks,
+Docker SSH and both installer runtimes.
 **Live target deployment and real Telegram verification remain pending.**
 
 The runnable entrypoint is [the workflow pack guide](../packages/founder-brief/README.md).
-Hermes 0.22.5 remains an explicit, unpromoted candidate; the legacy 0.15.2 fixture
-baseline has not been changed. Machine-readable status is in [hermes.json](hermes.json).
+Hermes 0.22.5 is the pinned target and is source-verified, not live-verified; the legacy 0.15.2
+fixture is used only by the offline acceptance contract. Machine-readable status is in [hermes.json](hermes.json).
 
 ## Completed
 
@@ -25,7 +26,34 @@ baseline has not been changed. Machine-readable status is in [hermes.json](herme
 - Ownership and write-permission checks on the target home, scripts and workflow
   parents before installation/dispatch; hard-link aliases and symlink collisions refused.
 
-## Evidence
+## Final catalogue migration checks (26 October 2026)
+
+All 68 remaining integrations are migrated; the catalogue still contains 97 skills.
+The [migration record](MIGRATION.md) describes routes and behavior changes.
+
+| Check | Result | Evidence boundary |
+|---|---|---|
+| Stock macOS Bash installer | 411 passed | Disposable installation/ownership scenarios |
+| Script and validator regressions | 116 passed | Executable positive and negative controls |
+| Catalogue/native parser contract | 97 passed | Commands parse against the pinned Hermes source |
+| Skill validator and references | 97/97; references passed | Repository structure and cross-references |
+| Markdown Bash lint | 967 parsed; 87 placeholder blocks skipped; zero errors | Syntax, not live execution |
+| ShellCheck | 39 shell files; zero errors | Official ShellCheck 0.11.0 container |
+| Secret-scanner exception controls | 7 passed | Exact synthetic literals only; alternate IDs, paths and token detectors still fail |
+| Working-directory and history secret scan | No leaks; 304 existing commits scanned | Gitleaks 8.30.1 with default rules and narrow fixture exceptions |
+| Blueprint/count checks | Three blueprints and catalogue counts passed | 97 skills, 71 integrations, eight platforms |
+
+The combined recipe, acceptance, skill and workflow matrix evaluated **2,666 tests**
+with **zero skips**. Its only failure was a home-channel version-gate test targeting
+a removed shell pattern. That test now supplies an actual unsupported runtime version;
+its full **35-test suite passed on recheck**, leaving no unresolved runtime failures.
+Docker SSH and exact-source native cron were explicitly enabled in this matrix.
+No production behavior was weakened to satisfy the corrected assertion.
+
+PowerShell **7.6.9 on macOS passed 207 checks**, with zero failures or skips.
+This does not establish native Windows junction, ACL, Developer Mode or PowerShell 5.1 behavior.
+
+## Earlier workflow evidence (24 October 2026)
 
 | Check | Result | What it establishes |
 |---|---|---|
@@ -34,7 +62,7 @@ baseline has not been changed. Machine-readable status is in [hermes.json](herme
 | Preparation cases | 13 passed | Actual checkout/packaged CLI, instance defaults/custom names, deterministic runtime, private modes, safe refusal and instructions |
 | Pack runtime/credential cases | 7 passed | Selection, target-free preview, actionable source errors and fail-closed hidden input |
 | Executable comparison | 3 workflows across both arms passed | Matching reports, endpoints, API acknowledgement, replay and cleanup; documented metric provenance |
-| Deployment scenarios | 16 passed | Install/retry, ownership, locking, interruption and rollback |
+| Deployment scenarios | 17 passed | Install/retry, ownership, locking, interruption and rollback |
 | Multi-instance deployment scenarios | 18 passed | Concurrent installs, same-pack copies, namespace/receipt binding, independent recovery/rollback, directory and link safety |
 | Multi-instance runtime scenarios | 8 passed | Installed launchers, separate destinations/schedules, replay, unknown acknowledgements, drift, locks and legacy coexistence |
 | Telegram sender scenarios | 14 passed | Real loopback HTTP, private-chat checks, acknowledgements and uncertain sends |
@@ -54,7 +82,7 @@ Final multiple-instance recheck on **24 October 2026**:
 - All **56 workflow/native-cron/Telegram-shim tests passed**, with no skips, using
   the explicit opt-in exact-source environment as well as disposable loopback SSH.
 - **89 compatibility and Telegram skill regressions passed**. Separate deployment
-  checks passed 16 legacy and 18 multiple-instance Python scenarios; these component
+  checks passed 17 legacy and 18 multiple-instance Python scenarios; these component
   counts overlap the combined suite.
 - All **97 skills** validated; references passed; **1,061 Bash blocks** parsed with
   120 placeholder blocks skipped and no errors. The final working-directory Gitleaks
@@ -78,10 +106,10 @@ Earlier pre-publication check on **24 October 2026**, before the multiple-instan
   release. The [comparison guide](../packages/founder-brief/COMPARISON.md) links the
   native capabilities and explains the packs' narrower application setup benefit.
 
-The previous remote recipe run exposed four Telegram Docker tests rejecting the
-current default-profile CLI prefix. The shim now handles that syntax and explicitly
-labels its readiness response as test-double evidence. Five new local tests passed;
-the Docker container suite has not been rerun because no Docker daemon is available.
+The earlier remote recipe run exposed four Telegram Docker tests rejecting the
+current default-profile CLI prefix. The repaired shim handles that syntax and
+explicitly labels its readiness response as test-double evidence. The final
+26 October matrix enables the Docker container suite; its current result is recorded above.
 
 These remain local/source checks. They do not change live-verification or promotion status.
 
@@ -89,7 +117,7 @@ Parent and component counts overlap; do not sum them as independent top-level te
 The SSH test uses real SSH and HTTP, with a native Hermes CLI fixture and controlled
 GitHub/Telegram endpoints. It does not run a real Hermes daemon or send to Telegram.
 The separate [opt-in native cron check](../tests/founder-brief/REAL_NATIVE.md) imports
-seven hash-pinned source files from the exact candidate and uses the release's
+seven hash-pinned source files from the exact 0.22.5 commit and uses the release's
 pinned Python 3.14.9. It exercises the actual parser, store, claims, no-agent worker
 subprocess and scheduler tick. Three packs produce five controlled API acknowledgements
 across initial delivery, source-failure recovery and a tick; confirmed replay adds
@@ -132,7 +160,7 @@ lacks scheduling, script execution or messaging.
 
 ## Still required for live completion
 
-- [ ] Select a Linux SSH target with the exact candidate runtime, systemd gateway and exclusive default profile.
+- [ ] Select a Linux SSH target with the exact Hermes 0.22.5 runtime, systemd gateway and exclusive default profile.
 - [ ] Supply the repositories, positive private Telegram chat ID, daily time and timezone.
 - [ ] Prepare private credential files outside the repository.
 - [ ] Run the native canary and obtain its matching Telegram API acknowledgement.
@@ -149,7 +177,7 @@ deployment or seven-day reliability run is claimed by the local tests.
 From the repository root:
 
 ```bash
-node --test --test-concurrency=3 tests/founder-brief/
+node --test --test-concurrency=3 tests/founder-brief/*.test.mjs
 python3 -I -B tests/founder-brief/helpers/compare-workflows.py --output /tmp/hstack-workflow-comparison.json
 node --test --test-concurrency=3 tests/acceptance/untrusted.test.mjs tests/acceptance/observer.test.mjs tests/acceptance/native-adapter.test.mjs tests/acceptance/native-transaction.test.mjs
 node --test tests/acceptance/contract.test.mjs

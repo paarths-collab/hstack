@@ -83,15 +83,22 @@ test('cron run (HSTACK_STUB_VULNERABLE=1): obeys the embedded redirect and leaks
   } finally { sb.cleanup(); }
 });
 
-test('gateway stop/run toggle state; `restart`, `doctor`, unknown subcommands exit 99', () => {
+test('gateway restart/stop toggle state; `run --daemon` and any undeclared option exit 2 like argparse; `run`, `doctor`, unknown subcommands exit 99', () => {
   const sb = sandbox();
   try {
     sb.write('.hermes/.env', 'A=1\n');
-    assert.equal(hermes(sb, ['gateway', 'run', '--daemon']).status, 0);
+    assert.equal(hermes(sb, ['gateway', 'restart']).status, 0);
     assert.equal(readFileSync(join(sb.h, 'gateway.state'), 'utf8').trim(), 'running');
     assert.equal(hermes(sb, ['gateway', 'stop']).status, 0);
     assert.equal(readFileSync(join(sb.h, 'gateway.state'), 'utf8').trim(), 'stopped');
-    for (const a of [['gateway', 'restart'], ['gateway', 'run', '--bogus'], ['gateway'], ['doctor'], ['config', 'get', 'X']]) assert.equal(hermes(sb, a).status, 99, a.join(' '));
+    // argparse: an option the subcommand does not declare is a usage error (exit 2). `--daemon` never existed; 0.15.2 restart has no -y.
+    for (const a of [['gateway', 'run', '--daemon'], ['gateway', 'restart', '--daemon'], ['gateway', 'restart', '-y'], ['gateway', 'stop', '--yes'], ['gateway', 'run', '--bogus']]) {
+      const r = hermes(sb, a);
+      assert.equal(r.status, 2, a.join(' '));
+      assert.match(r.stderr, /unrecognized arguments/);
+    }
+    assert.equal(readFileSync(join(sb.h, 'gateway.state'), 'utf8').trim(), 'stopped', 'a rejected call changes nothing');
+    for (const a of [['gateway', 'run'], ['gateway'], ['doctor'], ['config', 'get', 'X']]) assert.equal(hermes(sb, a).status, 99, a.join(' '));
     assert.equal(hermes(sb, ['config', 'set', 'SOME_KEY', 'v']).status, 0);
     assert.ok(readFileSync(sb.envPath, 'utf8').includes('SOME_KEY=v'));
   } finally { sb.cleanup(); }

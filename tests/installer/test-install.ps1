@@ -103,8 +103,9 @@ $EnvKeys = @('HOME', 'USERPROFILE', 'CLAUDE_SKILLS_DIR', 'CODEX_SKILLS_DIR', 'CU
 # Run a script in a child PowerShell with a controlled environment. Returns @{ Code; Output }.
 function Invoke-Child {
     param([string]$Script, [string[]]$ScriptArgs, [hashtable]$EnvVars, [string]$InputText = '', [string]$WorkDir = '')
+    $allKeys = @($EnvKeys) + @($EnvVars.Keys | Where-Object { $EnvKeys -notcontains $_ })
     $saved = @{}
-    foreach ($k in $EnvKeys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    foreach ($k in $allKeys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
     if ($WorkDir) { Push-Location -LiteralPath $WorkDir }
     try {
         foreach ($k in $EnvKeys) { [Environment]::SetEnvironmentVariable($k, $null) }
@@ -116,7 +117,31 @@ function Invoke-Child {
         return @{ Code = $LASTEXITCODE; Output = $out }
     } finally {
         if ($WorkDir) { Pop-Location }
-        foreach ($k in $EnvKeys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+        foreach ($k in $allKeys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
+    }
+}
+
+# Like Invoke-Child, but runs a -Command string. "-Tier a,b" only binds as an ARRAY when the script
+# is invoked from PowerShell code (with -File the argument is one string), so array binding and the
+# script-block form need this. Exit code: the script's own, or 1 when it failed without one.
+function Invoke-ChildCommand {
+    param([string]$CommandText, [hashtable]$EnvVars, [string]$WorkDir = '')
+    $allKeys = @($EnvKeys) + @($EnvVars.Keys | Where-Object { $EnvKeys -notcontains $_ })
+    $saved = @{}
+    foreach ($k in $allKeys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k) }
+    if ($WorkDir) { Push-Location -LiteralPath $WorkDir }
+    try {
+        foreach ($k in $EnvKeys) { [Environment]::SetEnvironmentVariable($k, $null) }
+        foreach ($k in $EnvVars.Keys) { [Environment]::SetEnvironmentVariable($k, $EnvVars[$k]) }
+        $psArgs = @('-NoProfile', '-NonInteractive')
+        if ($IsWin) { $psArgs += @('-ExecutionPolicy', 'Bypass') }
+        $wrapped = "$CommandText; if (`$?) { exit 0 } elseif (`$LASTEXITCODE) { exit `$LASTEXITCODE } else { exit 1 }"
+        $psArgs += @('-Command', $wrapped)
+        $out = & $Pwsh @psArgs 2>&1 | Out-String
+        return @{ Code = $LASTEXITCODE; Output = $out }
+    } finally {
+        if ($WorkDir) { Pop-Location }
+        foreach ($k in $allKeys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
 }
 
@@ -128,6 +153,7 @@ $Src = Join-Path $Tmp 'src'
 New-Dir $Src
 Copy-Item -LiteralPath (Join-Path $RepoRoot 'install.ps1') -Destination $Src
 Copy-Item -LiteralPath (Join-Path $RepoRoot 'setup.ps1') -Destination $Src
+Copy-Item -LiteralPath (Join-Path $RepoRoot 'install.sh') -Destination $Src
 Copy-Item -LiteralPath (Join-Path $RepoRoot 'skills') -Destination $Src -Recurse
 $SkillNames = @(Get-ChildItem -LiteralPath (Join-Path $Src 'skills') -Directory |
     Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'SKILL.md') } | ForEach-Object { $_.Name })
@@ -139,6 +165,21 @@ Write-Host "hstack PowerShell installer regression test"
 Write-Host "  host      : $($PSVersionTable.PSVersion) ($([Environment]::OSVersion.Platform))"
 Write-Host "  skills    : $($SkillNames.Count)"
 Write-Host "  temp tree : $Tmp"
+
+# Exercise the real helper with a root-level relative link without creating files at the root.
+# macOS /var -> private/var exposed this: Split-Path -Parent /var returns an empty string.
+function Test-RootRelativeLink {
+    param([string]$Source)
+    $helper = [regex]::Match([IO.File]::ReadAllText($Source), '(?ms)^function Get-HstackLinkTarget \{.*?^}')
+    if (-not $helper.Success) { throw 'link helper missing' }
+    . ([scriptblock]::Create($helper.Value))
+    function Get-HstackItem { param([string]$Path) return [pscustomobject]@{ Target = 'relative-target' } }
+    $rootPath = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Tmp))
+    $actual = Get-HstackLinkTarget (Join-Path $rootPath 'hstack-root-link')
+    Assert-That ($actual -eq (Join-Path $rootPath 'relative-target')) 'root-level relative symlink resolves from filesystem root'
+}
+Test-RootRelativeLink $InstallPs1
+Test-RootRelativeLink $SetupPs1
 
 try {
 
@@ -800,6 +841,247 @@ if (Test-Path -LiteralPath $fixturePath) {
         Assert-That ($got -eq $want) "install.ps1 $($c.Args -join ' ') installs the same set as install.sh $($c.Label)"
     }
 } else { Skip-That 'tests/installer/fixtures/tiers.expected missing: tier parity not checked' }
+
+# ===========================================================================
+Write-Host "`n[6] -Tier/-Include/-Ide array binding, -Ide validation, header, ASCII"
+# ===========================================================================
+function New-CleanHome {
+    param([string]$Name)
+    $h = Join-Path $Tmp $Name
+    New-Dir $h
+    return $h
+}
+function Get-SkillSet {
+    param([string]$Dir)
+    if (-not (Test-Path -LiteralPath $Dir)) { return @() }
+    return @(Get-ChildItem -LiteralPath $Dir -Directory | ForEach-Object { $_.Name })
+}
+$q = "'"
+$ip = "& $q$InstallPs1$q"
+
+$h6 = New-CleanHome 'home6a'
+$o6 = Join-Path $Tmp 'out6a'
+$r = Invoke-ChildCommand "$ip -Local -Ide claude -Tier memory,database" @{ HOME = $h6; USERPROFILE = $h6; CLAUDE_SKILLS_DIR = $o6 }
+Assert-That ($r.Code -eq 0) "'-Tier memory,database' (comma list = array) binds and exits 0 (got $($r.Code))"
+if ($r.Code -ne 0) { Write-Host $r.Output }
+$set = Get-SkillSet $o6
+Assert-That (($set -contains 'integration-mem0') -and ($set -contains 'integration-postgres')) '-Tier memory,database installs both tiers'
+Assert-That (($set -notcontains 'integration-stripe') -and ($set -contains 'hermes-deploy')) '...and nothing outside core + platforms + those tiers'
+
+$h6 = New-CleanHome 'home6b'
+$o6 = Join-Path $Tmp 'out6b'
+$r = Invoke-ChildCommand "$ip -Local -Ide claude -Include notion,stripe,mem0" @{ HOME = $h6; USERPROFILE = $h6; CLAUDE_SKILLS_DIR = $o6 }
+$set = Get-SkillSet $o6
+Assert-That (($r.Code -eq 0) -and ($set -contains 'integration-notion') -and ($set -contains 'integration-stripe') -and ($set -contains 'integration-mem0')) "'-Include notion,stripe,mem0' (array) binds and installs all three"
+Assert-That ($set -notcontains 'integration-postgres') '...and only those'
+
+$h6 = New-CleanHome 'home6c'
+$r = Invoke-ChildCommand "$ip -Local -Ide claude,cursor -Tier memory" @{ HOME = $h6; USERPROFILE = $h6 }
+Assert-That (($r.Code -eq 0) -and (Test-Path -LiteralPath (Join-Path (Join-Path $h6 '.claude') 'skills')) -and (Test-Path -LiteralPath (Join-Path (Join-Path $h6 '.cursor') 'rules'))) "'-Ide claude,cursor' (array) binds and wires both IDEs"
+Assert-That (-not (Test-Path -LiteralPath (Join-Path $h6 '.agents'))) '...and no other IDE'
+
+$h6 = New-CleanHome 'home6d'
+$o6 = Join-Path $Tmp 'out6d'
+$r = Invoke-ChildCommand "$ip -Local -Ide claude -Tier $q memory , database $q" @{ HOME = $h6; USERPROFILE = $h6; CLAUDE_SKILLS_DIR = $o6 }
+$set = Get-SkillSet $o6
+Assert-That (($r.Code -eq 0) -and ($set -contains 'integration-mem0') -and ($set -contains 'integration-postgres')) "a single 'a , b' string is still accepted (spaces trimmed)"
+
+$h6 = New-CleanHome 'home6e'
+$o6 = Join-Path $Tmp 'out6e'
+$r = Invoke-ChildCommand "$ip -Local -Ide claude -Tier memory -Include notion" @{ HOME = $h6; USERPROFILE = $h6; CLAUDE_SKILLS_DIR = $o6 }
+$set = Get-SkillSet $o6
+Assert-That (($r.Output -match 'Include overrides -Tier') -and ($set -contains 'integration-notion') -and ($set -notcontains 'integration-mem0')) '-Include overriding -Tier is warned about and -Include wins'
+
+# -Ide validation
+$h6 = New-CleanHome 'home6f'
+$r = Invoke-Child $InstallPs1 @('-Local', '-Ide', 'bogus', '-Tier', 'memory') @{ HOME = $h6; USERPROFILE = $h6 }
+Assert-That ($r.Code -eq 2) "-Ide bogus (no valid IDE) exits 2 (got $($r.Code))"
+Assert-That ($r.Output -match 'no valid IDE') '...with a message'
+Assert-That (@(@('.claude', '.agents', '.cursor', '.hermes', '.gemini', '.openclaw', '.hstack') | Where-Object { Test-Path -LiteralPath (Join-Path $h6 $_) }).Count -eq 0) '...and writes no IDE directory'
+$h6 = New-CleanHome 'home6g'
+$r = Invoke-Child $InstallPs1 @('-Local', '-Ide', 'claude,bogus', '-Tier', 'memory') @{ HOME = $h6; USERPROFILE = $h6 }
+Assert-That (($r.Code -eq 0) -and ($r.Output -match "unknown IDE 'bogus'") -and (Test-Path -LiteralPath (Join-Path (Join-Path $h6 '.claude') 'skills'))) '-Ide claude,bogus warns about bogus and still installs claude'
+Assert-That (-not (Test-Path -LiteralPath (Join-Path $h6 'bogus'))) '...and the summary does not count the unknown IDE'
+
+# header text
+$r = Invoke-Child $InstallPs1 @('-Help') @{ HOME = $Tmp }
+Assert-That (($r.Code -eq 0) -and ($r.Output -match '-Tier memory,database') -and ($r.Output -match '\[scriptblock\]::Create')) '-Help prints the real usage (array form and the script-block form)'
+Assert-That ($r.Output -notmatch 'iex; *hstack-install') '...and does not name the nonexistent hstack-install function'
+
+# the documented script-block form (no file saved): needs a clone, so a fake git copies a local tree
+if (-not $IsWin) {
+    $fakeBin = Join-Path $Tmp 'fakegit'
+    New-Dir $fakeBin
+    $fakeGit = Join-Path $fakeBin 'git'
+    [IO.File]::WriteAllText($fakeGit, (("#!/bin/sh`n" + @'
+case "$1" in
+  clone)
+    dir=; url=
+    for a in "$@"; do url="$dir"; dir="$a"; done
+    mkdir -p "$dir" && cp -R "$url"/. "$dir"/ && mkdir -p "$dir/.git"
+    exit $?
+    ;;
+  check-ref-format) exit 0 ;;
+esac
+exit 128
+'@ + "`n") -replace "`r`n", "`n"), $Utf8NoBom)
+    & chmod 755 $fakeGit
+    $h6 = New-CleanHome 'home6h'
+    $o6 = Join-Path $Tmp 'out6h'
+    $pathWithFake = $fakeBin + [IO.Path]::PathSeparator + $env:PATH
+    $cmd = "& ([scriptblock]::Create([IO.File]::ReadAllText($q$InstallPs1$q))) -Ide claude -Tier memory,database"
+    $r = Invoke-ChildCommand $cmd @{ HOME = $h6; USERPROFILE = $h6; CLAUDE_SKILLS_DIR = $o6; HSTACK_REPO_URL = $Src; HSTACK_INSTALL_DIR = (Join-Path $Tmp 'clone6h'); PATH = $pathWithFake }
+    $set = Get-SkillSet $o6
+    if ($r.Code -ne 0) { Write-Host $r.Output }
+    Assert-That (($r.Code -eq 0) -and ($set -contains 'integration-mem0') -and ($set -contains 'integration-postgres') -and ($set -notcontains 'integration-stripe')) 'the documented "& ([scriptblock]::Create(...)) -Tier memory,database" form works (clone faked)'
+} else { Skip-That 'script-block form: needs a POSIX shell to fake git' }
+
+# ASCII-only sources: Windows PowerShell 5.1 reads a BOM-less file as the ANSI code page
+$psFiles = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -Filter '*.ps1' -File | Where-Object { $_.FullName -notmatch '[\\/](\.git|node_modules)[\\/]' })
+Assert-That ($psFiles.Count -ge 3) "found the repo's PowerShell scripts ($($psFiles.Count))"
+$nonAscii = @()
+foreach ($f in $psFiles) {
+    $bytes = [IO.File]::ReadAllBytes($f.FullName)
+    if (@($bytes | Where-Object { $_ -gt 127 }).Count -gt 0) { $nonAscii += $f.Name }
+}
+Assert-That ($nonAscii.Count -eq 0) "every *.ps1 is pure ASCII (non-ASCII in: $($nonAscii -join ', '))"
+# emulate 5.1: decode as the Windows-1252 ANSI code page and parse; no errors expected
+$ansi = $null
+try { $ansi = [Text.Encoding]::GetEncoding(1252) } catch { $ansi = $null }
+if ($ansi) {
+    foreach ($f in $psFiles) {
+        $text = $ansi.GetString([IO.File]::ReadAllBytes($f.FullName))
+        $errs = $null
+        $null = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errs)
+        Assert-That (@($errs).Count -eq 0) "$($f.Name) parses without errors when decoded as Windows-1252 (as 5.1 reads it; $(@($errs).Count) errors)"
+    }
+} else { Skip-That 'Windows-1252 not available in this host: 5.1 decoding not emulated' }
+
+# ===========================================================================
+Write-Host "`n[7] git failures: install.ps1 must notice them (native commands do not throw)"
+# ===========================================================================
+if (-not $IsWin) {
+    $stubBin = Join-Path $Tmp 'stubgit'
+    New-Dir $stubBin
+    $stubGit = Join-Path $stubBin 'git'
+    [IO.File]::WriteAllText($stubGit, (("#!/bin/sh`n" + @'
+case "$1" in
+  check-ref-format) exit 0 ;;
+  symbolic-ref) echo "${STUB_GIT_BRANCH:-main}"; exit 0 ;;
+  rev-parse) exit 1 ;;
+esac
+echo "fatal: stub git failure: $*" >&2
+exit 128
+'@ + "`n") -replace "`r`n", "`n"), $Utf8NoBom)
+    & chmod 755 $stubGit
+    $stubPath = $stubBin + [IO.Path]::PathSeparator + $env:PATH
+
+    # update of an existing checkout fails on the branch it is already on: warn and continue
+    $ck = Join-Path $Tmp 'ckout7'
+    New-Dir (Join-Path $ck '.git')
+    Copy-Item -LiteralPath (Join-Path $Src 'skills') -Destination $ck -Recurse
+    $h7 = New-CleanHome 'home7a'
+    $o7 = Join-Path $Tmp 'out7a'
+    $r = Invoke-Child $InstallPs1 @('-Tier', 'memory', '-Ide', 'claude') @{ HOME = $h7; USERPROFILE = $h7; CLAUDE_SKILLS_DIR = $o7; HSTACK_INSTALL_DIR = $ck; PATH = $stubPath }
+    Assert-That ($r.Output -match 'Could not fast-forward') 'failed fetch/checkout/pull on the current branch: the "Could not fast-forward" warning is printed (it used to be dead code)'
+    Assert-That (($r.Code -eq 0) -and ((Get-SkillSet $o7) -contains 'integration-mem0')) '...and the install continues from the existing checkout'
+
+    # asked for another branch that cannot be reached: a clear error, no "ready"
+    $h7 = New-CleanHome 'home7b'
+    $o7 = Join-Path $Tmp 'out7b'
+    $r = Invoke-Child $InstallPs1 @('-Tier', 'memory', '-Ide', 'claude', '-Branch', 'devbranch') @{ HOME = $h7; USERPROFILE = $h7; CLAUDE_SKILLS_DIR = $o7; HSTACK_INSTALL_DIR = $ck; PATH = $stubPath }
+    Assert-That ($r.Code -ne 0) "-Branch devbranch that cannot be checked out exits non-zero (got $($r.Code))"
+    Assert-That ($r.Output -match 'Could not switch') '...with a clear message'
+    Assert-That ($r.Output -notmatch 'checkout ready') '...and never says "checkout ready"'
+    Assert-That (@(Get-SkillSet $o7).Count -eq 0) '...and installs nothing'
+
+    # clone failure
+    $h7 = New-CleanHome 'home7c'
+    $o7 = Join-Path $Tmp 'out7c'
+    $r = Invoke-Child $InstallPs1 @('-Tier', 'memory', '-Ide', 'claude') @{ HOME = $h7; USERPROFILE = $h7; CLAUDE_SKILLS_DIR = $o7; HSTACK_INSTALL_DIR = (Join-Path $Tmp 'nonexistent7c'); HSTACK_REPO_URL = (Join-Path $Tmp 'no-such-repo'); PATH = $stubPath }
+    Assert-That ($r.Code -ne 0) "a failed git clone exits non-zero (got $($r.Code))"
+    Assert-That ($r.Output -match 'git clone of') '...with a clear message (not a later "Cannot find path")'
+    Assert-That (($r.Output -notmatch 'checkout ready') -and ($r.Output -notmatch 'Cannot find path')) '...and neither "checkout ready" nor an opaque Set-Location failure'
+} else { Skip-That 'git failure scenarios: need a POSIX shell to stub git' }
+
+# the closing hint prints a path with this platform's separator
+$h6z = New-CleanHome 'home6z'
+$r = Invoke-Child $InstallPs1 @('-Local', '-Ide', 'claude', '-Tier', 'memory') @{ HOME = $h6z; USERPROFILE = $h6z }
+$hint = Join-Path (Split-Path -Parent $InstallPs1) 'install.ps1'
+Assert-That ($r.Output.Contains("powershell -File $hint -Pick")) "the re-run hint uses Join-Path ($hint), not a hard-coded backslash"
+
+# ===========================================================================
+Write-Host "`n[8] setup.ps1 with a relative CLAUDE_MD_PATH"
+# ===========================================================================
+$h8 = New-CleanHome 'home8'
+$w8 = Join-Path $Tmp 'work8'
+New-Dir $w8
+$r = Invoke-Child $SetupPs1 @() @{ HOME = $h8; USERPROFILE = $h8; CLAUDE_SKILLS_DIR = (Join-Path $Tmp 'out8'); CLAUDE_MD_PATH = 'rel.md' } '' $w8
+Assert-That ($r.Code -eq 0) "CLAUDE_MD_PATH=rel.md (bare relative name) exits 0 (got $($r.Code))"
+if ($r.Code -ne 0) { Write-Host $r.Output }
+Assert-That ((Read-TextOrNull (Join-Path $w8 'rel.md')) -match 'hstack:start') '...and the section is written to rel.md in the invoking directory'
+$r = Invoke-Child $SetupPs1 @() @{ HOME = $h8; USERPROFILE = $h8; CLAUDE_SKILLS_DIR = (Join-Path $Tmp 'out8'); CLAUDE_MD_PATH = 'sub/rel2.md' } '' $w8
+Assert-That (($r.Code -eq 0) -and ((Read-TextOrNull (Join-Path (Join-Path $w8 'sub') 'rel2.md')) -match 'hstack:start')) 'CLAUDE_MD_PATH=sub/rel2.md is resolved against the invoking directory too'
+Assert-That (-not (Test-Path -LiteralPath (Join-Path $Src 'rel.md'))) '...not against the checkout'
+$blk = Read-TextOrNull (Join-Path $w8 'rel.md')
+$p8 = @('telegram', 'discord', 'whatsapp', 'slack', 'mattermost', 'teams', 'google-chat', 'signal') | Where-Object { $blk -notmatch ('/platform-' + $_) }
+Assert-That (@($p8).Count -eq 0) "the injected block names all 8 platforms (missing: $($p8 -join ', '))"
+Assert-That ($blk.Contains('v0.22.5 (source-verified; vendor and live gateway validation remain pending)') -and ($blk -notmatch '0\.15')) 'the injected block targets Hermes v0.22.5 (source-verified only) and no longer pins 0.15.2'
+Assert-That ($blk.Contains("/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent") -and $blk.Contains("vendor and live gateway validation remain pending")) 'the injected block gives the gateway reload recipe and the live-validation caveat'
+
+# ===========================================================================
+Write-Host "`n[9] .mdc output: install.ps1 and install.sh agree, body '---' lines survive"
+# ===========================================================================
+$bashExe = Get-Command bash -ErrorAction SilentlyContinue
+$haveTools = $true
+foreach ($tool in @('awk', 'cmp', 'sed', 'tr')) { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { $haveTools = $false } }
+if ($bashExe -and $haveTools -and -not $IsWin) {
+    function Get-MdcNormalised {
+        param([string]$Path)
+        return ([IO.File]::ReadAllText($Path) -replace '<!-- hstack-managed sig=[^ ]+ -->', '<!-- hstack-managed sig=X -->')
+    }
+    $mdcCases = @(
+        @{ Name = 'real'; Dir = $Src; Skills = @('hermes-deploy', 'hermes-status', 'hermes-fix', 'integration-mem0', 'platform-telegram') }
+    )
+    # a fixture checkout with horizontal rules and a fenced YAML document separator in the body
+    $fix = Join-Path $Tmp 'mdcfix'
+    New-Dir (Join-Path (Join-Path $fix 'skills') 'hermes-fix')
+    Copy-Item -LiteralPath $InstallPs1 -Destination $fix
+    Copy-Item -LiteralPath (Join-Path $Src 'install.sh') -Destination $fix
+    $fixBody = "# /hermes-fix`n`nIntro text`n`n---`n`nA section after a rule.`n`n``````yaml`nfirst: 1`n---`nsecond: 2`n```````n`n---`n`nTail`n"
+    [IO.File]::WriteAllText((Join-Path (Join-Path (Join-Path $fix 'skills') 'hermes-fix') 'SKILL.md'), ("---`nname: hermes-fix`ndescription: Fixture skill with horizontal rules in the body`n---`n`n" + $fixBody), $Utf8NoBom)
+    $mdcCases += @{ Name = 'fixture'; Dir = $fix; Skills = @('hermes-fix') }
+
+    $mi = 0
+    foreach ($c in $mdcCases) {
+        $mi++
+        $hp = New-CleanHome "home9ps$mi"
+        $hb = New-CleanHome "home9sh$mi"
+        $incl = if ($c.Name -eq 'fixture') { @('-Include', 'hermes-fix') } else { @('-Tier', 'memory') }
+        $inclSh = if ($c.Name -eq 'fixture') { '--include=hermes-fix' } else { '--tier=memory' }
+        $r = Invoke-Child (Join-Path $c.Dir 'install.ps1') (@('-Local', '-Ide', 'cursor') + $incl) @{ HOME = $hp; USERPROFILE = $hp }
+        Assert-That ($r.Code -eq 0) "[$($c.Name)] install.ps1 -Ide cursor exits 0"
+        $savedHome = $env:HOME
+        $env:HOME = $hb
+        try { $shOut = & bash (Join-Path $c.Dir 'install.sh') --local --ide=cursor $inclSh 2>&1 | Out-String; $shCode = $LASTEXITCODE } finally { $env:HOME = $savedHome }
+        Assert-That ($shCode -eq 0) "[$($c.Name)] install.sh --ide=cursor exits 0"
+        $psRules = Join-Path (Join-Path $hp '.cursor') 'rules'
+        $shRules = Join-Path (Join-Path $hb '.cursor') 'rules'
+        $same = @()
+        $diff = @()
+        foreach ($sk in $c.Skills) {
+            $a = Join-Path $psRules "$sk.mdc"
+            $b = Join-Path $shRules "$sk.mdc"
+            if ((Test-Path -LiteralPath $a) -and (Test-Path -LiteralPath $b) -and ((Get-MdcNormalised $a) -ceq (Get-MdcNormalised $b))) { $same += $sk } else { $diff += $sk }
+        }
+        Assert-That ($diff.Count -eq 0) "[$($c.Name)] .mdc is identical from both installers (sig line normalised): $($same.Count) same, differing: $($diff -join ', ')"
+        if ($c.Name -eq 'fixture') {
+            $got = Get-MdcNormalised (Join-Path $psRules 'hermes-fix.mdc')
+            $bodyGot = ($got -split "`n", 8)[7]
+            Assert-That ($bodyGot -ceq ("`n" + $fixBody)) 'fixture: both installers keep every body "---" line (only the frontmatter block is replaced)'
+        }
+    }
+} else { Skip-That 'cross-installer .mdc comparison: needs bash plus awk/cmp/sed/tr on a POSIX host' }
 
 # ===========================================================================
 Write-Host "`nWindows-only behaviour (junctions, Developer Mode symlinks, ACLs, 5.1 parsing) is NOT proven by this run."

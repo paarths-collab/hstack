@@ -1,36 +1,11 @@
 ---
 name: integration-linear
-description: Connect Linear (product/engineering issues, projects, cycles) to a self-hosted Hermes Agent over SSH. Wires Linear's first-party remote MCP server via static API-key-in-bearer-header. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Set up linear on a host-installed Hermes 0.22.5 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
 ---
 
-# /integration-linear — connect Linear to a remote Hermes (SSH-first)
+# /integration-linear — connect linear to Hermes over SSH
 
-You are the engineer connecting Linear to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
-
-1. Mint the Linear personal API key in the Linear UI.
-2. Confirm the key's scope (Read / Write / Admin, optionally team-restricted).
-
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
-
-**Honest auth picture (verified 2026-06):** Linear ships a hosted remote MCP at
-`https://mcp.linear.app/mcp`. Its **documented default** is OAuth 2.1 with dynamic
-client registration (browser flow — not headless-friendly). Linear's own MCP FAQ
-documents a supported alternative: pass an OAuth token *or a personal API key* in the
-`Authorization: Bearer <token>` header instead of the interactive flow
-(<https://linear.app/docs/mcp>). That static-bearer path is what we use here so the
-whole flow stays headless. If Linear ever removes header-based auth, fall back to an
-OAuth bridge (`mcp-remote`) which requires a one-time browser login.
-
-**Bearer asymmetry — the #1 Linear gotcha.** Linear's raw GraphQL API takes the
-personal API key with **no** prefix (`Authorization: <key>`). The MCP server takes the
-**same** key **with** `Bearer` (`Authorization: Bearer <key>`). Step 1 uses the
-no-Bearer form to validate the key; the MCP wiring uses the Bearer form. Mixing them
-returns 401.
-
----
+> **Compatibility:** source-verified for Hermes **0.22.5**, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
 
 ## Before you start — gather (ask once, in one batch)
 
@@ -40,267 +15,341 @@ returns 401.
 | `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
 | `$LINEAR_API_KEY` | Personal API key (`lin_api_...`) | <https://linear.app/settings/account/security> -> **Personal API keys** -> **New API key**. Pick the narrowest scope (Read / Write / Admin; optionally team-restricted) that covers what the agent should do. |
 
-Confirm SSH access before doing anything:
+
+Use one shell session. `DRY_RUN=1` runs the read-only gates and prints the plan, then exits before snapshot or configuration writes. `FORCE=1` permits replacing existing MCP configuration after snapshot; existing native skill directories are always preserved.
+
+
+## Step 0 — shared remote, lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-linear
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
   else
-    echo "FAIL: hermes not found on host or in container"; exit 1
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
+}
+# Reject line breaks, quote/backslash characters and controls: values also become curl config lines.
+secret_line_ok() {
+  [ -n "$1" ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^[!-~]+$' || return 1
+  case "$1" in *'"'*|*"'"*|*'\'*) return 1 ;; esac
+}
+# No response body or credential is logged. JSON errors on HTTP 200 are failures too.
+api_check() {
+  local reply
+  reply=$(remote 'curl -q -fsS --connect-timeout 10 --max-time 25 --config -' 2>/dev/null) || return 1
+  printf '%s' "$reply" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert not (isinstance(d,dict) and (d.get("errors") or d.get("error") or d.get("success") is False))' 2>/dev/null
+}
+# Extra native-skill artifacts are owned separately; canonical rollback still restores env/config bytes.
+restore_native_skill() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+p="$HOME/.hermes/skills/$SKILL_NAME-runtime"
+[ -f "$d/native-created" ] || exit 0
+[ "$(cat "$d/native-created")" = "$SKILL_NAME-runtime" ] || exit 1
+if [ -e "$p/SKILL.md" ] || [ -L "$p/SKILL.md" ]; then
+  [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ] && [ -f "$d/native.cksum" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ] || { echo "native skill changed; keep the active snapshot and inspect it" >&2; exit 1; }
+  # Never recursively delete this directory: a concurrent user file remains intact.
+  rm "$p/SKILL.md"
+fi
+[ ! -d "$p" ] || rmdir "$p"
+rm "$d/native-created" "$d/native.cksum"
+REMOTE
+}
+fail_change() {
+  echo "FAIL: $1. Restoring the previous configuration."
+  restore_native_skill || { echo "Native skill restoration failed; active recovery point retained." >&2; exit 1; }
+  rollback || { echo "Rollback incomplete; active recovery point retained." >&2; exit 1; }
+  exit 1
+}
+
 ```
 
-Expected: `0.15.x` or `0.17.x`.
-
-While we're here, validate the key against Linear's GraphQL API — the **no-Bearer**
-form. This catches a bad key before we touch any config:
+## Step 1 — verify SSH, Hermes version and host prerequisites
 
 ```bash
-VIEWER=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -X POST https://api.linear.app/graphql \
-    -H 'Authorization: $LINEAR_API_KEY' \
-    -H 'Content-Type: application/json' \
-    -d '{\"query\":\"{ viewer { id name email } }\"}'
-")
-echo "$VIEWER" | grep -q '"viewer"' \
-  || { echo "FAIL: GraphQL key check failed. Did you send Bearer to the raw API? Personal keys go raw, no prefix."; exit 1; }
+remote 'whoami; hostname' || { echo "ABORT: SSH failed. Nothing was written."; exit 1; }
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 || exit 1
+  hermes -p default --version
+') || { echo "ABORT: install Hermes on the VPS host first; container-only installations are unsupported. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure supports Hermes 0.22.5 only. Nothing was written."; exit 1;
+}
+remote 'command -v curl >/dev/null && command -v python3 >/dev/null' || {
+  echo "ABORT: install curl and python3 on the host first. Nothing was written."; exit 1;
+}
+
 ```
 
----
-
-## Step 2 — idempotency check (skip if already wired)
+## Step 2 — check ownership and an existing healthy integration
 
 ```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci linear" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Linear is already wired. Set FORCE=1 to rewire."
+if [ "${FORCE:-0}" != 1 ] && remote "hermes -p default mcp list | grep -E '^ *linear .*enabled'" >/dev/null 2>&1 && remote 'hermes -p default mcp test linear' >/dev/null 2>&1; then
+  echo "linear is enabled and passed native mcp test. Nothing was written."
   exit 0
 fi
 ```
 
----
+## Step 3 — HARD GATE: read-only credential and consent checks
 
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write MCP_LINEAR_API_KEY (length ${#LINEAR_API_KEY}, prefix ${LINEAR_API_KEY:0:8}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register MCP: hermes mcp add linear --url https://mcp.linear.app/mcp --auth-header Authorization --auth-scheme Bearer
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -i "registered.*linear"
-  6. Smoke test: POST https://mcp.linear.app/mcp tools/list -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
+All vendor calls in this step run from the VPS. Secrets travel over SSH stdin, not SSH
+arguments. A failed gate stops before `snapshot` and before any configuration write.
+The calls authenticate or read data; none sends a message, changes vendor state or
+performs a paid model request.
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set MCP_LINEAR_API_KEY '$LINEAR_API_KEY'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
+secret_line_ok "${LINEAR_API_KEY:-}" || { echo "ABORT: missing or unsafe LINEAR_API_KEY. Nothing was written."; exit 1; }
+{
+  printf 'url = "%s"\n' "https://api.linear.app/graphql"
+  printf 'header = "Authorization: %s"\n' "$LINEAR_API_KEY"
+  printf 'header = "Content-Type: application/json"\n'
+  printf 'data = "%s"\n' '{\"query\":\"{ viewer { id } }\"}'
+} | api_check || { echo "ABORT: read-only vendor credential check failed. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -F -- 'linear'" >/dev/null || { echo "ABORT: native catalog entry missing. Nothing was written."; exit 1; }
 ```
 
-Verify (returns `1`, NEVER the value):
+## Step 4 — review the dry run before the first write
 
 ```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MCP_LINEAR_API_KEY=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: MCP_LINEAR_API_KEY not written. Rolling back."; rollback; exit 1; }
+printf 'DRY RUN: configure %s on %s@%s; credential length=%s (value hidden).\n' "$SKILL_NAME" "$VPS_USER" "$VPS_IP" "${#LINEAR_API_KEY}"
+printf '%s\n' 'Snapshot env/config; write private values through stdin; register native MCP or publish a native skill; verify discovery; restart and require a new ready gateway instance; retire snapshot.'
+[ "${DRY_RUN:-0}" != 1 ] || exit 0
 ```
 
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; `lin_api_` keys are alnum but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^MCP_LINEAR_API_KEY=' ~/.hermes/.env || printf 'MCP_LINEAR_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^MCP_LINEAR_API_KEY=.*|MCP_LINEAR_API_KEY=$LINEAR_API_KEY|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
+Review the concrete plan. Continue under the user's existing setup authorization. Native
+OAuth may require the user to approve the vendor login in a browser; never fabricate
+that approval. Catalog tool exclusions remain those supplied by the pinned Hermes
+manifest. Do not replace OAuth with a short-lived bearer or invent a refresh cron.
 
----
-
-## Step 5 — register the Linear MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred — Linear's
-first-party hosted MCP accepts the static API key in the bearer header, so no OAuth
-bootstrap is needed.
-
-### Path A (preferred) — official remote MCP with Bearer header
+## Step 5 — snapshot and write private configuration
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add linear \
-    --url 'https://mcp.linear.app/mcp' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-"
-# Inject the real key with pipe delimiter (lin_api_ is alnum, but always use | for safety).
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$LINEAR_API_KEY\"'|g' ~/.hermes/config.yaml"
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
 ```
 
-The resulting `config.yaml` block must reference the env var indirectly — never inline
-the literal key:
+Secrets remain in `.env`, mode 600. Any references in `config.yaml` use `${VAR}`
+indirection. Never print a configured secret or use `sed` to inline it into YAML.
 
-```yaml
-linear:
-  url: https://mcp.linear.app/mcp
-  headers:
-    Authorization: Bearer ${MCP_LINEAR_API_KEY}
-  enabled: true
-```
-
-Use the streamable HTTP endpoint `https://mcp.linear.app/mcp`. The legacy
-`https://mcp.linear.app/sse` endpoint is being retired — do **not** wire it.
-
-### Path B (fallback) — generic HTTP tool against the Linear GraphQL API
-
-If the Hermes build is stdio-MCP-only or cannot reach the remote MCP, expose the raw
-GraphQL endpoint as a generic HTTP tool:
-
-- **Endpoint:** `POST https://api.linear.app/graphql`
-- **Auth header:** `Authorization: ${MCP_LINEAR_API_KEY}` (**no** `Bearer` — the raw GraphQL API rejects Bearer for personal keys)
-- **Content type:** `Content-Type: application/json`
-- **Body shape:** `{ "query": "...", "variables": { ... } }`
-
-Path B loses the bundled Linear tool catalogue (the MCP server pre-registers
-`list_issues`, `create_issue`, etc.); the agent has to write GraphQL by hand.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
+## Step 6 — install and verify the integration
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
+remote 'hermes -p default mcp install linear' || fail_change "native catalog install failed"
+# Native login may return exit 0 after an unsuccessful flow. mcp test below is required.
+if ! remote 'hermes -p default mcp test linear' >/dev/null 2>&1; then
+  remote 'hermes -p default mcp login linear' || fail_change "native OAuth login failed"
+fi
+remote "hermes -p default mcp list | grep -E '^ *linear .*enabled'" >/dev/null || fail_change "MCP is absent or disabled (an install/add exit 0 alone is not proof)"
+remote 'hermes -p default mcp test linear' >/dev/null 2>&1 || fail_change "MCP connection or tool discovery failed"
 ```
 
----
+Catalog MCPs use Hermes's own OAuth flow, endpoint and curated tool filters. Any custom
+stdio package is executed on the host with the user's permissions; review its published
+package/version before installation. Hermes parser verification establishes argument
+syntax, not third-party package behavior. A native REST skill is installed into Hermes's
+actual `skills/` directory and checked with `skills list`, rather than saved as inert
+API notes. Existing native skill files are preserved. On failure, only the checksummed
+file created by this run is removed; an edited or foreign file stops automatic cleanup.
 
-## Step 7 — verify registration in logs (poll up to 30s)
+## Step 7 — restart and require native readiness
 
 ```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*linear|MCP server.*linear.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: linear registered in gateway logs."
-    break
-  fi
-  sleep 5
-done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: linear not in logs after 30s. Rolling back."; rollback; exit 1; }
+gw_reload >/dev/null || fail_change "gateway did not restart into a new ready instance"
 ```
 
-Success looks like `MCP server 'linear' (HTTP): registered N tool(s): mcp_linear_list_issues, ...`.
+`gateway ensure --json` must exit 0 and report `"state":"ready"`; pending/draining
+states are retried. The helper captures the old instance even during draining and
+refuses to call the same process a successful reload. With live sessions, restart may
+refuse. Set `GW_INTERRUPT=1` only under the user's explicit permission to interrupt.
 
----
-
-## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
-
-Hit the MCP server's `tools/list` directly with the Bearer header — this is the same
-call Hermes makes internally, so it proves both the key and the wiring.
+## Step 8 — finish and keep recovery evidence
 
 ```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X POST 'https://mcp.linear.app/mcp' \
-    -H 'Accept: application/json, text/event-stream' \
-    -H 'Content-Type: application/json' \
-    -H \"Authorization: Bearer \$MCP_LINEAR_API_KEY\" \
-    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\",\"params\":{}}'
-")
-case "$HTTP" in
-  200) echo "OK: Linear MCP reachable and bearer key valid." ;;
-  401) echo "FAIL: bearer key rejected. Did the sed inject drop the Bearer prefix? Re-check Step 5."; rollback; exit 1 ;;
-  403) echo "FAIL: key valid but scope insufficient (e.g. read-only key on a write op). Re-mint with broader scope."; exit 1 ;;
-  429) echo "WARN: rate limited. Linear caps personal-key requests per user; back off and retry." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Linear MCP. Check manually." ;;
-esac
+finish || fail_change "snapshot retirement failed"
+echo "Setup complete: native discovery and gateway readiness verified; vendor live proof exists only if these checks actually ran on the user's host."
 ```
 
-Optional second check from the chat interface to prove end-to-end tool use:
+The procedure runs the read-only vendor gate before writing. For an end-to-end user
+acceptance check, ask Hermes to use the newly configured integration to read one visible
+record. Confirm the account/tenant/region is correct. That live result is separate from
+this repository's source/parser and sandbox evidence; do not claim it while authoring.
 
-```
-@<agent> using linear, list my assigned issues
-```
+## Recovery
 
-A valid result — even an empty list if nothing is assigned — is a pass.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
-rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove linear 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset MCP_LINEAR_API_KEY 2>/dev/null || \
-    sed -i '/^MCP_LINEAR_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Linear is no longer wired."
-}
-```
-
----
+Before `finish`, call `restore_native_skill` then `rollback` in this same shell to restore
+previous env/config bytes and remove only this run's native skill. A failed restoration
+keeps the active recovery point; repair the fault and retry. After successful `finish`,
+the previous snapshot is private at `.hstack-backup/$SKILL_NAME.prev`. Inspect it before
+manual undo; do not replace a newer active snapshot or remove an edited runtime skill.
+No vendor records are created by setup, so there is no vendor-side smoke-test data to
+clean up. Native OAuth caches are managed by Hermes and are outside the env/config
+snapshot: rollback does not revoke tokens or overwrite an existing OAuth authorization.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Bearer asymmetry: raw GraphQL vs MCP | GraphQL takes the key **raw**; MCP takes it with **Bearer**. Mixing returns 401. | Step 1 uses no-Bearer; Step 5/8 use Bearer. Don't cross-paste. |
-| 2 | Wiring the legacy `/sse` endpoint | Linear is retiring SSE; only streamable HTTP `/mcp` is supported | Always use `https://mcp.linear.app/mcp` |
-| 3 | OAuth is the documented default | Hosted MCP defaults to OAuth 2.1 + dynamic client registration (browser flow) | Use the API-key-in-header path; fall back to `mcp-remote` only if Linear removes header auth |
-| 4 | Read-only key on write tools | Create/comment/update tools return 403 | Match key scope to intended actions; prefer narrowest scope |
-| 5 | Key is user-scoped, not workspace-scoped | Agent sees only what that user can see (and only allowed teams) | Document this; mint a service-account user key if broader reach is needed |
-| 6 | Linear API rate limits | Personal-key requests are per-user (~few thousand/hour); complex GraphQL costs more; bursts get 429 | Back off on 429; batch queries; avoid tight loops |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` |
-| 9 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, referenced as `${MCP_LINEAR_API_KEY}` |
-| 10 | sed with `/` delimiter on tokens | `lin_api_` is safe today, but defensive habit matters across integrations | Always use `|` delimiter |
-| 11 | Container vs host confusion | Adding the key inside a container won't survive a rebuild | Always check `whoami; hostname`; key writes happen on host via `hermes config set` |
-
----
+| # | Pitfall | Correct behavior |
+|---|---------|------------------|
+| 1 | Wrong Hermes release or profile | Exact 0.22.5 host/default gate before writes; other installations need a separately reviewed procedure. |
+| 2 | Treating exit 0 from `mcp add`/login as connection proof | Require an enabled entry plus `mcp test`; cancellation and a saved disabled entry do not count. |
+| 3 | Putting secrets into SSH arguments or YAML | Send values as stdin, keep `.env` private and use variable references. |
+| 4 | Using a missing background flag or log substring as health | Use the shared restart/ensure helpers and require a changed instance ID. |
+| 5 | Replacing the previous secret on a failed reconfiguration | Snapshot exact bytes first, then restore both files; never just delete the key. |
+| 6 | Skipping the read-only preflight on a missing dependency | Abort before snapshot; install the documented host prerequisite and rerun. |
+| 7 | Overwriting a hand-authored Hermes skill | Refuse the existing path, preserve it, and remove only a new file with its recorded checksum. |
+| 8 | Confusing source tests with real service evidence | Record actual host/vendor acceptance separately; credentials, browser consent and a server are still required. |
+| 9 | Running write or paid smoke tests | Use only the read-only check; a write or paid request requires explicit task authorization. |
+| 10 | Confusing read-only-looking usernames with access enforcement | Verify server grants/ACLs; scoped accounts remain the real permission boundary. |
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `{ viewer { id name } }` against `https://api.linear.app/graphql` returned the user (raw, no Bearer)
-- [ ] `MCP_LINEAR_API_KEY` written to `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` and **not** echoed in chat
-- [ ] MCP registered via Path A (`https://mcp.linear.app/mcp` with `Authorization: Bearer ${MCP_LINEAR_API_KEY}`) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'linear'` within 30s
-- [ ] Smoke test: `POST https://mcp.linear.app/mcp tools/list` returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Hermes 0.22.5 host/default release verified before configuration changes.
+- [ ] Read-only vendor credential and consent gates passed from the target host.
+- [ ] Private credentials written over stdin with mode 600; config uses references.
+- [ ] Native catalog/custom MCP is enabled and passes `mcp test`, or the real runtime skill is discoverable.
+- [ ] Gateway restart produced a new ready instance through native JSON readiness.
+- [ ] Previous env/config bytes remain in a verified private snapshot.
+- [ ] User-visible integration read performed on the real host before claiming live success.

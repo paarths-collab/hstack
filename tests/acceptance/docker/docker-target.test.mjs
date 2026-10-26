@@ -38,7 +38,7 @@ const gated = (name, fn, { skip = GATE, timeout = 15 * 60_000 } = {}) =>
 after(async () => { await stopTarget(); });
 
 const check = (receipt, id) => receipt.checks.find((c) => c.id === id);
-const PIN = /^HERMES_VERSION=(.+)$/m.exec(readFileSync(path.join(REPO, "VERSIONS.txt"), "utf8"))[1].trim();
+const PIN = /^HERMES_LEGACY_FIXTURE_VERSION=(.+)$/m.exec(readFileSync(path.join(REPO, "VERSIONS.txt"), "utf8"))[1].trim();
 const ENV_KEYS = ["GITHUB_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_ALLOWED_USERS"];
 
 // ===============================================================================================
@@ -246,7 +246,7 @@ gated("transaction: forced cron failure after apply => rollback_required => rest
 }, { skip: TX_GATE });
 
 gated("transaction: gateway fault during apply, healthy at rollback => restored_verified with a reload recorded after the restore", async (t) => {
-  const sw = switchableTransport(t, "gateway-run");
+  const sw = switchableTransport(t, "gateway-restart");
   const { tx, before } = await applyWithFailure(t, sw);
   assert.equal(tx.receipt.apply.ops.find((o) => o.op_id === "gateway:reload").status, "failed");
   assert.equal(tx.receipt.apply.ops.find((o) => o.op_id === "skills:sync").status, "ok");
@@ -256,10 +256,8 @@ gated("transaction: gateway fault during apply, healthy at rollback => restored_
   assert.equal(rolled.ok, true, JSON.stringify(rolled));
   const receipt = await assertRestoredVerified(t, tx, before);
   const after = (await t.stubLog()).split("\n").filter(Boolean).slice(logBefore);
-  const stop = after.indexOf("gateway\tstop");
-  const run = after.indexOf("gateway\trun\t--daemon");
-  assert.ok(stop >= 0 && run > stop, `rollback reloaded the gateway with stop then run --daemon: ${after.join(" | ")}`);
-  assert.equal(after.some((l) => /restart/.test(l)), false, "never `gateway restart`");
+  assert.ok(after.includes("gateway\trestart"), `rollback reloaded the gateway with \`gateway restart\`: ${after.join(" | ")}`);
+  assert.equal(after.some((l) => /--daemon|gateway\trun|gateway\tstop/.test(l)), false, "`gateway run --daemon` does not exist; only `gateway restart` reloads");
   assert.equal((await t.cat('"$HOME/.hermes/gateway.state"')).trim(), "running");
   const env = await t.envText();
   assert.match(env, /^UNRELATED_SETTING=keep-me$/m);
@@ -268,7 +266,7 @@ gated("transaction: gateway fault during apply, healthy at rollback => restored_
 }, { skip: TX_GATE });
 
 gated("transaction: gateway keeps failing at rollback => manual_recovery_required, yet the files are restored byte-for-byte", async (t) => {
-  const { tx, before } = await applyWithFailure(t, t.transport({ env: { HSTACK_STUB_FAIL: "gateway-run" } }));
+  const { tx, before } = await applyWithFailure(t, t.transport({ env: { HSTACK_STUB_FAIL: "gateway-restart" } }));
   const rolled = await tx.rollback();
   assert.equal(rolled.ok, false);
   assert.equal(tx.state, "manual_recovery_required", "a failed reload must not be reported as restored_verified");
@@ -364,10 +362,11 @@ gated("transaction: a user edit of a managed key after apply => manual_recovery_
 //   S3  env: VPS_USER, VPS_IP, TELEGRAM_* and FORCE come from the test; the dry-run's "wait for confirmation" is
 //       prose, not code, so AUTO_APPROVE needs no shim. Nothing else is altered; Steps 1, 2, 4, 6, 7, 9 run too.
 //   S4  container side: ~/.local/bin gets `curl` (answers only getMe for the fake good token, logs token LENGTH)
-//       and `hermes` becomes a shim accepting only the default-profile forms, `config set K -- V`,
-//       `gateway status`, `logs gateway -n N` and fixture `gateway ensure --json --timeout 60`.
-//       Ensure delegates to the legacy stub's run command and labels readiness as test-double evidence.
-//       The shared legacy stub/version pin remain unchanged; this is not live candidate validation.
+//       and `hermes` becomes a shim accepting only the default-profile forms,
+//       a Python argparse mirror of the v0.22.5 commands the skill calls (`config set/unset`, `gateway
+//       status/restart/ensure`, `logs gateway -n N --since Ns`, `send`, `pairing list`; undeclared options exit 2),
+//       with a per-restart instance_id. State changes are delegated to the legacy stub, which keeps its own version.
+//       This is a test double, not live validation of Hermes 0.22.5.
 
 const SKILL = path.join(REPO, "skills", "platform-telegram", "SKILL.md");
 
@@ -511,13 +510,14 @@ gated("telegram skill: FORCE=1 rerun with a forced gateway failure rolls back; t
   const userState = () => t.treeHash('"$HOME/.hermes"', [".hstack", ".hstack-backup", "cron.seq", "gateway.state", "outbox.log"]);
   const stateBefore = await userState();
 
-  const r = await runSkill(t, { token: TG.next, goodToken: TG.next, force: true, extraKnobs: { HSTACK_STUB_FAIL: "gateway-run" } });
+  const r = await runSkill(t, { token: TG.next, goodToken: TG.next, force: true, extraKnobs: { HSTACK_STUB_FAIL: "gateway-restart" } });
   assert.equal(r.code, 1, r.output);
-  assert.match(r.output, /FAIL: gateway did not start\. Rolling back\./);
-  // A nonzero native `gateway ensure` triggers rollback's set -e/ERR path
-  // before the later status probe. File restoration is checked below; failed
-  // lifecycle recovery must retain the active snapshot and never claim success.
-  assert.match(r.output, /rollback: restoration failed; active snapshot retained for recovery\./);
+  assert.match(r.output, /gw_reload: gateway restart failed or was refused/, "the skill's gw_reload reports the failed `gateway restart --detach`");
+  assert.match(r.output, /FAIL: gateway did not restart ready\. Rolling back\./);
+  // The rollback restores the files, then reloads the gateway with the same gw_reload. The fault is still injected, so
+  // the reload fails: the skill must say files were restored but the gateway did NOT come back, keep the active
+  // snapshot for recovery and never claim a successful restore.
+  assert.match(r.output, /rollback: files restored, but the gateway did NOT come back ready/);
   assert.doesNotMatch(r.output, /rollback: restored ~\/\.hermes/);
   assert.equal(r.output.includes(TG.next) || r.output.includes(TG.good), false, "no token printed");
 

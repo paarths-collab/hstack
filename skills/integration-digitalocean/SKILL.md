@@ -1,318 +1,339 @@
 ---
 name: integration-digitalocean
-description: Connect DigitalOcean (Droplets, App Platform, Databases, Kubernetes, Spaces, and more) to a self-hosted Hermes Agent over SSH via DigitalOcean's first-party remote MCP servers. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect digitalocean to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-digitalocean — connect DigitalOcean to a remote Hermes (SSH-first)
+# /integration-digitalocean — connect digitalocean over SSH
 
-You are the engineer connecting DigitalOcean to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the Personal Access Token (PAT) in the DigitalOcean control panel.
-2. Pick which DigitalOcean service(s) to wire (each is a separate MCP endpoint).
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. DO_TOKEN (dop_v1_...) and DO_SERVICE: droplets, apps, databases, doks, spaces, networking, docr, volumes, accounts or insights. Each selected service has its own MCP name; no infrastructure is created.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** DigitalOcean ships first-party **remote MCP
-servers** — one HTTPS endpoint per service (Droplets, Apps, Databases, etc.) — all of which
-accept a static PAT as a plain `Authorization: Bearer` header. No OAuth dance, no refresh
-flow. The docs call PATs "ordinary OAuth access tokens," but operationally they are a static
-secret you mint once and store. Each service is its own MCP server; wire one at a time and
-each gets its own Hermes name and env var. The **Documentation** server
-(`https://docs.mcp.digitalocean.com/mcp`) needs **no** token.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$DO_TOKEN` | DigitalOcean PAT (prefixed `dop_v1_`) | <https://cloud.digitalocean.com/account/api/tokens> → Generate New Token → Full Access or scoped |
-| `$DO_SERVICE` | Which service to wire (e.g. `droplets`, `apps`, `databases`) | See table below |
-
-DigitalOcean MCP endpoints (pick one per wiring run; share the same PAT across all):
-
-| Service | MCP URL | Hermes name |
-|---------|---------|-------------|
-| Droplets | `https://droplets.mcp.digitalocean.com/mcp` | `do-droplets` |
-| App Platform | `https://apps.mcp.digitalocean.com/mcp` | `do-apps` |
-| Databases | `https://databases.mcp.digitalocean.com/mcp` | `do-databases` |
-| Kubernetes (DOKS) | `https://doks.mcp.digitalocean.com/mcp` | `do-doks` |
-| Spaces | `https://spaces.mcp.digitalocean.com/mcp` | `do-spaces` |
-| Networking | `https://networking.mcp.digitalocean.com/mcp` | `do-networking` |
-| Container Registry | `https://docr.mcp.digitalocean.com/mcp` | `do-docr` |
-| Volumes (Block Storage) | `https://volumes.mcp.digitalocean.com/mcp` | `do-volumes` |
-| Accounts | `https://accounts.mcp.digitalocean.com/mcp` | `do-accounts` |
-| Insights | `https://insights.mcp.digitalocean.com/mcp` | `do-insights` |
-
-Full list of 19+ endpoints: <https://docs.digitalocean.com/reference/mcp/>.
-
-Set shell vars from answers:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-DO_SERVICE=droplets                                         # or apps, databases, doks, ...
-DO_NAME="do-$DO_SERVICE"                                    # Hermes MCP name
-DO_URL="https://${DO_SERVICE}.mcp.digitalocean.com/mcp"     # service endpoint
-DO_ENV_VAR="DO_$(echo "$DO_SERVICE" | tr '[:lower:]' '[:upper:]')_TOKEN"
-```
-
-Confirm SSH access before doing anything:
-
-```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci '$DO_NAME'" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "$DO_NAME is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
-To wire multiple services, run this skill once per service — each gets its own
-idempotency check, name, and env var.
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write $DO_ENV_VAR (length ${#DO_TOKEN}, prefix ${DO_TOKEN:0:7}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register MCP: hermes mcp add $DO_NAME --url $DO_URL --auth header
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -iE "registered.*$DO_NAME"
-  6. Smoke test: GET https://api.digitalocean.com/v2/account → expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set $DO_ENV_VAR '$DO_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^$DO_ENV_VAR=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: $DO_ENV_VAR not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; `dop_v1_` tokens contain alnum/underscore but the pattern is safe for any token):
->
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^$DO_ENV_VAR=' ~/.hermes/.env || printf '%s=\n' '$DO_ENV_VAR' >> ~/.hermes/.env
->   sed -i 's|^$DO_ENV_VAR=.*|$DO_ENV_VAR=$DO_TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
-The token lives **only** in `~/.hermes/.env`. `config.yaml` holds only the
-`${DO_<SERVICE>_TOKEN}` placeholder. Never put the token in `config.yaml` and never paste
-it into chat.
-
----
-
-## Step 5 — register the DigitalOcean MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred — DigitalOcean's
-remote MCP works out of the box with bearer auth.
-
-### Path A (preferred) — first-party remote MCP server with bearer header
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add $DO_NAME \
-    --url '$DO_URL' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-"
-# Inject the real token with pipe delimiter (PATs are alnum/underscore but be safe).
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$DO_TOKEN\"'|g' ~/.hermes/config.yaml"
-```
-
-Optional pre-flight: confirm the endpoint+token before registering. DigitalOcean only
-supports the bearer-header form, so the full 5-variant probe matrix from
-`/hermes-mcp-add` is overkill here — one initialize call is enough:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  H='Accept: application/json, text/event-stream'
-  C='Content-Type: application/json'
-  INIT='{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"probe\",\"version\":\"0\"}}}'
-  curl -sS -o /dev/null -w 'bearer = %{http_code}\n' \
-    -X POST -H \"\$H\" -H \"\$C\" -H \"Authorization: Bearer \$$DO_ENV_VAR\" \
-    -d \"\$INIT\" '$DO_URL'
-"
-```
-
-`200` confirms endpoint + token; `401`/`403` means the token is wrong or lacks the scope
-for this service.
-
-### Path B (fallback) — generic HTTP tool against the DigitalOcean REST API
-
-If the Hermes build is stdio-MCP-only and cannot reach remote MCP endpoints:
-
-- **Base URL:** `https://api.digitalocean.com/v2`
-- **Auth header:** `Authorization: Bearer ${DO_<SERVICE>_TOKEN}`
-- **Content type:** `Content-Type: application/json`
-- **Per-service paths:** `/droplets`, `/apps`, `/databases`, `/kubernetes/clusters`,
-  `/spaces`, `/registry`, `/volumes`, `/account`, etc.
-
-API reference: <https://docs.digitalocean.com/reference/api/>.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*$DO_NAME|MCP server.*$DO_NAME.*(ok|ready|registered)"; then
-    REGISTERED=1
-    echo "OK: $DO_NAME registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-digitalocean
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: $DO_NAME not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-Expect a line like `MCP server 'do-droplets' (HTTP): registered N tool(s): ...`.
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X GET 'https://api.digitalocean.com/v2/account' \
-    -H \"Authorization: Bearer \$$DO_ENV_VAR\" \
-    -H 'Content-Type: application/json'
-")
-case "$HTTP" in
-  200) echo "OK: DigitalOcean API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or expired. Re-check Step 4 or mint a new PAT."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but missing scope for $DO_SERVICE. Re-mint with Full Access or correct custom scope."; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from DigitalOcean API. Check manually." ;;
-esac
-```
-
-A `200` returning a JSON `account` object proves the token authenticates. End-to-end proof
-from the chat interface (an empty-but-valid result is a pass):
-
-```
-@<agent> using do-droplets, list my droplets
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove $DO_NAME 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset $DO_ENV_VAR 2>/dev/null || \
-    sed -i '/^'\"$DO_ENV_VAR\"'=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. $DO_NAME is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=digitalocean
+MCP_DIGITALOCEAN_API_KEY=${DO_TOKEN:-${MCP_DIGITALOCEAN_API_KEY:-}}
+DO_SERVICE=${DO_SERVICE:-droplets}
+case "$DO_SERVICE" in droplets|apps|databases|doks|spaces|networking|docr|volumes|accounts|insights) ;; *) echo "ABORT: unsupported DO_SERVICE. Nothing was written."; exit 1 ;; esac
+MCP_NAME="do-$DO_SERVICE"
+DO_ENV_VAR=$(printf 'MCP_DO_%s_API_KEY' "$DO_SERVICE" | tr '[:lower:]' '[:upper:]')
+MCP_URL="https://$DO_SERVICE.mcp.digitalocean.com/mcp"
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${MCP_DIGITALOCEAN_API_KEY:-}" || { echo "ABORT: MCP_DIGITALOCEAN_API_KEY is empty or unsafe. Nothing was written."; exit 1; }
+case "$MCP_DIGITALOCEAN_API_KEY" in dop_v1_*) ;; *) echo "ABORT: DigitalOcean PAT required. Nothing was written."; exit 1 ;; esac
+printf '%s\n' "${MCP_DIGITALOCEAN_API_KEY:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'MCP_DIGITALOCEAN_API_KEY'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.digitalocean.com/v2/account'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'MCP_DIGITALOCEAN_API_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: digitalocean; path: http.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env "$DO_ENV_VAR" "${MCP_DIGITALOCEAN_API_KEY:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default config set mcp_servers.$MCP_NAME.url '$MCP_URL'" >/dev/null 2>&1 || { rollback; exit 1; }
+MCP_HEADER="Bearer \${$DO_ENV_VAR}"
+remote "hermes -p default config set mcp_servers.$MCP_NAME.headers.Authorization '$MCP_HEADER'" >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default config set mcp_servers.$MCP_NAME.enabled true" >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: HTTP entry is not enabled."; rollback; exit 1; }
+```
+
+This uses the native `mcp_servers` schema. Custom header names and credential references are preserved; the generic Bearer header wizard cannot express every vendor. Config contains references, never literal credentials.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote "HSTACK_DO_KEY='$DO_ENV_VAR' "'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+d["MCP_DIGITALOCEAN_API_KEY"]=d[os.environ["HSTACK_DO_KEY"]]
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.digitalocean.com/v2/account'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'MCP_DIGITALOCEAN_API_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-digitalocean.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Treating PATs as OAuth tokens | Docs call them "ordinary OAuth access tokens" but they DON'T refresh | Treat as a static secret; if it expires, mint a new one |
-| 2 | Scope missing returns 403, not 401 | A custom-scoped PAT can `initialize` but 403 on a real tool call | Re-mint with Full Access or add the missing scope (e.g. `droplet:read`) |
-| 3 | Wiring one service and expecting all | There is no single "DigitalOcean MCP" endpoint | One MCP server per service; run this skill per service |
-| 4 | Token expiry | PATs can be created with an expiration; silent 401 on previously-working calls | Check expiry in the control panel; mint a new one |
-| 5 | Confusing Spaces PAT with Spaces S3 keys | Spaces MCP uses the PAT; raw bucket access (S3 API) uses separate keys | Don't conflate; mint Spaces keys separately if needed |
-| 6 | Token shown only once | Lost token can't be re-displayed | User must generate a new one |
-| 7 | Wiring the wrong service URL | Droplet tools aren't on the Databases server | Match `$DO_SERVICE` to the table; missing tool = wrong endpoint |
-| 8 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 9 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` |
-| 10 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 11 | sed with `/` delimiter on tokens | Generic tokens can contain `/+=`; sed breaks | Always use `\|` delimiter |
-| 12 | Container vs host confusion | Running `hermes` inside a container vs on the host gives different config paths | Step 1 detects both layers |
-| 13 | Hermes not running when SSH connects | First call hangs forever | Step 1 hard-gates on version check |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Service choice | Each DigitalOcean service has a separate URL/name | Select an allowed DO_SERVICE |
+| 2 | PAT type | The account API requires an intended DigitalOcean PAT | Use scoped dop_v1_ credentials |
+| 3 | Shared token | Each selected service has its own private MCP_DO_SERVICE_API_KEY | Rotating one service key does not rewrite another service credential |
+| 4 | Service entitlement | An account read does not prove every MCP capability | Require service-specific mcp test |
+| 5 | Old entry | Changing a URL must not retain a stale stdio command | Remove the old selected entry inside the transaction |
+| 6 | Infrastructure costs | Tool availability does not authorize resource creation | Require explicit requested operations |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed for `$DO_NAME` (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `$DO_ENV_VAR` written to `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] MCP registered via Path A (remote HTTP MCP) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s)` for `$DO_NAME` within 30s
-- [ ] Smoke test: `GET /v2/account` returned `200` with a JSON `account` object
-- [ ] Token never appeared in chat or `config.yaml`; rotate if exposed
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-- [ ] If wiring multiple services, repeat steps 2–8 per service (same PAT, different `$DO_SERVICE`)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

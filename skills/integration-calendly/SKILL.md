@@ -1,288 +1,337 @@
 ---
 name: integration-calendly
-description: Connect Calendly (event types, scheduled events, invitees, availability) to a self-hosted Hermes Agent over SSH using a static personal access token against the REST API. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect calendly to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-calendly — connect Calendly to a remote Hermes (SSH-first)
+# /integration-calendly — connect calendly over SSH
 
-You are the engineer connecting Calendly to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. Calendly is the agent's scheduling surface: event types,
-booked events, invitee details, one-off links, availability windows. The user only does
-the one thing a machine cannot: mint the personal access token in the Calendly UI.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-Everything else — token storage, REST wiring (or community MCP if available), gateway
-reload, verification — runs on the VPS via SSH, idempotently.
+## Before you start — gather (ask once)
 
-**Honest auth picture (verified 2026-06):** Calendly ships an official hosted remote MCP
-at `https://mcp.calendly.com`, but it is **OAuth-only** — Calendly's docs state the server
-uses Dynamic Client Registration (RFC 7591) with OAuth 2.1 Authorization Code + PKCE, and
-explicitly list "Non-OAuth bearer tokens (e.g. personal access tokens)" under **Not
-Supported Today**. Self-hosting is also "not supported." That kills the one-click headless
-path for a server-side agent, so we do **not** wire the hosted MCP. **No first-party
-static-token MCP server verified as of 2026-06.** We use the REST API with a personal
-access token (PAT) — the supported headless mode.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Authorize the intended Calendly account through native OAuth; a personal access token is not used by this path.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-See <https://developer.calendly.com/calendly-mcp-server> (MCP auth model) and
-<https://developer.calendly.com/how-to-authenticate-with-personal-access-tokens> (PAT flow).
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$CALENDLY_TOKEN` | Personal access token (opaque bearer) | <https://calendly.com/integrations/api_webhooks> -> **Personal access tokens** -> **Generate new token** -> name it `hermes-agent` -> **Copy token**. Calendly does **not** redisplay PATs; if lost, revoke and remint. |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci calendly" || echo 0)
-HAS_SECRET=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CALENDLY_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if { [ "$ALREADY" -gt 0 ] || [ "$HAS_SECRET" -gt 0 ]; } && [ "${FORCE:-0}" != "1" ]; then
-  echo "Calendly is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN -- the following will happen on $VPS_USER@$VPS_IP:
-  1. Write CALENDLY_TOKEN (length ${#CALENDLY_TOKEN}, prefix ${CALENDLY_TOKEN:0:4}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Wire Calendly via REST (https://api.calendly.com) -- hosted MCP is OAuth-only and skipped
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -i "calendly" (env reload signal)
-  6. Smoke test: GET https://api.calendly.com/users/me -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set CALENDLY_TOKEN '$CALENDLY_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^CALENDLY_TOKEN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: CALENDLY_TOKEN not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; Calendly PATs are opaque and may contain `.`, `_`, `-`, `=`):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^CALENDLY_TOKEN=' ~/.hermes/.env || printf 'CALENDLY_TOKEN=\n' >> ~/.hermes/.env
->   sed -i 's|^CALENDLY_TOKEN=.*|CALENDLY_TOKEN=$CALENDLY_TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — wire Calendly (REST is the supported headless path)
-
-Pick the path that matches what is currently shipping. Path B is the verified default.
-
-### Path A (only if a community static-token MCP server is verified)
-
-If/when a community MCP server for Calendly with PAT/bearer auth is verified, register it:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add calendly \
-    --url '<community-mcp-url>' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-"
-# Inject real token with pipe delimiter (Calendly PATs may contain /+=)
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$CALENDLY_TOKEN\"'|g' ~/.hermes/config.yaml"
-```
-
-Do **not** point this at `https://mcp.calendly.com` -- that endpoint is OAuth-only (DCR +
-PKCE) and rejects bearer tokens.
-
-### Path B (verified default) — generic HTTP tool against the Calendly v2 REST API
-
-- **Base URL:** `https://api.calendly.com`
-- **Auth header:** `Authorization: Bearer ${CALENDLY_TOKEN}`
-- **Content type:** `Content-Type: application/json`
-
-Endpoints the agent will need:
-
-| Verb | Path | Purpose |
-|------|------|---------|
-| GET  | `/users/me` | resolve the current user URI (cache it) |
-| GET  | `/event_types?user=<user_uri>` | list bookable event types |
-| GET  | `/scheduled_events?user=<user_uri>&min_start_time=<ISO>&status=active` | upcoming meetings |
-| GET  | `/scheduled_events/{uuid}/invitees` | invitee email, name, answers |
-| POST | `/scheduling_links` | mint a one-off booking link for an event type |
-| GET  | `/user_availability_schedules?user=<user_uri>` | working hours |
-| GET  | `/event_type_available_times?event_type=<uri>&start_time=<ISO>&end_time=<ISO>` | open slots (max 7-day window) |
-
-The token reference stays in `~/.hermes/.env`; HTTP tool definitions read it as
-`${CALENDLY_TOKEN}` -- never inline the value.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify the gateway picked up the new env (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*calendly|gateway.*ready|env.*reloaded"; then
-    REGISTERED=1
-    echo "OK: gateway is up and env is reloaded."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-calendly
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: gateway did not signal ready in 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test (inside the VPS so the token stays on the box)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  set -a; . ~/.hermes/.env; set +a
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X GET 'https://api.calendly.com/users/me' \
-    -H \"Authorization: Bearer \$CALENDLY_TOKEN\" \
-    -H 'Content-Type: application/json'
-")
-case "$HTTP" in
-  200) echo "OK: Calendly API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but scope/plan blocks /users/me. Confirm plan tier."; exit 1 ;;
-  429) echo "WARN: rate limited. Honor Retry-After and rerun smoke test." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Calendly API. Check manually." ;;
-esac
-```
-
-Optional second probe (listing scheduled events end-to-end):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -a; . ~/.hermes/.env; set +a
-  USER_URI=\$(curl -sS \
-    -H \"Authorization: Bearer \$CALENDLY_TOKEN\" \
-    'https://api.calendly.com/users/me' \
-    | sed -n 's/.*\"uri\":\"\\([^\"]*\\)\".*/\\1/p' | head -1)
-  curl -sS -o /dev/null -w 'scheduled_events=%{http_code}\n' \
-    -H \"Authorization: Bearer \$CALENDLY_TOKEN\" \
-    \"https://api.calendly.com/scheduled_events?user=\$USER_URI&status=active&count=1\"
-"
-```
-
-`200` with a `collection` array (empty is fine) = the agent can read Calendly.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove calendly 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset CALENDLY_TOKEN 2>/dev/null || \
-    sed -i '/^CALENDLY_TOKEN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Calendly is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/calendly.json mcp-tokens/calendly.client.json mcp-tokens/calendly.meta.json mcp-tokens/calendly.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/calendly.json mcp-tokens/calendly.client.json mcp-tokens/calendly.meta.json mcp-tokens/calendly.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/calendly.json mcp-tokens/calendly.client.json mcp-tokens/calendly.meta.json mcp-tokens/calendly.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=calendly
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])calendly([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
+```
+
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: calendly; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default mcp install calendly' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *calendly .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login calendly`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-calendly.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring `mcp.calendly.com` with a PAT | The hosted MCP is **OAuth-only** (DCR + PKCE); bearer tokens are rejected | Use REST (Path B) or a verified community MCP (Path A) |
-| 2 | Lost the token | Calendly does not redisplay PATs after generation | Save to `~/.hermes/.env` immediately; if lost, revoke and remint |
-| 3 | Calls return `403` on listing endpoints | Many list endpoints require a `user` (or `organization`) URI query param | Always pass `?user=<uri>` resolved from `/users/me` |
-| 4 | `event_type_available_times` returns `400` | Window is capped at 7 days and times must be ISO 8601 UTC | Send `start_time`/`end_time` as `YYYY-MM-DDTHH:MM:SS.000000Z`, <=7 days apart |
-| 5 | Token has narrower scope than expected | PATs inherit the minting user's plan; Teams/Enterprise endpoints fail on Free | Confirm plan tier matches the endpoint (org scope needs Teams+) |
-| 6 | Rate limits | Calendly throttles per-token; bursts get `429` with `Retry-After` | Backoff on `429`; honor `Retry-After` |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` |
-| 9 | Secret in `config.yaml` or compose-level `.env` | Wrong file -> world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 10 | sed with `/` delimiter on tokens | PATs may contain `/+=` | Always use `\|` delimiter |
-| 11 | Container vs host confusion | Keys/config added inside a container are invisible to host sshd; commands aimed at the host miss the container runtime | Check `whoami; hostname` before assuming layer |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Personal token | The catalogue endpoint uses OAuth | Do not pass a PAT as a Bearer replacement |
+| 2 | Account mismatch | Schedules belong to the authorized Calendly identity | Confirm account during authorization |
+| 3 | Discovery tools | The native manifest excludes skill-loading tools | Preserve native exclusions |
+| 4 | Booking changes | MCP exposes account capabilities beyond a read | Require a specific user request before mutation |
+| 5 | Callback forwarding | The browser needs the VPS callback endpoint | Forward the port selected by Hermes |
+| 6 | Saved entry | Installed does not mean authenticated | Require mcp test |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/calendly/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/calendly/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `CALENDLY_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Calendly wired via REST `https://api.calendly.com` with `Authorization: Bearer ${CALENDLY_TOKEN}` (or community MCP if verified)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show gateway ready / env reloaded within 30s
-- [ ] Smoke test: `GET /users/me` returned `200`; optional `/scheduled_events` returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

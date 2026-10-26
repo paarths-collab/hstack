@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { main } from "../../packages/acceptance/cli.js";
 import { deriveExecutionGraph, planHash } from "../../packages/acceptance/untrusted.js";
@@ -138,4 +140,31 @@ test("validate-receipt always states transport_used and warns loudly about simul
     assert.doesNotMatch(real.out, /SIMULATED/);
     assert.match(real.out, /declared-unverified against real Hermes/, "an ssh run is still against an unverified adapter surface");
   });
+});
+
+// The npm `bin` entry (node_modules/.bin/hstack-acceptance) is a symlink, and so is macOS /tmp; Node resolves
+// import.meta.url to the real path while process.argv[1] stays as typed. The entry guard must compare real paths,
+// otherwise main() is skipped and the process exits 0 without output, even for an invalid receipt.
+test("the CLI entry point runs through a symlinked file or a symlinked directory and reports an invalid receipt", async () => {
+  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/acceptance/cli.js");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hstack-cli-link-"));
+  try {
+    writeFileSync(path.join(dir, "bad.json"), '{"state":"verified"}');
+    const fileLink = path.join(dir, "hstack-acceptance");
+    symlinkSync(cli, fileLink);
+    const dirLink = path.join(dir, "pkg");
+    symlinkSync(path.dirname(cli), dirLink, "dir");
+    const chained = path.join(dir, "bin-shim");
+    symlinkSync(fileLink, chained);
+    for (const entry of [cli, fileLink, path.join(dirLink, "cli.js"), chained]) {
+      const result = spawnSync(process.execPath, [entry, "validate-receipt", path.join(dir, "bad.json")], { encoding: "utf8", timeout: 30_000 });
+      assert.equal(result.status, 1, `${entry}: ${result.stdout}${result.stderr}`);
+      assert.match(result.stdout + result.stderr, /INVALID RECEIPT/, entry);
+    }
+    const usage = spawnSync(process.execPath, [fileLink], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(usage.status, 2, "a bare invocation through a symlink prints usage and exits 2");
+    assert.match(usage.stdout + usage.stderr, /usage:/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,362 +1,345 @@
 ---
 name: integration-aws
-description: Connect AWS (EC2, S3, Lambda, and all 15000+ AWS APIs) to a self-hosted Hermes Agent over SSH, via the managed AWS MCP server reached through the SigV4-signing mcp-proxy-for-aws stdio proxy. Idempotent and rollback-safe. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI).
+description: Connect aws to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-aws — connect AWS to a remote Hermes (SSH-first)
+# /integration-aws — connect aws over SSH
 
-You are the engineer connecting AWS to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. Every command runs on the VPS, not on the local machine.
-The user only does the two things a machine cannot: mint the IAM credentials and pick
-the operating region.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-**Honest auth picture (verified 2026-06):** AWS does NOT fit the plain bearer-header
-HTTP MCP pattern. AWS ships a first-party **managed remote MCP server**
-(`https://aws-mcp.<region>.api.aws/mcp`, GA 2026-05) but it authenticates with **IAM
-SigV4**, not a static bearer token — the MCP spec only standardizes OAuth 2.1, which
-is why the shim exists. You reach it through a small **stdio proxy**
-(`mcp-proxy-for-aws`, run via `uvx`) that signs each request with AWS credentials.
-So the wiring is: install `uvx` inside the container, register the proxy as a
-**stdio command MCP** in Hermes, and put AWS credentials in `~/.hermes/.env`. The
-hosted `aws-mcp.api.aws` URL CANNOT be wired straight into a bearer-header HTTP MCP
-flow — it will 401 every time.
+## Before you start — gather (ask once)
 
----
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Existing AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, optional AWS_SESSION_TOKEN and AWS_REGION. Temporary ASIA credentials require their session token. aws CLI and uvx must already exist on the host; scoped IAM is chosen by the user.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$AWS_KEY` | AWS access key ID (`AKIA...` long-term or `ASIA...` temporary) | <https://console.aws.amazon.com/iam/home#/security_credentials> or IAM → Users → `<user>` → Security credentials → Create access key |
-| `$AWS_SECRET` | AWS secret access key | Shown ONCE at key creation — copy immediately |
-| `$AWS_TOKEN` | AWS session token (only if temporary creds) | From `aws sts ...`, SSO, or assumed role |
-| `$OP_REGION` | Default operating region (e.g. `us-east-1`) | User's choice |
-| `$ENDPOINT` | MCP endpoint region URL | `https://aws-mcp.us-east-1.api.aws/mcp` or `https://aws-mcp.eu-central-1.api.aws/mcp` |
-
-**Credential preference:** temporary credentials (with session token, short-lived) >
-long-term `AKIA` keys. AWS explicitly discourages long-term keys. Whatever you use,
-scope the IAM principal to **least privilege** (read-only is a sane default).
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`. If Hermes runs in a container, capture the agent
-container name for later steps:
-
-```bash
-AGENT=$(ssh "$VPS_USER@$VPS_IP" "docker ps --filter name=hermes --format '{{.Names}}' | head -1")
-```
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci aws" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "AWS is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
-Also remove any conflicting older AWS servers — AWS recommends the managed server
-replace them, and duplicate tools confuse the agent:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes mcp remove aws-api-mcp-server 2>/dev/null || true"
-ssh "$VPS_USER@$VPS_IP" "hermes mcp remove aws-knowledge-mcp-server 2>/dev/null || true"
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Ensure 'uvx' is installed for the hermes user inside the container
-  2. Write AWS_ACCESS_KEY_ID    (length ${#AWS_KEY},    prefix ${AWS_KEY:0:4}...)
-     Write AWS_SECRET_ACCESS_KEY (length ${#AWS_SECRET}, prefix ${AWS_SECRET:0:4}...)
-     Write AWS_SESSION_TOKEN     (length ${#AWS_TOKEN},  prefix ${AWS_TOKEN:0:4}...) [if set]
-     Write AWS_REGION=$OP_REGION
-     via 'hermes config set' into ~/.hermes/.env
-  3. chmod 600 ~/.hermes/.env
-  4. Register MCP: hermes mcp add aws --command uvx --arg mcp-proxy-for-aws==1.6.2 --arg $ENDPOINT --arg --metadata --arg AWS_REGION=$OP_REGION
-  5. Reload gateway: hermes gateway stop && hermes gateway run
-  6. Verify in logs: grep -i "registered.*aws"
-  7. Smoke test: call_aws sts get-caller-identity → expect a JSON identity
-
-Secrets are NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the AWS credentials (chmod 600, no echo, no logging)
-
-The proxy signs each request with credentials inherited from the environment. Write
-them via `hermes config set` so they land in `~/.hermes/.env` (or `/opt/data/.env`
-inside the container) and the proxy subprocess inherits them. Never `echo >>`,
-never `config.yaml`, never chat.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set AWS_ACCESS_KEY_ID '$AWS_KEY'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AWS_SECRET_ACCESS_KEY '$AWS_SECRET'"
-if [ -n "$AWS_TOKEN" ]; then
-  ssh "$VPS_USER@$VPS_IP" "hermes config set AWS_SESSION_TOKEN '$AWS_TOKEN'"
-fi
-ssh "$VPS_USER@$VPS_IP" "hermes config set AWS_REGION '$OP_REGION'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns count of names only, NEVER the values):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|REGION)=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" -ge 3 ] || { echo "FAIL: AWS keys not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, write directly with a
-> `|`-delimited sed (AWS secrets contain `/+=` — slash delimiter will break):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   f=~/.hermes/.env
->   set_kv() { grep -q \"^\$1=\" \"\$f\" && sed -i \"s|^\$1=.*|\$1=\$2|\" \"\$f\" || printf '%s=%s\n' \"\$1\" \"\$2\" >> \"\$f\"; }
->   set_kv AWS_ACCESS_KEY_ID '$AWS_KEY'
->   set_kv AWS_SECRET_ACCESS_KEY '$AWS_SECRET'
->   set_kv AWS_REGION '$OP_REGION'
->   chmod 600 \"\$f\"
-> "
-> ```
-
-**Safe defaults — strongly recommended:** add the proxy's safety flags so blast
-radius is bounded by default. The proxy reads these from the env:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set READ_OPERATIONS_ONLY 'true'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set REQUIRE_MUTATION_CONSENT 'true'"
-```
-
----
-
-## Step 5 — register the MCP server
-
-AWS is a **stdio command** server (Hermes spawns the proxy, which holds the
-HTTPS+SigV4 connection to AWS). Path A is preferred. Path B is the no-proxy
-fallback if `uvx` cannot be installed in the container.
-
-### Path A (preferred) — `mcp-proxy-for-aws` as a stdio MCP
-
-First, ensure `uvx` is available to the hermes user inside the container:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  docker exec -u hermes '$AGENT' sh -c 'command -v uvx' \
-    || docker exec -u hermes '$AGENT' sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
-  docker exec -u hermes '$AGENT' sh -c 'export PATH=\$HOME/.local/bin:\$PATH; uvx --version'
-"
-```
-
-Then register the stdio command. Pin the proxy version (`==1.6.2` here; check
-<https://pypi.org/project/mcp-proxy-for-aws/> for current — `@latest` can pull a
-breaking change mid-deploy):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add aws \
-    --command uvx \
-    --arg 'mcp-proxy-for-aws==1.6.2' \
-    --arg '$ENDPOINT' \
-    --arg '--metadata' \
-    --arg 'AWS_REGION=$OP_REGION'
-"
-```
-
-The proxy inherits `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` /
-`AWS_SESSION_TOKEN` / `AWS_REGION` from `~/.hermes/.env` (step 4) — do NOT
-duplicate them in `config.yaml`.
-
-If the Hermes build's `mcp add` does not accept `--command/--arg`, edit
-`config.yaml` to add a stdio entry directly (no secrets here):
-
-```yaml
-aws:
-  command: uvx
-  args:
-    - mcp-proxy-for-aws==1.6.2
-    - https://aws-mcp.us-east-1.api.aws/mcp
-    - --metadata
-    - AWS_REGION=us-east-1
-  enabled: true
-```
-
-If `uvx` is only at `~/.local/bin`, use the absolute path
-(`/home/hermes/.local/bin/uvx`) in the command — PATH may not be inherited by
-the spawned subprocess.
-
-### Path B (fallback) — direct AWS REST when no stdio proxy is possible
-
-If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command, drop down
-to raw SigV4-signed REST against the AWS API for the specific service you need.
-The hosted `https://aws-mcp.api.aws/mcp` URL CANNOT be used with a bearer token —
-it is SigV4-only. Use the AWS SDK or `aws` CLI from inside the container; the
-credentials are already in `~/.hermes/.env`.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 10   # first run downloads the proxy via uvx; allow extra time
-```
-
-First connection can take a minute or more while `uvx` fetches
-`mcp-proxy-for-aws`.
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*aws|MCP server.*aws.*(ok|ready)|call_aws"; then
-    REGISTERED=1
-    echo "OK: aws registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-aws
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: aws not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-Expect a line registering the `aws` MCP server and its tools (e.g. `call_aws`,
-`search_documentation`, `read_documentation`).
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
----
-
-## Step 8 — live API smoke test (inside the container, so creds stay on the VPS)
-
-The cleanest end-to-end proof is `sts get-caller-identity` — it exercises
-credentials, proxy startup, SigV4 signing, and tool registration, with zero
-side effects and no IAM permissions required.
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  docker exec -u hermes '$AGENT' sh -c '
-    export PATH=\$HOME/.local/bin:\$PATH
-    curl -sS -o /tmp/aws-smoke.json -w \"%{http_code}\" \
-      https://sts.$OP_REGION.amazonaws.com/ \
-      --aws-sigv4 \"aws:amz:$OP_REGION:sts\" \
-      --user \"\$AWS_ACCESS_KEY_ID:\$AWS_SECRET_ACCESS_KEY\" \
-      -H \"x-amz-security-token: \$AWS_SESSION_TOKEN\" \
-      -d \"Action=GetCallerIdentity&Version=2011-06-15\"
-  '
-")
-case "$HTTP" in
-  200) echo "OK: AWS credentials valid; SigV4 reachable." ;;
-  401|403) echo "FAIL: credentials invalid or expired. Re-check Step 4."; rollback; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from STS. Check manually." ;;
-esac
-```
-
-End-to-end agent proof from chat:
-
-```
-@<agent> using aws, run sts get-caller-identity
-```
-
-A JSON identity (account ID + ARN) proves credentials, proxy, SigV4, and tool
-registration all work together. `What AWS regions are available?` is a lighter
-docs-only check needing no write perms.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove aws 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "
-    hermes config unset AWS_ACCESS_KEY_ID 2>/dev/null || sed -i '/^AWS_ACCESS_KEY_ID=/d' ~/.hermes/.env
-    hermes config unset AWS_SECRET_ACCESS_KEY 2>/dev/null || sed -i '/^AWS_SECRET_ACCESS_KEY=/d' ~/.hermes/.env
-    hermes config unset AWS_SESSION_TOKEN 2>/dev/null || sed -i '/^AWS_SESSION_TOKEN=/d' ~/.hermes/.env
-    hermes config unset AWS_REGION 2>/dev/null || sed -i '/^AWS_REGION=/d' ~/.hermes/.env
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. AWS is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=aws
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${AWS_ACCESS_KEY_ID:-}" || { echo "ABORT: AWS_ACCESS_KEY_ID is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${AWS_SECRET_ACCESS_KEY:-}" || { echo "ABORT: AWS_SECRET_ACCESS_KEY is empty or unsafe. Nothing was written."; exit 1; }
+if [ -n "${AWS_SESSION_TOKEN:-}" ]; then secret_chars_ok "$AWS_SESSION_TOKEN" || { echo "ABORT: invalid session token. Nothing was written."; exit 1; }; fi
+secret_chars_ok "${AWS_REGION:-}" || { echo "ABORT: AWS_REGION is empty or unsafe. Nothing was written."; exit 1; }
+case "$AWS_REGION" in -*|.*|*[!A-Za-z0-9.-]*) echo "ABORT: invalid AWS_REGION. Nothing was written."; exit 1 ;; esac
+
+case "$AWS_ACCESS_KEY_ID" in ASIA*) [ -n "${AWS_SESSION_TOKEN:-}" ] || { echo "ABORT: temporary AWS credentials need a session token. Nothing was written."; exit 1; } ;; AKIA*) ;; *) echo "ABORT: AWS access-key ID expected. Nothing was written."; exit 1 ;; esac
+remote 'command -v aws >/dev/null && command -v uvx >/dev/null' || { echo "ABORT: aws/uvx missing. Nothing was written."; exit 1; }
+printf '%s\n' "${AWS_ACCESS_KEY_ID:-}" "${AWS_SECRET_ACCESS_KEY:-}" "${AWS_SESSION_TOKEN:-}" "${AWS_REGION:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'AWS_ACCESS_KEY_ID'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AWS_SECRET_ACCESS_KEY'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AWS_SESSION_TOKEN'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AWS_REGION'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+e=dict(os.environ,**{k:v for k,v in d.items() if v})
+r=subprocess.run(["aws","sts","get-caller-identity","--output","json"],env=e,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+if r.returncode: raise RuntimeError("AWS identity check failed")
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: aws; path: stdio.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env AWS_ACCESS_KEY_ID "${AWS_ACCESS_KEY_ID:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AWS_SECRET_ACCESS_KEY "${AWS_SECRET_ACCESS_KEY:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AWS_SESSION_TOKEN "${AWS_SESSION_TOKEN:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env AWS_REGION "${AWS_REGION:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+if [ "${FORCE:-0}" = 1 ]; then printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null || { rollback; exit 1; }; fi
+printf 'y\n' | remote 'hermes -p default mcp add aws --env '"'"'AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}'"'"' '"'"'AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}'"'"' '"'"'AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN}'"'"' '"'"'AWS_REGION=${AWS_REGION}'"'"' --command uvx --args mcp-proxy-for-aws==1.6.2 '"'"'https://aws-mcp.${AWS_REGION}.api.aws/mcp'"'"' --metadata '"'"'AWS_REGION=${AWS_REGION}'"'"'' >/dev/null 2>&1 || { echo "FAIL: stdio registration."; rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: MCP is not enabled."; rollback; exit 1; }
+```
+
+The one stdin answer enables discovered tools. `--env` precedes `--args`; every argument is a separate token. Environment references are expanded by Hermes when it starts the server. A zero exit from add does not prove registration. Vendor package compatibility remains live-unverified; failure must roll back.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+e=dict(os.environ,**{k:v for k,v in d.items() if v})
+r=subprocess.run(["aws","sts","get-caller-identity","--output","json"],env=e,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+if r.returncode: raise RuntimeError("AWS identity check failed")
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-aws.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring `aws-mcp.api.aws` as a bearer-header HTTP MCP | SigV4-only; bearer token is rejected with 401 | Use the stdio proxy (Path A) — `mcp-proxy-for-aws` signs each call |
-| 2 | Temporary credentials expire mid-session | STS/SSO/assumed-role sessions are short-lived (1–12h) → `ExpiredTokenException`, every tool call fails | Refresh creds, rewrite step 4, reload gateway. Prefer roles + refresh over `AKIA` |
-| 3 | `InvalidSignatureException` | Host clock skew (SigV4 is time-sensitive) OR creds scoped to wrong region/service | `timedatectl`/NTP sync on host; confirm `AWS_REGION` matches the operating region |
-| 4 | `uvx` missing in the container | Proxy is a Hermes subprocess; if `uv` is not on hermes-user PATH the server fails to start with no obvious MCP error | Step 5 Path A installs+probes `uvx`; if PATH not inherited, use `/home/hermes/.local/bin/uvx` absolute path |
-| 5 | Blast radius from `call_aws` | The tool can hit all 15000+ AWS APIs with whatever IAM allows, including destructive ones | Least-privilege IAM (read-only default) + set `READ_OPERATIONS_ONLY=true` and `REQUIRE_MUTATION_CONSENT=true` (step 4) |
-| 6 | Connect region vs operating region confusion | Endpoint region picks the managed server; `--metadata AWS_REGION` picks where ops run; without it, defaults silently to `us-east-1` | Always pass `--metadata AWS_REGION=$OP_REGION`; can differ from endpoint region |
-| 7 | Conflicting older servers (`aws-api-mcp-server`, `aws-knowledge-mcp-server`) | Duplicate tools confuse the agent; AWS recommends the managed server replace both | Step 2 removes both before registering |
-| 8 | Secret in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 9 | `echo >>` to append secrets | If prior line has no trailing newline, two values merge | Always `hermes config set`; sed fallback uses `|` delimiter (AWS secrets contain `/+=`) |
-| 10 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 11 | Container vs host confusion | Skill assumed wrong layer; `whoami; hostname` would have caught it | Step 1 checks both paths; capture `$AGENT` for in-container steps |
-| 12 | Pinning `mcp-proxy-for-aws@latest` | A breaking change mid-deploy ruins reproducibility | Pin explicit version (`==1.6.2`); bump deliberately after testing |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Credential family | ASIA keys are temporary | Supply AWS_SESSION_TOKEN as well |
+| 2 | IAM permissions | Valid STS identity does not grant MCP tool permissions | Use narrowly scoped existing IAM permissions |
+| 3 | Wrong region | The AWS endpoint and signing region must agree | Use AWS_REGION consistently |
+| 4 | Authentication scheme | AWS account MCP uses SigV4 | Use the pinned signing proxy |
+| 5 | Expired credentials | Static temporary credentials eventually expire | Refresh the existing credentials through their owner and rewire |
+| 6 | Documentation server | aws-knowledge is no-auth documentation only | Do not claim it connects an AWS account |
 
----
+Pinned proxy metadata: [mcp-proxy-for-aws 1.6.2](https://pypi.org/project/mcp-proxy-for-aws/1.6.2/). This is the IAM/SigV4 proxy; the no-auth aws-knowledge catalogue is documentation only, not access to the user account. Python 3.10+ and uvx are required.
+
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode); conflicting older AWS MCPs removed
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `uvx` available to the hermes user inside the container
-- [ ] AWS credentials in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] `READ_OPERATIONS_ONLY=true` and `REQUIRE_MUTATION_CONSENT=true` set (or IAM principal already least-privilege)
-- [ ] MCP registered via Path A (stdio `mcp-proxy-for-aws`, pinned version) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'aws'` (or `call_aws`) within 30s
-- [ ] Smoke test: `sts:GetCallerIdentity` returned `200` with an identity
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-- [ ] Credentials rotated if any value was exposed in chat or shell history
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, SigV4, and stdio-proxy failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

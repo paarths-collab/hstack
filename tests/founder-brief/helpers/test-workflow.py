@@ -1,5 +1,5 @@
 """Real loopback GitHub + Telegram HTTP; no live vendors or real credentials."""
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "packages" / "founder-brief"
@@ -157,6 +158,72 @@ class PureTests(unittest.TestCase):
         second = workflow.reporting_window(fall, dt("2026-11-01T06:31:00Z"))
         self.assertEqual(first, second)
         self.assertEqual(first["end"], "2026-11-01T05:30:00Z")
+
+    def test_whole_day_windows_tile_exactly_across_dst_changes(self):
+        # A 24 h window is "since the previous scheduled run". With a fixed 24 h subtraction the day after fall-back
+        # (25 h since the last cutoff) loses an hour and spring-forward (23 h) reports an hour twice.
+        newyork = {**CONFIG, "timezone": "America/New_York", "daily_time": "09:00", "window_hours": 24}
+        def window_for_local_day(config, year, month, day):
+            zone = ZoneInfo(config["timezone"])
+            hour, minute = map(int, config["daily_time"].split(":"))
+            # one minute after that day's cutoff selects that day's window
+            now = datetime(year, month, day, hour, minute, tzinfo=zone).astimezone(timezone.utc) + timedelta(minutes=1)
+            return workflow.reporting_window(config, now)
+        for days, (before, dst, after), length in (
+            ("fall back 2025-11-02", ((2025, 10, 31), (2025, 11, 1), (2025, 11, 2)), (24, 25)),
+            ("spring forward 2026-03-08", ((2026, 3, 6), (2026, 3, 7), (2026, 3, 8)), (24, 23)),
+        ):
+            windows = [window_for_local_day(newyork, *day) for day in (before, dst, after)]
+            for previous, current in zip(windows, windows[1:]):
+                self.assertEqual(current["start"], previous["end"], days + ": consecutive windows must tile with no gap or overlap")
+            hours = [(workflow.utc(w["end"]) - workflow.utc(w["start"])).total_seconds() / 3600 for w in windows]
+            self.assertIn(length[1], hours, days + ": the DST day's window is 23 or 25 elapsed hours, not a fixed 24")
+        self.assertEqual(window_for_local_day(newyork, 2025, 11, 2),
+                         {"window_id": "daily:2025-11-02", "start": "2025-11-01T13:00:00Z", "end": "2025-11-02T14:00:00Z"})
+        self.assertEqual(window_for_local_day(newyork, 2026, 3, 8),
+                         {"window_id": "daily:2026-03-08", "start": "2026-03-07T14:00:00Z", "end": "2026-03-08T13:00:00Z"})
+
+    def test_multi_day_windows_follow_local_days_and_other_windows_are_fixed_elapsed_hours(self):
+        newyork = {**CONFIG, "timezone": "America/New_York", "daily_time": "09:00"}
+        after_fall_back = dt("2025-11-02T14:01:00Z")
+        two_days = workflow.reporting_window({**newyork, "window_hours": 48}, after_fall_back)
+        self.assertEqual((two_days["start"], two_days["end"]), ("2025-10-31T13:00:00Z", "2025-11-02T14:00:00Z"))
+        twelve = workflow.reporting_window({**newyork, "window_hours": 12}, after_fall_back)
+        self.assertEqual((twelve["start"], twelve["end"]), ("2025-11-02T02:00:00Z", "2025-11-02T14:00:00Z"))
+        thirty = workflow.reporting_window({**newyork, "window_hours": 30}, after_fall_back)
+        self.assertEqual((thirty["start"], thirty["end"]), ("2025-11-01T08:00:00Z", "2025-11-02T14:00:00Z"))
+        # A nonexistent wall time shifts forward, and the next window starts exactly where this one ended.
+        gap = {**CONFIG, "timezone": "America/New_York", "daily_time": "02:30", "window_hours": 24}
+        sunday = workflow.reporting_window(gap, dt("2026-03-08T07:30:00Z"))
+        monday = workflow.reporting_window(gap, dt("2026-03-09T06:30:00Z"))
+        self.assertEqual(sunday["end"], "2026-03-08T07:30:00Z")
+        self.assertEqual(monday["start"], sunday["end"])
+
+    def test_seven_calendar_day_reports_collect_across_dst_without_widening_explicit_limits(self):
+        class EmptyGitHub:
+            token = ""
+            def get(self, path, params):
+                return [], False
+        cases = (("America/New_York", "2026-11-01T14:01:00Z", 169),
+                 ("America/New_York", "2026-03-08T13:01:00Z", 167),
+                 ("UTC", "2026-11-01T09:01:00Z", 168))
+        for zone, now, hours in cases:
+            for pack in ("activity-brief", "review-queue", "release-watch"):
+                with self.subTest(zone=zone, now=now, pack=pack):
+                    config = {**CONFIG, "timezone": zone, "daily_time": "09:00", "window_hours": 168, "workflow": pack}
+                    window = workflow.reporting_window(config, dt(now))
+                    self.assertEqual((dt(window["end"]) - dt(window["start"])).total_seconds() / 3600, hours)
+                    self.assertTrue(workflow.collect_report(config, window["start"], window["end"], _client=EmptyGitHub()))
+                    self.assertTrue(workflow.preview(config, now=dt(now), _client=EmptyGitHub()))
+        raw = {"schema_version": 1, "repositories": ["acme/a"],
+               "start": "2026-10-25T13:00:00Z", "end": "2026-11-01T14:00:00Z"}
+        with self.assertRaises(github.BriefError):
+            github.validate_config(raw)  # Public explicit windows still max out at 168 elapsed hours.
+        self.assertEqual(github.validate_config(raw, calendar_timezone="America/New_York")["start"], raw["start"])
+        for changed in ({"end": "2026-11-01T14:00:01Z"}, {"end": "2026-11-02T14:00:00Z"},
+                        {"end": raw["start"]}, {"end": "2026-10-24T13:00:00Z"}):
+            with self.subTest(changed=changed), self.assertRaises(github.BriefError):
+                github.validate_config({**raw, **changed}, calendar_timezone="America/New_York")
 
     def test_bundle_is_deterministic_and_contains_only_required_runtime(self):
         import io

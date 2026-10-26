@@ -5,19 +5,20 @@ For the runnable deterministic GitHub-to-Telegram report packs, use
 experimental control-plane transaction: its injected observer and scheduled generic
 prompt do not implement repository collection or establish fresh real delivery.
 
-The default contract remains a legacy 0.15.2 offline fixture baseline. Current
-Hermes 0.22.5 is an **explicit, unpromoted compatibility candidate**, with a
-separate contract and native adapter. See [compatibility and promotion](../../compatibility/README.md)
-for its exact commit, exclusive-default-profile scope and missing live evidence.
-Neither baseline nor candidate has been established by these tests as a working
-real-server deployment.
+The default contract is a legacy 0.15.2 offline fixture (`HERMES_LEGACY_FIXTURE_VERSION` in `VERSIONS.txt`).
+Hermes 0.22.5 (`HERMES_VERSION`) is the release the skills and report packs target; it is **source-verified, not
+live-verified**, and has a separate contract and native adapter. See
+[compatibility and promotion](../../compatibility/README.md) for its exact commit, exclusive-default-profile
+scope and missing live evidence. Neither contract has been established by these tests as a working real-server
+deployment.
 
 This package puts a versioned, reviewable, reversible, receipt-producing transaction around exactly one
 workflow:
 
 > recipe `founder-brief-github-telegram` — a **read-only GitHub** source delivering a brief to **one private
 > Telegram** destination — on **one Linux target** (Ubuntu/Debian, bash, ssh) running **one declared Hermes
-> version** (`HERMES_VERSION` in `VERSIONS.txt`).
+> version** (the contract's `runtime.versions_source` key in `VERSIONS.txt`: `HERMES_LEGACY_FIXTURE_VERSION` for the
+> default contract, `HERMES_VERSION` for the 0.22.5 contract).
 
 It is deliberately narrow. It is not a doctor, not a dashboard, not a new connector, and it does not grow the
 catalogue. The scope, versions, managed keys, managed skills, cron schedule/prompt and the list of Hermes
@@ -242,9 +243,16 @@ length-checked, and appear in no argv, receipt, evidence file or log.
 ## Running the tests
 
 ```
-node --test tests/acceptance/                 # host: node >= 18, python3, bash (macOS /bin/bash 3.2 is fine)
+node --test tests/acceptance/*.mjs tests/acceptance/target/*.test.mjs tests/acceptance/docker/*.test.mjs
+                                              # host: node >= 18, python3, bash (macOS /bin/bash 3.2 is fine)
 UPDATE_GOLDEN=1 node --test tests/acceptance/ops-golden.test.mjs   # regenerate golden command fixtures, then review the diff
 ```
+
+Pass the files as shell globs, as above. `node --test tests/acceptance/` (a directory) works on Node 18 and 20 but
+fails on Node 22 ("Cannot find module"), and a quoted pattern such as `'tests/acceptance/**/*.test.mjs'` works only on
+Node 21+. The unquoted per-directory globs work on 18, 20 and 22. `tests/acceptance/*.mjs` includes
+`test-acceptance-cases.mjs`, which does not end in `.test.mjs`; the Docker-gated tests are skipped unless
+`HSTACK_DOCKER=1`.
 
 The integration tests drive the real `target/hstack-target.sh` through `SandboxTransport`; if that file is
 absent they are **skipped with an explicit reason**, never silently passed. Docker-gated tests are skipped
@@ -274,7 +282,7 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
 - One workflow, one Linux target, one Hermes version per contract, one Telegram destination. No other platform, source,
   or runtime is accepted by the contract.
 - The legacy adapter assumes `cron list` prints one job per line (`id TAB schedule TAB prompt`); that is a
-  fixture protocol, not the current native CLI. The 0.22.5 candidate reads structured native job snapshots
+  fixture protocol, not the current native CLI. The 0.22.5 adapter reads structured native job snapshots
   and changes jobs through the native CLI. Both remain unverified against a real running installation.
 - Delivery evidence is only as good as the injected observer. The package ships no production observer: an
   operator must supply one (for example a second Telegram client or bot that confirms receipt). Without one
@@ -286,9 +294,30 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
   backup as a conflict. If real Hermes rewrites `config.yaml` on its own (for example on gateway start or
   `config set`), every rollback would end in `manual_recovery_required`. This has not been checked against a
   real Hermes; the stub does not rewrite it.
-- The legacy adapter retains `gateway run --daemon` for old fixture/recovery behavior. That flag is not
-  supported by the 0.22.5 gateway parser. The candidate uses checked native service operations and
-  readiness evidence, restricted to an exclusive default-profile Linux target.
+- `gateway run --daemon` does not exist at any Hermes release (`gateway run` is the foreground gateway; an unknown
+  option is an argparse usage error, exit 2), and the test doubles reject it the same way. Reloading the gateway is
+  `gateway restart` on the legacy 0.15.2 fixture (upstream tag `v2026.5.29.2`: no `-y`, no `gateway ensure`) and
+  the following on 0.22.5, restricted to an exclusive default-profile Linux target with an installed systemd
+  service: remember the current `instance_id` (`gateway ensure --json --timeout 10`), `gateway restart --detach`,
+  then `gateway ensure --json --timeout 60` must exit 0 (exit 5/6 are retried twice), report `"state":"ready"` and
+  carry a NEW `instance_id`. `restart` can exit 0 without restarting anything (linger case), and `instance_id` is a
+  fresh uuid4 per gateway process, so only a changed id is proof. Without an installed service `restart` would run
+  the gateway in the foreground of the ssh call; `--detach` keeps it in the background, and the readiness check
+  then fails closed because the supervisor is not systemd.
+- **Live sessions:** without a TTY, Hermes 0.22.5 refuses `restart` while sessions are live (exit 1). The
+  transaction does not force it: the reload fails (`restart_refused_or_failed`); during rollback the files are
+  restored and the result is `manual_recovery_required`, whose detail names the opt-in. Only the operator's explicit
+  `new Transaction({ ..., interruptLiveSessions: true })` adds `-y` (`reload <txn> --interrupt-live-sessions` on the
+  target), which interrupts those sessions. The default is false and the review shows the flag.
+- A runtime version is accepted only if the whole string equals a supported version: `0.15.2.1`, `0.22.5.dev3` and
+  `0.22.5+3.gabc` are `runtime_version_mismatch` and are recorded verbatim, never truncated to x.y.z. The version is
+  read from the banner on the first line of `hermes --version` (`Hermes Agent v<ver> (<date>)`), because the lines
+  after it (install directory, Python, OpenAI SDK) carry unrelated x.y.z tokens.
+- A transaction can only be resumed on a transport of the same kind its receipt records (`ssh`, `sandbox` or
+  `recording`); `Transaction.resume` throws `resume_transport_mismatch` otherwise.
+- The cron prompt budget in the contract includes the `[hstack:<id>] ` marker the target prepends: the stored prompt
+  must be at most 400 characters (the native adapter refuses longer), so a contract prompt must be shorter by the
+  marker length and the contract is rejected at load otherwise.
 - Receipts are unsigned and not tamper-evident (see above).
 - `skills:sync` installs the shipped `skills/<name>` directories; a pre-existing unmanaged directory with a
   managed name is a collision and blocks the transaction.
@@ -299,7 +328,7 @@ Receipts and evidence on the operator's machine are also sensitive (see the fing
 ## Version promotion
 
 Hermes 0.15.2 was published under upstream tag `v2026.5.29.2`. The default contract and its fixture pin
-remain separate from the explicit 0.22.5 candidate. Reporting a matching version proves only the measured
+remain separate from the 0.22.5 contract. Reporting a matching version proves only the measured
 string; it does not prove compatible job storage, service behavior, credentials, or delivery. Promotion
 requires the live evidence recorded in [compatibility and promotion](../../compatibility/README.md),
 including seven consecutive real-target golden-path days. No source review or passing stub suite silently

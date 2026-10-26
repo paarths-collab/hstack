@@ -6,7 +6,12 @@ log=home/"fixture-argv.jsonl"
 with log.open("a") as out:
  fcntl.flock(out,fcntl.LOCK_EX);out.write(json.dumps(args)+"\n");out.flush()
 if args==["--profile","default","--version"]:
- print("Hermes Agent v"+os.environ.get("BRIEF_VERSION","0.22.5"));sys.exit()
+ # Real v0.22.5 `hermes --version` (hermes_cli/_startup_fast.py print_fast_version_info; first line from
+ # banner.format_banner_version_label): banner, install dir, install method, Python, OpenAI SDK. The
+ # later lines carry their own x.y.z tokens, which is why a version check must read only the banner.
+ v=os.environ.get("BRIEF_VERSION","0.22.5");text=os.environ.get("BRIEF_VERSION_TEXT")
+ if text is None:text="Hermes Agent v"+v+" (2026.9.24) \u00b7 upstream bf0203a7\nInstall directory: /home/operator/.hermes/hermes-agent\nInstall method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0\n"
+ sys.stdout.buffer.write(text.encode("utf-8"));sys.exit()
 if args[:2]!=["--profile","default"]: sys.exit(90)
 args=args[2:]
 if args[:2]==["gateway","ensure"]:

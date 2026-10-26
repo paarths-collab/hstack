@@ -1,38 +1,11 @@
 ---
 name: integration-paypal
-description: Connect PayPal (orders, payouts, invoicing, subscriptions, transaction search) to a self-hosted Hermes Agent over SSH. Mints OAuth2 client_credentials from a REST app's client_id/secret, wires either the first-party remote MCP or the REST API. Idempotent, rollback-safe, runnable from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI).
+description: Set up paypal on a host-installed Hermes 0.22.5 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
 ---
 
-# /integration-paypal — connect PayPal to a remote Hermes (SSH-first)
+# /integration-paypal — connect paypal to Hermes over SSH
 
-You are the engineer connecting PayPal to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
-
-1. Create the REST app in the PayPal Developer Dashboard.
-2. Copy the `client_id` and `client_secret` out.
-
-Everything else — storing the credentials, minting an access token, MCP registration,
-gateway reload, verification — runs on the VPS via SSH, idempotently.
-
-**Honest auth picture (verified 2026-06):** PayPal ships a first-party **remote MCP
-server** at `https://mcp.paypal.com/sse` (live) and `https://mcp.sandbox.paypal.com/sse`
-(sandbox), documented at <https://docs.paypal.ai/developer/tools/ai/mcp-quickstart>. The
-hosted server's intended UX is a browser-based OAuth login from clients like Claude
-Desktop — headless-hostile. PayPal's published config form does show
-`Authorization: Bearer <auth_header>`, but that bearer is a freshly minted **OAuth2
-access token** (`expires_in` ~9 hours), not a long-lived API key. There is no static
-PayPal API key.
-
-So for a self-hosted, headless agent we:
-
-1. Store the REST app's `client_id` and `client_secret` in `~/.hermes/.env`.
-2. Mint a short-lived access token via `POST /v1/oauth2/token` (client_credentials grant).
-3. Either (Path A) wire `https://mcp.paypal.com/http` with that bearer and accept that
-   you must refresh it via cron, or (Path B — recommended) call PayPal's REST API
-   directly with a generic HTTP tool, refreshing on `401`.
-
----
+> **Compatibility:** source-verified for Hermes **0.22.5**, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
 
 ## Before you start — gather (ask once, in one batch)
 
@@ -47,328 +20,448 @@ So for a self-hosted, headless agent we:
 Sandbox creds only work against `api-m.sandbox.paypal.com` and `mcp.sandbox.paypal.com`;
 Live creds only work against `api-m.paypal.com` and `mcp.paypal.com`. Do not mix.
 
-Confirm SSH access before doing anything:
+
+Use one shell session. `DRY_RUN=1` runs the read-only gates and prints the plan, then exits before snapshot or configuration writes. `FORCE=1` permits replacing existing MCP configuration after snapshot; existing native skill directories are always preserved.
+
+
+## Step 0 — shared remote, lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-paypal
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
   else
-    echo "FAIL: hermes not found on host or in container"; exit 1
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
+}
+# Reject line breaks, quote/backslash characters and controls: values also become curl config lines.
+secret_line_ok() {
+  [ -n "$1" ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^[!-~]+$' || return 1
+  case "$1" in *'"'*|*"'"*|*'\'*) return 1 ;; esac
+}
+# No response body or credential is logged. JSON errors on HTTP 200 are failures too.
+api_check() {
+  local reply
+  reply=$(remote 'curl -q -fsS --connect-timeout 10 --max-time 25 --config -' 2>/dev/null) || return 1
+  printf '%s' "$reply" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert not (isinstance(d,dict) and (d.get("errors") or d.get("error") or d.get("success") is False))' 2>/dev/null
+}
+# Extra native-skill artifacts are owned separately; canonical rollback still restores env/config bytes.
+restore_native_skill() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+p="$HOME/.hermes/skills/$SKILL_NAME-runtime"
+[ -f "$d/native-created" ] || exit 0
+[ "$(cat "$d/native-created")" = "$SKILL_NAME-runtime" ] || exit 1
+if [ -e "$p/SKILL.md" ] || [ -L "$p/SKILL.md" ]; then
+  [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ] && [ -f "$d/native.cksum" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ] || { echo "native skill changed; keep the active snapshot and inspect it" >&2; exit 1; }
+  # Never recursively delete this directory: a concurrent user file remains intact.
+  rm "$p/SKILL.md"
+fi
+[ ! -d "$p" ] || rmdir "$p"
+rm "$d/native-created" "$d/native.cksum"
+REMOTE
+}
+fail_change() {
+  echo "FAIL: $1. Restoring the previous configuration."
+  restore_native_skill || { echo "Native skill restoration failed; active recovery point retained." >&2; exit 1; }
+  rollback || { echo "Rollback incomplete; active recovery point retained." >&2; exit 1; }
+  exit 1
+}
+
 ```
 
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
+## Step 1 — verify SSH, Hermes version and host prerequisites
 
 ```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci paypal" || echo 0)
-HAS_CREDS=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^PAYPAL_CLIENT_ID=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if { [ "$ALREADY" -gt 0 ] || [ "$HAS_CREDS" -gt 0 ]; } && [ "${FORCE:-0}" != "1" ]; then
-  echo "PayPal already wired (MCP=$ALREADY, creds=$HAS_CREDS). Set FORCE=1 to rewire."
+remote 'whoami; hostname' || { echo "ABORT: SSH failed. Nothing was written."; exit 1; }
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 || exit 1
+  hermes -p default --version
+') || { echo "ABORT: install Hermes on the VPS host first; container-only installations are unsupported. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure supports Hermes 0.22.5 only. Nothing was written."; exit 1;
+}
+remote 'command -v curl >/dev/null && command -v python3 >/dev/null' || {
+  echo "ABORT: install curl and python3 on the host first. Nothing was written."; exit 1;
+}
+
+```
+
+## Step 2 — check ownership and an existing healthy integration
+
+```bash
+PP_ENV=${PP_ENV:-SANDBOX}
+# An unchanged runtime file from the previous successful run is safe to reuse.
+if ! [ "$PP_ENV" = LIVE ] && [ "${FORCE:-0}" != 1 ] && remote 'bash -s' <<'REMOTE'
+set -e
+p="$HOME/.hermes/skills/integration-paypal-runtime"
+d="$HOME/.hermes/.hstack-backup/integration-paypal.prev"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ]
+[ -f "$d/.complete" ] && [ -f "$d/native.cksum" ] && [ -f "$p/SKILL.md" ] || exit 1
+[ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ]
+hermes -p default skills list --source local --enabled | grep -F -- 'integration-paypal-runtime' >/dev/null
+REMOTE
+then
+  echo "Managed native skill is unchanged and discoverable. Nothing was written."
+  exit 0
+fi
+remote 'test ! -L "$HOME/.hermes/skills"' || { echo "ABORT: skills directory is a symlink; preserved. Nothing was written."; exit 1; }
+remote 'test ! -e "$HOME/.hermes/skills/integration-paypal-runtime" && test ! -L "$HOME/.hermes/skills/integration-paypal-runtime"' || {
+  echo "ABORT: existing native skill preserved; inspect it rather than replacing it. Nothing was written."; exit 1;
+}
+if [ "$PP_ENV" = LIVE ] && [ "${FORCE:-0}" != 1 ] && remote "hermes -p default mcp list | grep -E '^ *paypal .*enabled'" >/dev/null 2>&1 && remote 'hermes -p default mcp test paypal' >/dev/null 2>&1; then
+  echo "paypal is enabled and passed native mcp test. Nothing was written."
   exit 0
 fi
 ```
 
----
+## Step 3 — HARD GATE: read-only credential and consent checks
 
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write PAYPAL_CLIENT_ID    (length ${#PP_CLIENT_ID}, prefix ${PP_CLIENT_ID:0:4}...) via 'hermes config set'
-  2. Write PAYPAL_CLIENT_SECRET (length ${#PP_SECRET},    NEVER previewed)             via 'hermes config set'
-  3. Write PAYPAL_ENVIRONMENT  = $PP_ENV
-  4. chmod 600 ~/.hermes/.env
-  5. Mint OAuth2 access_token via POST /v1/oauth2/token (proves creds)
-  6. Path A: hermes mcp add paypal --url https://mcp.${PP_ENV,,}.paypal.com/http
-     Path B (fallback): document REST base URL, no MCP wire
-  7. Reload gateway: hermes gateway stop && hermes gateway run
-  8. Verify in logs: grep -i "registered.*paypal"
-  9. Smoke test: GET /v1/reporting/transactions (last 24h) -> expect 200
-
-No secret is ever printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secrets (chmod 600, no echo, no logging)
+All vendor calls in this step run from the VPS. Secrets travel over SSH stdin, not SSH
+arguments. A failed gate stops before `snapshot` and before any configuration write.
+The calls authenticate or read data; none sends a message, changes vendor state or
+performs a paid model request.
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set PAYPAL_CLIENT_ID     '$PP_CLIENT_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set PAYPAL_CLIENT_SECRET '$PP_SECRET'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set PAYPAL_ENVIRONMENT   '$PP_ENV'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `3`, NEVER the values):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" \
-  "grep -cE '^PAYPAL_(CLIENT_ID|CLIENT_SECRET|ENVIRONMENT)=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "3" ] || { echo "FAIL: PayPal creds not all written (got $WROTE/3). Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern.
-> Use `|` as the sed delimiter — PayPal secrets contain `/`, `+`, and `=`:
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   for kv in 'PAYPAL_CLIENT_ID=$PP_CLIENT_ID' 'PAYPAL_CLIENT_SECRET=$PP_SECRET' 'PAYPAL_ENVIRONMENT=$PP_ENV'; do
->     k=\${kv%%=*}
->     grep -q \"^\${k}=\" ~/.hermes/.env || printf '%s\n' \"\${k}=\" >> ~/.hermes/.env
->     sed -i \"s|^\${k}=.*|\${kv}|\" ~/.hermes/.env
->   done
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
-Confirm the credentials by minting an access token (proves client_id/secret pair is valid
-and selects the right base URL):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  case "$PAYPAL_ENVIRONMENT" in
-    LIVE) API_BASE=https://api-m.paypal.com ;;
-    *)    API_BASE=https://api-m.sandbox.paypal.com ;;
-  esac
-  curl -sS -o /tmp/pp_tok.json -w "%{http_code}\n" \
-    -X POST "$API_BASE/v1/oauth2/token" \
-    -u "$PAYPAL_CLIENT_ID:$PAYPAL_CLIENT_SECRET" \
-    -H "Accept: application/json" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials"
-  grep -o "\"expires_in\":[0-9]*" /tmp/pp_tok.json || true
-  rm -f /tmp/pp_tok.json
-'
-```
-
-`200` plus a printed `"expires_in":3xxxx` (~9 hours) means the credentials are good.
-`401` means the client_id/secret pair is wrong, or you minted against the wrong base URL
-for the configured environment.
-
----
-
-## Step 5 — register the PayPal MCP server (Path A) or document REST (Path B)
-
-Pick the path that matches the Hermes build on the VPS.
-
-### Path A — first-party remote MCP server (refresh-token responsibility on you)
-
-PayPal documents a hosted remote MCP at
-(<https://docs.paypal.ai/developer/tools/ai/mcp-quickstart>):
-
-| Env | Streamable HTTP | SSE |
-|-----|-----------------|-----|
-| Sandbox | `https://mcp.sandbox.paypal.com/http` | `https://mcp.sandbox.paypal.com/sse` |
-| Live    | `https://mcp.paypal.com/http`         | `https://mcp.paypal.com/sse`         |
-
-The published config form is `Authorization: Bearer <auth_header>`. For self-hosted
-Hermes, treat the bearer as an OAuth2 client_credentials access token you mint yourself,
-and accept that it expires (~9 hours) and must be re-injected via cron. Wire it like
-`/hermes-mcp-add`:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  case "$PAYPAL_ENVIRONMENT" in
-    LIVE) URL=https://mcp.paypal.com/http;          API_BASE=https://api-m.paypal.com ;;
-    *)    URL=https://mcp.sandbox.paypal.com/http;  API_BASE=https://api-m.sandbox.paypal.com ;;
-  esac
-
-  # Mint token (never echoed)
-  TOKEN=$(curl -sS -X POST "$API_BASE/v1/oauth2/token" \
-    -u "$PAYPAL_CLIENT_ID:$PAYPAL_CLIENT_SECRET" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials" \
-    | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
-  [ -n "$TOKEN" ] || { echo "FAIL: could not mint PayPal token"; exit 1; }
-
-  # Add MCP with placeholder, then inject real token via sed (| delimiter — tokens contain /+=)
-  printf "y\nAuthorization\nplaceholder\n" \
-    | hermes mcp add paypal --url "$URL" --auth header
-  sed -i "s|^MCP_PAYPAL_API_KEY=.*|MCP_PAYPAL_API_KEY=${TOKEN}|" ~/.hermes/.env
-  grep -q "^MCP_PAYPAL_API_KEY=" ~/.hermes/.env \
-    || printf "MCP_PAYPAL_API_KEY=%s\n" "$TOKEN" >> ~/.hermes/.env
-  chmod 600 ~/.hermes/.env
-'
-```
-
-Then reload (Step 6) and verify (Step 7). Schedule a refresh job (`/hermes-cron`) to
-re-mint the token and re-run the `sed`+reload before `expires_in` lapses.
-
-> If `/hermes-mcp-add`'s probe matrix returns `401` on every variant, the hosted server
-> is rejecting the client_credentials token (it expects the interactive OAuth login
-> flow). Fall back to Path B.
-
-### Path B — generic HTTP tool against the PayPal REST API (recommended for headless)
-
-Skip the hosted MCP and point a generic HTTP/tool capability at PayPal's REST API.
-Refresh the access token on `401`. Safest pattern for a server-side agent.
-
-- **Base URL (sandbox):** `https://api-m.sandbox.paypal.com`
-- **Base URL (live):** `https://api-m.paypal.com`
-- **Auth header:** `Authorization: Bearer <token from Step 4>`
-- **Content type:** `application/json`
-- **Idempotency:** send `PayPal-Request-Id: <uuid>` on any state-changing call.
-
-Common endpoints:
-
-| Capability | Endpoint |
-|-----------|----------|
-| Mint token | `POST /v1/oauth2/token` (Basic auth, `grant_type=client_credentials`) |
-| Create order | `POST /v2/checkout/orders` |
-| Capture order | `POST /v2/checkout/orders/{id}/capture` |
-| Get order | `GET /v2/checkout/orders/{id}` |
-| Create payout | `POST /v1/payments/payouts` |
-| Create invoice | `POST /v2/invoicing/invoices` |
-| List transactions | `GET /v1/reporting/transactions` |
-| Subscriptions | `POST /v1/billing/subscriptions` |
-
-> Webhooks, if used, must be verified via
-> `POST /v1/notifications/verify-webhook-signature` before trusting any inbound event.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 8
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-Only meaningful for Path A (Path B has no MCP server to log). For Path B, skip to Step 8.
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*paypal|MCP server.*paypal.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: paypal registered in gateway logs."
-    break
-  fi
-  sleep 5
-done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: paypal not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
-
----
-
-## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
-
-Read-only call: last 24h of transactions. Safe in sandbox AND live.
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  case "$PAYPAL_ENVIRONMENT" in
-    LIVE) API_BASE=https://api-m.paypal.com ;;
-    *)    API_BASE=https://api-m.sandbox.paypal.com ;;
-  esac
-  TOK=$(curl -sS -X POST "$API_BASE/v1/oauth2/token" \
-    -u "$PAYPAL_CLIENT_ID:$PAYPAL_CLIENT_SECRET" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=client_credentials" \
-    | sed -n "s/.*\"access_token\":\"\([^\"]*\)\".*/\1/p")
-  START=$(date -u -d "-1 day" +%Y-%m-%dT%H:%M:%S-0000 2>/dev/null || date -u -v-1d +%Y-%m-%dT%H:%M:%S-0000)
-  END=$(date -u +%Y-%m-%dT%H:%M:%S-0000)
-  curl -sS -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $TOK" \
-    "$API_BASE/v1/reporting/transactions?start_date=$START&end_date=$END&fields=transaction_info"
-')
-case "$HTTP" in
-  200) echo "OK: PayPal REST reachable, credentials valid, Transaction Search enabled." ;;
-  401) echo "FAIL: credentials wrong for environment $PP_ENV. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: REST app missing Transaction Search feature. Toggle it in Dashboard -> App -> Features." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from PayPal REST. Check manually." ;;
+secret_line_ok "${PP_SECRET:-}" || { echo "ABORT: missing or unsafe PP_SECRET. Nothing was written."; exit 1; }
+secret_line_ok "${PP_CLIENT_ID:-}" || { echo "ABORT: missing or unsafe PP_CLIENT_ID. Nothing was written."; exit 1; }
+PP_ENV=${PP_ENV:-SANDBOX}
+case "$PP_ENV" in
+ SANDBOX) PP_BASE=https://api-m.sandbox.paypal.com ;;
+ LIVE) [ "${PROD_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: acknowledge live PayPal with PROD_ACKNOWLEDGED=1. Nothing was written."; exit 1; }; PP_BASE=https://api-m.paypal.com ;;
+ *) echo "ABORT: PP_ENV must be SANDBOX or LIVE. Nothing was written."; exit 1 ;;
 esac
+reply=$({ printf 'url = "%s/v1/oauth2/token"\nuser = "%s:%s"\ndata = "grant_type=client_credentials"\n' "$PP_BASE" "$PP_CLIENT_ID" "$PP_SECRET"; } | remote 'curl -q -fsS --connect-timeout 10 --max-time 25 --config -' 2>/dev/null) || { echo "ABORT: PayPal credentials rejected. Nothing was written."; exit 1; }
+printf '%s' "$reply" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d.get("access_token") and d.get("expires_in",0)>0' 2>/dev/null || { echo "ABORT: PayPal token missing. Nothing was written."; exit 1; }
+unset reply
+remote "hermes -p default mcp catalog | grep -F -- 'paypal'" >/dev/null || { echo "ABORT: native catalog entry missing. Nothing was written."; exit 1; }
 ```
 
-A chat-driven end-to-end check (sandbox only — moves no real money):
-`@<agent> create a $1.00 USD sandbox PayPal order` should return an order ID.
-
----
-
-## Rollback (auto-runs on any failure above)
+## Step 4 — review the dry run before the first write
 
 ```bash
-rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove paypal 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "
-    for k in PAYPAL_CLIENT_ID PAYPAL_CLIENT_SECRET PAYPAL_ENVIRONMENT MCP_PAYPAL_API_KEY; do
-      hermes config unset \$k 2>/dev/null || sed -i \"/^\${k}=/d\" ~/.hermes/.env
-    done
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. PayPal is no longer wired."
-}
+printf 'DRY RUN: configure %s on %s@%s; credential length=%s (value hidden).\n' "$SKILL_NAME" "$VPS_USER" "$VPS_IP" "${#PP_SECRET}"
+printf '%s\n' 'Snapshot env/config; write private values through stdin; register native MCP or publish a native skill; verify discovery; restart and require a new ready gateway instance; retire snapshot.'
+[ "${DRY_RUN:-0}" != 1 ] || exit 0
 ```
 
+Review the concrete plan. Continue under the user's existing setup authorization. Native
+OAuth may require the user to approve the vendor login in a browser; never fabricate
+that approval. Catalog tool exclusions remain those supplied by the pinned Hermes
+manifest. Do not replace OAuth with a short-lived bearer or invent a refresh cron.
+
+## Step 5 — snapshot and write private configuration
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+printf '%s\n' "$PP_CLIENT_ID" | remote 'IFS= read -r v && hermes -p default config set PAYPAL_CLIENT_ID "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing PAYPAL_CLIENT_ID failed"
+printf '%s\n' "$PP_SECRET" | remote 'IFS= read -r v && hermes -p default config set PAYPAL_CLIENT_SECRET "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing PAYPAL_CLIENT_SECRET failed"
+printf '%s\n' "$PP_ENV" | remote 'IFS= read -r v && hermes -p default config set PAYPAL_ENVIRONMENT "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing PAYPAL_ENVIRONMENT failed"
+```
+
+Secrets remain in `.env`, mode 600. Any references in `config.yaml` use `${VAR}`
+indirection. Never print a configured secret or use `sed` to inline it into YAML.
+
+## Step 6 — install and verify the integration
+
+```bash
+if [ "$PP_ENV" = LIVE ]; then
+remote 'hermes -p default mcp install paypal' || fail_change "native catalog install failed"
+# Native login may return exit 0 after an unsuccessful flow. mcp test below is required.
+if ! remote 'hermes -p default mcp test paypal' >/dev/null 2>&1; then
+  remote 'hermes -p default mcp login paypal' || fail_change "native OAuth login failed"
+fi
+remote "hermes -p default mcp list | grep -E '^ *paypal .*enabled'" >/dev/null || fail_change "MCP is absent or disabled (an install/add exit 0 alone is not proof)"
+remote 'hermes -p default mcp test paypal' >/dev/null 2>&1 || fail_change "MCP connection or tool discovery failed"
+fi
+if ! [ "$PP_ENV" = LIVE ]; then
+# Changing to the REST route retires the old native MCP inside the same env/config transaction.
+printf 'y\n' | remote 'hermes -p default mcp remove paypal' >/dev/null 2>&1 || fail_change "previous-route MCP removal failed"
+remote 'bash -s' <<'REMOTE' || fail_change "native skill publication failed"
+set -e
+umask 077
+name=integration-paypal
+d="$HOME/.hermes/.hstack-backup/$name"
+p="$HOME/.hermes/skills/$name-runtime"
+[ -f "$d/.complete" ] || exit 1
+[ ! -e "$p" ] && [ ! -L "$p" ] || { echo "Refusing to replace an existing native skill" >&2; exit 1; }
+mkdir -p "$HOME/.hermes/skills"
+t=$(mktemp "$d/native.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'NATIVE_SKILL'
 ---
+name: integration-paypal-runtime
+description: Read paypal data using the configured private credentials. Use for paypal requests; require explicit approval before any write or paid action.
+---
+
+# paypal from Hermes
+
+Use the terminal tool on this host. Read credentials privately from ~/.hermes/.env.
+Never paste them into a chat, URL, process arguments or logs. The following code performs
+only a read-only check. Adapt it to the user's requested read using the same vendor host
+and authentication; request approval before POST/PUT/PATCH/DELETE that changes state.
+Refresh the short-lived access token for each run. Keep sandbox and live credentials separate. Never create a payment or invoice merely to test access.
+
+~~~bash
+python3 - <<'PYTHON'
+from pathlib import Path
+import os,json,shlex,stat,urllib.request,urllib.parse,base64,subprocess
+p=Path.home()/".hermes"/".env"
+assert p.is_file() and not p.is_symlink() and stat.S_IMODE(p.stat().st_mode)==0o600, "Credentials must be a private regular file (600)"
+e={}
+wanted=['PAYPAL_CLIENT_ID', 'PAYPAL_CLIENT_SECRET', 'PAYPAL_ENVIRONMENT']
+for line in p.read_text().splitlines():
+ if "=" not in line or line.lstrip().startswith("#"): continue
+ key,value=line.split("=",1)
+ if key.startswith("export "): key=key[7:]
+ key=key.strip()
+ if key not in wanted: continue
+ parts=shlex.split(value,comments=False)
+ e[key]=" ".join(parts)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+opener=urllib.request.build_opener(NoRedirect())
+def request_json(req):
+ u=urllib.parse.urlsplit(req.full_url)
+ assert not u.username and not u.password and not u.fragment
+ assert u.scheme=="https" or (u.scheme=="http" and u.hostname in ("127.0.0.1","localhost")), "Use HTTPS or loopback HTTP"
+ with opener.open(req,timeout=25) as r:
+  assert r.status==200, "Unexpected vendor status"
+  data=r.read(1048577)
+  assert len(data)<=1048576, "Vendor response exceeds 1 MiB; narrow the read"
+  return json.loads(data)
+base="https://api-m.paypal.com" if e["PAYPAL_ENVIRONMENT"]=="LIVE" else "https://api-m.sandbox.paypal.com"
+auth=base64.b64encode((e["PAYPAL_CLIENT_ID"]+":"+e["PAYPAL_CLIENT_SECRET"]).encode()).decode()
+req=urllib.request.Request(base+"/v1/oauth2/token",data=b"grant_type=client_credentials",headers={"Authorization":"Basic "+auth})
+token=request_json(req)["access_token"]
+req=urllib.request.Request(base+"/v2/invoicing/invoices?page_size=1",headers={"Authorization":"Bearer "+token,"Accept":"application/json"})
+print(json.dumps(request_json(req)))
+PYTHON
+~~~
+
+Do not print access tokens or private configuration when troubleshooting. A live read from the intended account is required before claiming vendor compatibility.
+NATIVE_SKILL
+chmod 600 "$t"
+cksum < "$t" > "$d/native.cksum"
+# Record intent before publication; rollback removes only the matching new file.
+printf '%s\n' "$name-runtime" > "$d/native-created"
+mkdir "$p"
+# Atomic no-clobber publication; a concurrent existing file cannot be overwritten.
+ln "$t" "$p/SKILL.md"
+cmp -s "$t" "$p/SKILL.md"
+chmod 600 "$p/SKILL.md"
+REMOTE
+remote "hermes -p default skills list --source local --enabled | grep -F -- 'integration-paypal-runtime'" >/dev/null || fail_change "native skill not discoverable"
+fi
+```
+
+Catalog MCPs use Hermes's own OAuth flow, endpoint and curated tool filters. Any custom
+stdio package is executed on the host with the user's permissions; review its published
+package/version before installation. Hermes parser verification establishes argument
+syntax, not third-party package behavior. A native REST skill is installed into Hermes's
+actual `skills/` directory and checked with `skills list`, rather than saved as inert
+API notes. Existing native skill files are preserved. On failure, only the checksummed
+file created by this run is removed; an edited or foreign file stops automatic cleanup.
+
+## Step 7 — restart and require native readiness
+
+```bash
+gw_reload >/dev/null || fail_change "gateway did not restart into a new ready instance"
+```
+
+`gateway ensure --json` must exit 0 and report `"state":"ready"`; pending/draining
+states are retried. The helper captures the old instance even during draining and
+refuses to call the same process a successful reload. With live sessions, restart may
+refuse. Set `GW_INTERRUPT=1` only under the user's explicit permission to interrupt.
+
+## Step 8 — finish and keep recovery evidence
+
+```bash
+finish || fail_change "snapshot retirement failed"
+echo "Setup complete: native discovery and gateway readiness verified; vendor live proof exists only if these checks actually ran on the user's host."
+```
+
+The procedure runs the read-only vendor gate before writing. For an end-to-end user
+acceptance check, ask Hermes to use the newly configured integration to read one visible
+record. Confirm the account/tenant/region is correct. That live result is separate from
+this repository's source/parser and sandbox evidence; do not claim it while authoring.
+
+## Recovery
+
+Before `finish`, call `restore_native_skill` then `rollback` in this same shell to restore
+previous env/config bytes and remove only this run's native skill. A failed restoration
+keeps the active recovery point; repair the fault and retry. After successful `finish`,
+the previous snapshot is private at `.hstack-backup/$SKILL_NAME.prev`. Inspect it before
+manual undo; do not replace a newer active snapshot or remove an edited runtime skill.
+No vendor records are created by setup, so there is no vendor-side smoke-test data to
+clean up. Native OAuth caches are managed by Hermes and are outside the env/config
+snapshot: rollback does not revoke tokens or overwrite an existing OAuth authorization.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Treating PayPal credentials as a static API key | PayPal has none; the bearer is a short-lived OAuth2 access token (`expires_in` ~9h) | Mint via `/v1/oauth2/token` and refresh on `401`; cron a refresh for Path A |
-| 2 | Mixing sandbox creds with live URLs (or vice versa) | Returns `401 invalid_client` with no useful hint | Keep `PAYPAL_ENVIRONMENT` in `.env` and derive `API_BASE` from it every call |
-| 3 | Pointing `/hermes-mcp-add` at `mcp.paypal.com/sse` and expecting OAuth-login UX to work | Hosted server's intended path is browser OAuth; headless bearer can be rejected | Prefer Path B (REST direct), or accept token-refresh duty for Path A |
-| 4 | Missing `PayPal-Request-Id` on retries | A retried capture/payout double-charges without it | Generate a UUID per logical action and reuse on retries |
-| 5 | `403` on `/v1/reporting/transactions` | The app does not have the Transaction Search feature enabled | Toggle it in the Dashboard app's features list |
-| 6 | Echoing the access token in logs during the mint step | The token is a live bearer for the entire `expires_in` window | Capture into a shell var and pipe straight to `sed`; never `echo $TOK` |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline -> file silently broken | Always `hermes config set`, or `printf` + `sed` if no subcommand |
-| 9 | Secret in `config.yaml` or compose-level `.env` | Wrong file -> world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 10 | sed with `/` delimiter on PayPal secrets/tokens | Secrets contain `/`, `+`, `=` -> sed pattern breaks | Always use `\|` delimiter |
-| 11 | Container vs host confusion (SSH lands in container) | Keys/env added in wrong layer | Step 1 detects host vs container and routes via `docker exec` if needed |
-| 12 | Hermes not running when SSH connects | First call hangs forever | Step 1 has a hard version check that exits early |
-
----
+| # | Pitfall | Correct behavior |
+|---|---------|------------------|
+| 1 | Wrong Hermes release or profile | Exact 0.22.5 host/default gate before writes; other installations need a separately reviewed procedure. |
+| 2 | Treating exit 0 from `mcp add`/login as connection proof | Require an enabled entry plus `mcp test`; cancellation and a saved disabled entry do not count. |
+| 3 | Putting secrets into SSH arguments or YAML | Send values as stdin, keep `.env` private and use variable references. |
+| 4 | Using a missing background flag or log substring as health | Use the shared restart/ensure helpers and require a changed instance ID. |
+| 5 | Replacing the previous secret on a failed reconfiguration | Snapshot exact bytes first, then restore both files; never just delete the key. |
+| 6 | Skipping the read-only preflight on a missing dependency | Abort before snapshot; install the documented host prerequisite and rerun. |
+| 7 | Overwriting a hand-authored Hermes skill | Refuse the existing path, preserve it, and remove only a new file with its recorded checksum. |
+| 8 | Confusing source tests with real service evidence | Record actual host/vendor acceptance separately; credentials, browser consent and a server are still required. |
+| 9 | Running write or paid smoke tests | Use only the read-only check; a write or paid request requires explicit task authorization. |
+| 10 | Confusing read-only-looking usernames with access enforcement | Verify server grants/ACLs; scoped accounts remain the real permission boundary. |
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_ENVIRONMENT` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] `POST /v1/oauth2/token` returned `200` with `access_token` + `expires_in`
-- [ ] PayPal connected via Path A (MCP `paypal` registered + token-refresh cron planned) or Path B (REST base URL documented, no MCP wired)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'paypal'` within 30s (Path A only)
-- [ ] Smoke test: `GET /v1/reporting/transactions` (last 24h) returned `200` (or `403` flagged with Transaction Search feature toggle)
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, MCP,
-and OAuth token-refresh failure modes.
+- [ ] Hermes 0.22.5 host/default release verified before configuration changes.
+- [ ] Read-only vendor credential and consent gates passed from the target host.
+- [ ] Private credentials written over stdin with mode 600; config uses references.
+- [ ] Native catalog/custom MCP is enabled and passes `mcp test`, or the real runtime skill is discoverable.
+- [ ] Gateway restart produced a new ready instance through native JSON readiness.
+- [ ] Previous env/config bytes remain in a verified private snapshot.
+- [ ] User-visible integration read performed on the real host before claiming live success.

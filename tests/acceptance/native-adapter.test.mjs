@@ -14,7 +14,7 @@ test("native adapter model checks use structured release-shaped storage and neve
   const [command, ...prefix] = resolvePython3();
   const run = spawnSync(command, [...prefix, "-I", "-B", path.join(here, "helpers/test-native-adapter.py")], { encoding: "utf8", timeout: 30_000 });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
-  assert.match(run.stderr, /Ran 25 tests/);
+  assert.match(run.stderr, /Ran 29 tests/);
 });
 
 test("the approved shell artifact contains the exact native adapter bytes and changes when either source changes", () => {

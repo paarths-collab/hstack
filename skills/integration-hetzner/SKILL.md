@@ -1,304 +1,450 @@
 ---
 name: integration-hetzner
-description: Connect Hetzner Cloud (servers, volumes, firewalls, load balancers) to a self-hosted Hermes Agent over SSH. Uses a static project-scoped Bearer token against the official REST API, with an optional self-hosted community MCP fallback. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect hetzner to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-hetzner — connect Hetzner Cloud to a remote Hermes (SSH-first)
+# /integration-hetzner — connect hetzner over SSH
 
-You are the engineer connecting Hetzner Cloud to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the one thing a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the API token in the Hetzner Cloud Console (it is shown exactly once).
+## Before you start — gather (ask once)
 
-Everything else — token storage, REST wiring (or optional MCP registration), gateway reload,
-verification — runs on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. HETZNER_API_TOKEN scoped read-only to the intended Hetzner Cloud project. A placeholder MCP hostname is not installed.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Hetzner Cloud exposes a clean REST API at
-`https://api.hetzner.cloud/v1/` guarded by a static project-scoped Bearer token. There is
-**no first-party Hetzner MCP server**. Path A (default) stores the token and points the
-agent's generic HTTP tool at the REST API. Path B documents how to self-host the community
-`dkruyt/mcp-hetzner` server if the user wants first-class MCP tools — do not pretend a hosted
-endpoint exists.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$HETZNER_API_TOKEN` | Static project-scoped Bearer token (opaque alphanumeric, no prefix; e.g. `jEheVytlAoFl7F8MqUQ7jAo2hOXASztX`) | Hetzner Cloud Console → **Security → API tokens → Generate API token** → pick **Read** (safe default) or **Read & Write** (mutations). Shown ONCE. See <https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/> |
-| Scope choice | Read vs Read & Write | Decided at mint time — cannot be upgraded later, only re-minted |
-
-One token = one Hetzner *project*. A multi-project user needs one token per project.
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci hetzner" || echo 0)
-HAS_TOKEN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^HETZNER_API_TOKEN=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if { [ "$ALREADY" -gt 0 ] || [ "$HAS_TOKEN" -gt 0 ]; } && [ "${FORCE:-0}" != "1" ]; then
-  echo "Hetzner is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Sanity-check token: GET https://api.hetzner.cloud/v1/servers?per_page=1 → expect 200
-  2. Write HETZNER_API_TOKEN (length ${#HETZNER_API_TOKEN}, prefix ${HETZNER_API_TOKEN:0:4}...) via 'hermes config set'
-  3. chmod 600 ~/.hermes/.env
-  4. Path A (default): document REST base + auth for the agent's HTTP tool
-     Path B (optional): hermes mcp add hetzner against a self-hosted dkruyt/mcp-hetzner URL
-  5. Reload gateway: hermes gateway stop && hermes gateway run
-  6. Verify in logs: grep -i "registered.*hetzner" (Path B only)
-  7. Smoke test: GET /v1/servers?per_page=1 → expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-First sanity-check the token against the live API from the VPS so a bad token aborts before
-anything is written:
-
-```bash
-PRECHECK=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H 'Authorization: Bearer $HETZNER_API_TOKEN' \
-    'https://api.hetzner.cloud/v1/servers?per_page=1'
-")
-case "$PRECHECK" in
-  200) echo "OK: token validates against Hetzner Cloud API." ;;
-  401) echo "ABORT: HTTP 401 — token invalid or for wrong project. Re-mint and retry."; exit 1 ;;
-  *)   echo "ABORT: unexpected HTTP $PRECHECK from Hetzner. Check connectivity."; exit 1 ;;
-esac
-```
-
-Then write it:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set HETZNER_API_TOKEN '$HETZNER_API_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^HETZNER_API_TOKEN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: HETZNER_API_TOKEN not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; Hetzner tokens are alnum but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^HETZNER_API_TOKEN=' ~/.hermes/.env || printf 'HETZNER_API_TOKEN=\n' >> ~/.hermes/.env
->   sed -i 's|^HETZNER_API_TOKEN=.*|HETZNER_API_TOKEN=$HETZNER_API_TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — wire it into Hermes (choose the honest path)
-
-**There is no first-party Hetzner MCP server.** Pick one and tell the user which.
-
-### Path A (default) — REST API via the agent's generic HTTP tool
-
-The token is now in `~/.hermes/.env` as `HETZNER_API_TOKEN`. Point the agent's HTTP tool at:
-
-- **Base URL:** `https://api.hetzner.cloud/v1/`
-- **Auth header:** `Authorization: Bearer ${HETZNER_API_TOKEN}`
-- **Useful read endpoints:** `GET /servers`, `GET /volumes`, `GET /firewalls`,
-  `GET /load_balancers`, `GET /datacenters`, `GET /pricing`
-- **Mutations (Read & Write token only):** `POST /servers`,
-  `POST /servers/{id}/actions/poweroff`, `DELETE /servers/{id}`
-- **Full reference:** <https://docs.hetzner.cloud/reference/cloud>
-
-No `hermes mcp add` is needed for Path A. Skip directly to Step 6.
-
-### Path B (optional) — self-host `dkruyt/mcp-hetzner` then register it
-
-If the user wants first-class MCP tools, the maintained community option is
-**dkruyt/mcp-hetzner** (MIT, Python): <https://github.com/dkruyt/mcp-hetzner>. It ships as a
-local stdio server with an optional SSE/HTTP mode (default `localhost:8080`) and reads the
-token from the `HCLOUD_TOKEN` env var (not `HETZNER_API_TOKEN` — see Pitfalls). To use it
-remotely you must host it yourself behind a URL Hermes can reach, then:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add hetzner \
-    --url 'https://hetzner-mcp.<your-domain>/mcp' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-"
-# Inject the real token with pipe delimiter (tokens are alnum but the pattern is universal):
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$HETZNER_API_TOKEN\"'|g' ~/.hermes/config.yaml"
-```
-
-Do not invent or assume a public URL for this server — there is no official hosted one. If
-you have not actually stood up the server, do not claim it is connected; fall back to Path A.
-
-Other community implementations exist (Xodus-CO/hcloud-mcp, MahdadGhasemian/mcp-hetzner-go);
-vet maintenance and provenance before trusting any of them with a Read & Write token.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (Path B only; poll up to 30s)
-
-Path A has nothing to register in the gateway — the env var is just loaded on next gateway
-start. Skip this step for Path A. For Path B:
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*hetzner|MCP server.*hetzner.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: hetzner registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-hetzner
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: hetzner not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
-For Path A, instead confirm the env var is loaded into the gateway process:
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -100" \
-  | grep -qiE "gateway.*(ready|started|listening)" \
-  || { echo "FAIL: gateway did not come back up. Rolling back."; rollback; exit 1; }
-```
-
----
-
-## Step 8 — live API smoke test
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -H \"Authorization: Bearer \$HETZNER_API_TOKEN\" \
-    'https://api.hetzner.cloud/v1/servers?per_page=1'
-")
-case "$HTTP" in
-  200) echo "OK: Hetzner Cloud API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or wrong project. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token is Read-only and you tried a write op (or scope missing)."; exit 1 ;;
-  429) echo "WARN: rate-limited (3600 req/hr per project). Backoff and retry." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Hetzner Cloud API. Check manually." ;;
-esac
-```
-
-`200` with `{"servers":[]}` (empty array) is a pass — the project simply has no servers yet.
-Every layer worked.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove hetzner 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset HETZNER_API_TOKEN 2>/dev/null || \
-    sed -i '/^HETZNER_API_TOKEN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Hetzner is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in skills/hstack-hetzner/SKILL.md skills/hstack-hetzner/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Refuse to replace a changed or foreign native workflow. A concurrent user edit
+# belongs to the user; retain all recovery artifacts for manual reconciliation.
+p="$HOME/.hermes/skills/hstack-hetzner"
+original="$b/skills_hstack-hetzner_SKILL.md"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] || exit 1
+  entries=$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  if [ "$entries" = 0 ] && [ -f "$original.absent" ]; then :
+  else
+    [ "$entries" = 2 ] && [ -f "$p/SKILL.md" ] && [ -f "$p/.hstack-managed" ] \
+      && [ ! -L "$p/SKILL.md" ] && [ ! -L "$p/.hstack-managed" ] \
+      && [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] \
+      || { echo "extra_restore: native skill was edited or is unowned; active backup retained." >&2; exit 1; }
+  fi
+elif [ ! -f "$original.absent" ]; then
+  echo "extra_restore: previous native skill was removed; active backup retained." >&2
+  exit 1
+fi
+# Validate all copies before restoring any artifact.
+for rel in skills/hstack-hetzner/SKILL.md skills/hstack-hetzner/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in skills/hstack-hetzner/SKILL.md skills/hstack-hetzner/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${HETZNER_API_TOKEN:-}" || { echo "ABORT: HETZNER_API_TOKEN is empty or unsafe. Nothing was written."; exit 1; }
+
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: local skill is not safely replaceable. Nothing was written."; exit 1; }
+p="$HOME/.hermes/skills/hstack-hetzner"
+[ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] && [ -f "$p/.hstack-managed" ] && [ -f "$p/SKILL.md" ] && [ ! -L "$p/SKILL.md" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] || exit 1
+  [ "$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ] || exit 1
+fi
+REMOTE
+printf '%s\n' "${HETZNER_API_TOKEN:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'HETZNER_API_TOKEN'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.hetzner.cloud/v1/servers?per_page=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'HETZNER_API_TOKEN'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: hetzner; path: rest.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Install a discoverable read-only Hermes skill with owned-file recovery.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env HETZNER_API_TOKEN "${HETZNER_API_TOKEN:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native skill installation."; fail_transaction; }
+set -e
+p="$HOME/.hermes/skills/hstack-hetzner"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+mkdir -p "$p" && chmod 700 "$p"
+t=$(mktemp "$p/.SKILL.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'HSTACK_NATIVE_SKILL'
 ---
+name: hstack-hetzner
+description: Read hetzner account data using a private host credential; use for the installed read-only hetzner connection.
+---
+
+# hetzner: read-only account access
+
+Only run this read request when the user asks for hetzner account data. Do not print credentials.
+This connector is read-only; changes require a separately reviewed workflow and user authorization.
+The script reads the private ~/.hermes/.env without sourcing it as executable shell code.
+Use the following command through the native terminal tool on the Hermes host:
+
+
+    python3 -c 'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+    d={}
+    p=os.path.expanduser("~/.hermes/.env")
+    if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+    if os.path.isfile(p):
+     for line in open(p):
+      k, sep, v=line.rstrip("\n").partition("=")
+      if sep:
+       v=v.strip()
+       if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+       d[k]=v
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+      raise RuntimeError("Redirect refused; credentials were not forwarded")
+    def req(url, headers=None, body=None):
+     if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+     r=urllib.request.Request(url,headers=headers or {},data=body)
+     with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+      if f.status != 200: raise RuntimeError("Non-200 response")
+      data=f.read(2 * 1024 * 1024 + 1)
+      if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+      return data
+    result=req('"'"'https://api.hetzner.cloud/v1/servers?per_page=1'"'"',{'"'"'Authorization'"'"':'"'"'Bearer '"'"'+d['"'"'HETZNER_API_TOKEN'"'"']})
+    print(result.decode())
+    '
+
+Return only requested account fields. Keep the fixed read-only endpoint and never expose .env values.
+HSTACK_NATIVE_SKILL
+chmod 600 "$t"
+mv "$t" "$p/SKILL.md"
+cksum < "$p/SKILL.md" > "$p/.hstack-managed"
+chmod 600 "$p/.hstack-managed"
+REMOTE
+remote 'hermes -p default skills list --enabled-only | grep -F "hstack-hetzner"' >/dev/null || { echo "FAIL: installed skill is not discoverable/enabled."; fail_transaction; }
+```
+
+This installs a real Hermes-discoverable native skill, with an executable read request and managed-file checksum. Existing user edits or unowned files are refused. The previous skill file and marker are recovered with the transaction.
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.hetzner.cloud/v1/servers?per_page=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"'Bearer '"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'HETZNER_API_TOKEN'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; fail_transaction; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-hetzner.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Assuming a hosted Hetzner MCP exists | There is **no first-party MCP**; a key in `.env` alone connects nothing | Pick Path A (REST) or Path B (self-hosted community MCP) — tell the user which |
-| 2 | Token shown to wrong project's resources | Token is **project-scoped**, shown once, cannot be viewed again | Confirm correct project at mint time; re-mint if wrong |
-| 3 | "Upgrading" a Read token to Read & Write | Scope is fixed at mint time | Re-mint as Read & Write; revoke the old one |
-| 4 | Burst of calls returns `429` | Rate limit is **3600 req/hr per project**, refills ~1/sec, NOT all at once | Backoff on `429`; honour `RateLimit-Remaining` header |
-| 5 | Token "works" but hits the wrong API | Hetzner Cloud (`api.hetzner.cloud`) ≠ Hetzner Robot (dedicated) — separate APIs and tokens | Cloud tokens only authenticate against `api.hetzner.cloud` |
-| 6 | Path B server starts unauthenticated | dkruyt/mcp-hetzner reads `HCLOUD_TOKEN`; Hermes injects `MCP_HETZNER_API_KEY` | Map the names in the server's own env: `HCLOUD_TOKEN=${MCP_HETZNER_API_KEY}` |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without a trailing newline (silent breakage) | Always `hermes config set`; fallback is the sed pattern with pipe delimiter |
-| 9 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600` |
-| 10 | sed with `/` delimiter on tokens | Future tokens may contain `/+=` | Always use `\|` delimiter |
-| 11 | Container vs host confusion | SSH lands on host but Hermes runs in a container, or vice versa | Step 1 detects both layers; always check `whoami; hostname` first if confused |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | MCP placeholder | A template hostname is not a working server | Use the native REST read client |
+| 2 | Project scope | A token is scoped to its Hetzner Cloud project | Check the intended project before use |
+| 3 | Read capability | The fixed request lists servers | Do not claim create/delete operations |
+| 4 | Infrastructure charges | Resource creation can incur charges | No resource is created by this setup |
+| 5 | Key handling | The API uses a Bearer token | Load it privately from .env |
+| 6 | Owned skill | A modified native skill belongs to the user | Refuse silent overwrite |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] Token sanity-checked against `GET /v1/servers?per_page=1` → HTTP 200
-- [ ] `HETZNER_API_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Scope (Read vs Read & Write) confirmed and communicated to the user
-- [ ] Chosen path is wired: Path A (REST base + Bearer header handed to the agent's HTTP tool) **or** Path B (`hermes mcp add hetzner` against self-hosted MCP, tools in logs)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Path B only: logs show `registered N tool(s) for 'hetzner'` within 30s
-- [ ] Smoke test: `GET /v1/servers?per_page=1` returned `200` (empty array is a pass)
-- [ ] User told plainly that no first-party MCP exists and which path was used
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

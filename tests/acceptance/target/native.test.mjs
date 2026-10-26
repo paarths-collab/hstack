@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { readTargetScript } from '../../../packages/acceptance/artifacts.js';
@@ -220,4 +221,128 @@ test('unbundled native helpers and legacy cron recovery on the candidate runtime
     assert.equal(r.kv.error, 'legacy_runtime_incompatible');
     assert.equal(legacy.hash(), before);
   } finally { legacy.cleanup(); }
+});
+
+test('legacy recovery refuses every runtime except the original exact 0.15.2 fixture', () => {
+  for (const version of ['0.21.0', '0.22.6', '0.15.2.1', '0.15.2+local', '0.15.2-rc1', 'unknown', '0.22.5', '0.22.5.1', '0.22.5.dev3', '0.22.5+3.gabc1234', '0.22.5-rc1']) {
+    const legacy = new Sandbox();
+    try {
+      legacy.write('.hermes/.env', 'USER_KEY=preserved\n', 0o600);
+      legacy.stageAll();
+      assert.equal(legacy.apply(TXN, [CRON_SPEC]).status, 0);
+      const binary = join(legacy.home, '.local/bin/hermes');
+      rmSync(binary);
+      writeFileSync(binary, `#!/bin/sh\nprintf 'Hermes Agent v${version} (2026.9.24)\\nPython: 3.11.16\\n'\n`, { mode: 0o755 });
+      const before = legacy.hash();
+      const r = legacy.restore();
+      assert.equal(r.status, 4, `${version}: ${r.stdout}`);
+      assert.equal(r.kv.error, 'legacy_runtime_incompatible', version);
+      assert.equal(legacy.hash(), before, version);
+    } finally { legacy.cleanup(); }
+  }
+});
+
+const gatewayCalls = (sb) => sb.stubCalls().filter((args) => args[2] === 'gateway').map((args) => args.slice(2).join(' '));
+const ENSURE10 = 'gateway ensure --json --timeout 10';
+const ENSURE60 = 'gateway ensure --json --timeout 60';
+
+function appliedSandbox() {
+  const sb = new NativeSandbox();
+  sb.stageAll();
+  assert.equal(sb.apply(TXN, [CRON_SPEC]).status, 0);
+  return sb;
+}
+
+test('native reload = remember instance, `gateway restart --detach` (no -y), ensure ready with a NEW instance', () => {
+  const sb = appliedSandbox();
+  try {
+    const r = sb.run(['reload', TXN]);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(r.kv.reloaded, '1');
+    assert.deepEqual(gatewayCalls(sb), [ENSURE10, 'gateway restart --detach', ENSURE60]);
+    assert.ok(sb.stubCalls().every((args) => args[0] === '--profile' && args[1] === 'default'));
+    assert.ok(!sb.stubCalls().flat().some((arg) => ['--daemon', 'run', 'stop', 'start', '-y', '--yes'].includes(arg)));
+  } finally { sb.cleanup(); }
+});
+
+test('native reload passes -y only on the explicit --interrupt-live-sessions opt-in', () => {
+  const sb = appliedSandbox();
+  try {
+    const r = sb.run(['reload', TXN, '--interrupt-live-sessions']);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.equal(r.kv.reloaded, '1');
+    assert.deepEqual(gatewayCalls(sb), [ENSURE10, 'gateway restart -y --detach', ENSURE60]);
+    assert.equal(sb.run(['reload', TXN, '--bogus']).status, 2);
+    assert.equal(sb.run(['reload', TXN, '--interrupt-live-sessions', 'extra']).status, 2);
+  } finally { sb.cleanup(); }
+});
+
+test('native reload with live sessions and no opt-in is REFUSED and reported as failed, naming the reason; the opt-in succeeds', () => {
+  const sb = appliedSandbox();
+  try {
+    const refused = sb.run(['reload', TXN], { env: { HSTACK_NATIVE_LIVE_SESSIONS: '1' } });
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.equal(refused.kv.error, 'native_adapter_failed');
+    assert.match(refused.kv.detail, /restart_refused_or_failed/);
+    assert.notEqual(refused.kv.reloaded, '1');
+    assert.deepEqual(gatewayCalls(sb), [ENSURE10, 'gateway restart --detach'], 'readiness is not consulted after a refused restart');
+    const forced = sb.run(['reload', TXN, '--interrupt-live-sessions'], { env: { HSTACK_NATIVE_LIVE_SESSIONS: '1' } });
+    assert.equal(forced.status, 0, forced.stdout);
+    assert.equal(forced.kv.reloaded, '1');
+  } finally { sb.cleanup(); }
+});
+
+test('native reload fails when restart exits 0 but the gateway instance_id did not change (nothing restarted)', () => {
+  const sb = appliedSandbox();
+  try {
+    const r = sb.run(['reload', TXN], { env: { HSTACK_NATIVE_RESTART_NOOP: '1' } });
+    assert.equal(r.status, 1, r.stdout);
+    assert.match(r.kv.detail, /native_instance_unchanged/);
+    assert.notEqual(r.kv.reloaded, '1');
+  } finally { sb.cleanup(); }
+});
+
+test('native readiness retries the transient exit 5 twice and no further', () => {
+  for (const [pending, ok] of [[2, true], [3, false]]) {
+    const sb = appliedSandbox();
+    try {
+      const r = sb.run(['reload', TXN], { env: { HSTACK_NATIVE_ENSURE_PENDING: String(pending) } });
+      assert.equal(r.status === 0, ok, `${pending}: ${r.stdout}`);
+      assert.equal(gatewayCalls(sb).filter((call) => call === ENSURE60).length, 3);
+      if (!ok) assert.match(r.kv.detail, /native_readiness_unconfirmed/);
+    } finally { sb.cleanup(); }
+  }
+});
+
+test('native reload is only confirmed by readiness: a failed restart or a failed ensure is a failed reload', () => {
+  for (const failing of ['restart', 'ensure']) {
+    const sb = appliedSandbox();
+    try {
+      const r = sb.run(['reload', TXN], { env: { HSTACK_NATIVE_FAIL: failing } });
+      assert.notEqual(r.status, 0, failing);
+      assert.notEqual(r.kv.reloaded, '1', failing);
+      const calls = gatewayCalls(sb);
+      if (failing === 'restart') {
+        assert.ok(calls.includes('gateway restart --detach'), calls.join(' | '));
+        assert.ok(!calls.includes(ENSURE60), 'ensure(60) is not consulted after a failed restart');
+      } else {
+        assert.deepEqual(calls, [ENSURE10], 'an unknown prior instance refuses before restarting');
+        assert.match(r.kv.detail, /native_previous_instance_unconfirmed/);
+      }
+    } finally { sb.cleanup(); }
+  }
+});
+
+test('the native CLI fixture rejects `gateway run --daemon` and other undeclared options like argparse (exit 2)', () => {
+  const sb = new NativeSandbox();
+  try {
+    const call = (...argv) => spawnSync('env', ['-i', `HOME=${sb.home}`, `HERMES_HOME=${sb.h}`, 'PATH=/usr/bin:/bin', FIXTURE, '--profile', 'default', ...argv], { encoding: 'utf8' });
+    for (const argv of [['gateway', 'run', '--daemon'], ['gateway', 'restart', '--daemon'], ['gateway', 'stop', '--bogus'], ['gateway', 'ensure', '--daemon']]) {
+      const r = call(...argv);
+      assert.equal(r.status, 2, argv.join(' '));
+      assert.match(r.stderr, /unrecognized arguments: --daemon|unrecognized arguments: --bogus/);
+    }
+    assert.equal(call('gateway', 'restart', '-y', '--detach').status, 0);
+    assert.equal(call('gateway', 'restart', '--yes').status, 0);
+  } finally { sb.cleanup(); }
 });

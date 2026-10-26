@@ -11,22 +11,29 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(here, "fixtures/hermes-v0.22.5");
 const provenance = JSON.parse(readFileSync(path.join(fixture, "provenance.json"), "utf8"));
 
-it("exact tagged syntax fixtures and installer are bound to the opt-in candidate, not the promoted legacy pin", () => {
+it("exact tagged syntax fixtures and installer are bound to the single supported target in VERSIONS.txt", () => {
   const versions = readFileSync(path.join(REPO_ROOT, "VERSIONS.txt"), "utf8");
-  assert.ok(versions.includes(`HERMES_CANDIDATE_VERSION=${provenance.version}\n`));
-  assert.ok(versions.includes(`HERMES_CANDIDATE_COMMIT=${provenance.commit}\n`));
-  assert.ok(versions.includes(`HERMES_CANDIDATE_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/${provenance.commit}/scripts/install.sh\n`));
-  assert.ok(versions.includes(`HERMES_CANDIDATE_INSTALLER_SHA256=${provenance.files["install.sh"].sha256}\n`));
+  assert.ok(versions.includes(`HERMES_VERSION=${provenance.version}\n`));
+  assert.ok(versions.includes(`HERMES_COMMIT=${provenance.commit}\n`));
+  assert.ok(versions.includes(`HERMES_INSTALLER_URL=https://raw.githubusercontent.com/NousResearch/hermes-agent/${provenance.commit}/scripts/install.sh\n`));
+  assert.ok(versions.includes(`HERMES_INSTALLER_SHA256=${provenance.files["install.sh"].sha256}\n`));
+  assert.ok(versions.includes("HERMES_LEGACY_FIXTURE_VERSION=0.15.2\n"), "the old fixture version is kept only under its legacy name");
+  assert.doesNotMatch(versions, /HERMES_CANDIDATE_/, "the candidate keys are gone");
   for (const [name, meta] of Object.entries(provenance.files)) {
     const bytes = readFileSync(path.join(fixture, name));
     assert.equal(createHash("sha256").update(bytes).digest("hex"), meta.sha256, name);
     assert.equal(createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex"), meta.git_blob_sha, name);
   }
   const installer = readFileSync(path.join(REPO_ROOT, "skills/hermes-install/SKILL.md"), "utf8");
-  assert.ok(installer.includes(provenance.commit));
-  assert.ok(installer.includes(provenance.files["install.sh"].sha256));
-  assert.match(installer, /CANDIDATE_ACKNOWLEDGED/);
+  assert.ok(installer.includes(provenance.commit), "the install skill pins the same commit as the fixtures");
+  assert.ok(installer.includes(provenance.files["install.sh"].sha256), "and the same installer digest");
   assert.ok(!loadBlocks("hermes-install").some(b => /pip install|\/main\/scripts\/install/.test(b.code)));
+  for (const skill of ["hermes-install", "hermes-update", "hermes-deploy", "hermes-memory"]) {
+    const text = readFileSync(path.join(REPO_ROOT, `skills/${skill}/SKILL.md`), "utf8");
+    assert.doesNotMatch(text, /CANDIDATE_ACKNOWLEDGED|compatibility candidate|unpromoted/i, `${skill}: the opt-in framing is retired`);
+    assert.match(text, /## Verified against Hermes v0\.22\.5/, skill);
+    assert.match(text, /not live-verified|source-verified/i, `${skill}: says honestly that nothing was run live`);
+  }
 });
 
 it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/memory/update assumptions", () => {
@@ -41,6 +48,13 @@ it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/me
     ["memory", "status"], ["memory", "off"], ["memory", "setup", "mem0"],
     ["update", "--plan"], ["update", "--channel", "stable", "--check"],
     ["update", "--channel", "stable", "--backup", "--yes"],
+    ["update", "--channel", "stable", "--yes"],
+    ["update", "--check"],
+    ["backup", "--output", "/tmp/x.zip", "--keep", "0"],
+    ["import", "/tmp/x.zip"],
+    ["doctor"],
+    ["memory", "off"], ["memory", "status"],
+    ["plugins", "install", "mem0", "--yes-deps", "--no-enable"],
     ["-z", "reply with the single word OK"],
   ];
   const rejected = [
@@ -48,6 +62,10 @@ it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/me
     ["memory", "write", "--note", "test"], ["memory", "search", "test"],
     ["update", "--version", "0.22.5"], ["model", "--provider", "openrouter"],
     ["setup", "--portal", "--no-browser"],
+    ["backup", "--keep", "-1"],
+    ["plugins", "install", "mem0", "--yes-deps", "--no-deps"],
+    ["plugins", "install", "mem0", "--enable", "--no-enable"],
+    ["pm", "doctor"], // `pm` never reaches argparse (hermes_cli/main.py:679-683): skills mark those lines `hermes-parse: skip`
   ];
   const r = spawnSync("python3", [path.join(here, "helpers/native-parser.py"), fixture, JSON.stringify([...accepted, ...rejected].map(argv => ["-p", "default", ...argv]))], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr || r.stdout);
@@ -59,7 +77,7 @@ it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/me
   }
 });
 
-it("actual immutable installer accepts the candidate flags before help and refuses unsupported arguments without running stages", () => {
+it("actual immutable installer accepts the v0.22.5 flags before help and refuses unsupported arguments without running stages", () => {
   const r = spawnSync("/bin/bash", [path.join(fixture, "install.sh"), "--commit", provenance.commit, "--channel", "stable", "--non-interactive", "--skip-browser", "--skip-computer-use", "--help"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /--commit SHA/);

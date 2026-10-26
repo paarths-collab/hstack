@@ -16,7 +16,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
+READINESS_RETRY_SECONDS = 3
 VERSION = "0.22.5"
 COMMIT = "bf0203a794a07aac3ff764972ab9087baa4e4f4e"
 FORMAT = "hstack-native-cron-v1"
@@ -356,25 +358,76 @@ class Adapter:
             if any(not isinstance(name, str) or name != "default" for name in state["served_profiles"]):
                 refuse("native_gateway_scope_unsupported", "exclusive_default_profile_required")
 
-    def reload(self):
+    def _ensure(self, prefix, env, seconds):
+        """Run `gateway ensure --json`; returns (exit code, parsed JSON or None)."""
+        result = subprocess.run(prefix + ["ensure", "--json", "--timeout", str(seconds)], env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                timeout=seconds + 10, check=False)
+        if len(result.stdout) > 65536:
+            return result.returncode, None
+        try:
+            return result.returncode, json.loads(result.stdout.decode("utf-8"), object_pairs_hook=unique_pairs)
+        except (UnicodeError, ValueError):
+            return result.returncode, None
+
+    def reload(self, interrupt_live_sessions=False):
+        """Restart the default-profile gateway and prove a NEW, ready instance came up.
+
+        1. remember the current instance_id (`gateway ensure --json --timeout 10`, if a gateway answers);
+        2. `gateway restart --detach`, plus `-y` ONLY when the operator opted in to interrupting live sessions;
+        3. `gateway ensure --json --timeout 60` must exit 0 with state "ready" (exit 5/6 is transient: retried twice),
+           match this release and home, and carry an instance_id different from step 1.
+        v0.22.5: hermes_cli/subcommands/gateway.py:146-155 (restart parser: -y/--yes/--interrupt, --detach);
+        hermes_cli/gateway.py _cmd_restart 5454-5540 restarts a systemd service through its manager. Without -y and
+        without a TTY it REFUSES with exit 1 while sessions are live (gateway_lifecycle_guards.py:97-132), which
+        is reported, never forced. --detach only matters without an installed service, where the replacement would
+        otherwise run in the foreground of this call (gateway_supervised_restart.py:140-151). `restart` can exit 0
+        without restarting at all (a linger warning returns normally, gateway.py:5499-5513); instance_id is a
+        fresh uuid4 per gateway process (gateway/run_runtime.py:144), so an unchanged id means nothing restarted.
+        `gateway run --daemon` does not exist.
+        """
         self.service_check()
         env = self.environment()
         prefix = [self.hermes, "--profile", "default", "gateway"]
-        for operation in (["stop", "--yes"], ["start"]):
-            self.service_check()
-            result = subprocess.run(prefix + operation, env=env, stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    timeout=120, check=False)
-            if result.returncode != 0:
-                refuse("native_gateway_reload_failed", "native_service_operation_unconfirmed", 1)
-        result = subprocess.run(prefix + ["ensure", "--json", "--timeout", "60"], env=env,
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                timeout=70, check=False)
-        if result.returncode != 0 or len(result.stdout) > 65536:
-            refuse("native_gateway_reload_failed", "native_readiness_unconfirmed", 1)
+        previous = None
         try:
-            ready = json.loads(result.stdout.decode("utf-8"), object_pairs_hook=unique_pairs)
-        except (UnicodeError, ValueError):
+            code, before = self._ensure(prefix, env, 10)
+        except (OSError, subprocess.SubprocessError):
+            code, before = 1, None
+        # A draining verdict (exit 6) can still identify the serving process.
+        # Keep that identity: an exit-0 restart can be a no-op after a linger warning.
+        if code in (0, 6) and isinstance(before, dict) and isinstance(before.get("endpoint"), dict):
+            endpoint = before["endpoint"]
+            candidate = endpoint.get("instance_id")
+            if (before.get("state") == ("ready" if code == 0 else "draining")
+                    and endpoint.get("profile_id") == str(self.home)
+                    and endpoint.get("control_home") in {None, str(self.home)}
+                    and endpoint.get("code_sha") == COMMIT and before.get("client_code_sha") == COMMIT):
+                previous = candidate if isinstance(candidate, str) and candidate else None
+        if previous is None:
+            refuse("native_gateway_reload_failed", "native_previous_instance_unconfirmed", 1)
+        self.service_check()
+        argv = prefix + ["restart"] + (["-y"] if interrupt_live_sessions else []) + ["--detach"]
+        try:
+            result = subprocess.run(argv, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=120, check=False)
+        except (OSError, subprocess.SubprocessError):
+            refuse("native_gateway_reload_failed", "native_restart_unconfirmed", 1)
+        if result.returncode != 0:
+            # Typically live sessions without an interrupt opt-in; the opt-in is the operator's decision.
+            refuse("native_gateway_reload_failed", "native_restart_refused_or_failed", 1)
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                code, ready = self._ensure(prefix, env, 60)
+            except (OSError, subprocess.SubprocessError):
+                refuse("native_gateway_reload_failed", "native_readiness_unconfirmed", 1)
+            if code in (5, 6) and attempts < 3:  # deadline / draining: transient
+                time.sleep(READINESS_RETRY_SECONDS)
+                continue
+            break
+        if code != 0 or ready is None:
             refuse("native_gateway_reload_failed", "native_readiness_unconfirmed", 1)
         endpoint = ready.get("endpoint") if isinstance(ready, dict) else None
         if (not isinstance(endpoint, dict) or ready.get("state") != "ready"
@@ -386,6 +439,8 @@ class Adapter:
                 or not isinstance(endpoint.get("instance_id"), str) or not endpoint["instance_id"]
                 or endpoint.get("code_sha") != COMMIT or ready.get("client_code_sha") != COMMIT):
             refuse("native_gateway_reload_failed", "native_readiness_identity_mismatch", 1)
+        if previous is not None and endpoint["instance_id"] == previous:
+            refuse("native_gateway_reload_failed", "native_instance_unchanged", 1)
         self.service_check()
         output(native_gateway_reloaded=1)
 
@@ -406,10 +461,10 @@ class Adapter:
 
     def dispatch(self, operation, args):
         if operation in {"service-check", "reload"}:
-            if args:
+            if args and not (operation == "reload" and args == ["--interrupt-live-sessions"]):
                 refuse("native_cron_invocation_invalid", "unexpected_arguments")
             if operation == "reload":
-                self.reload()
+                self.reload(interrupt_live_sessions=bool(args))
             else:
                 self.service_check()
                 output(native_gateway_scope_ok=1)

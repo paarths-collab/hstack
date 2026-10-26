@@ -1,325 +1,335 @@
 ---
 name: integration-freshdesk
-description: Connect Freshdesk (SMB support tickets, contacts, companies) to a self-hosted Hermes Agent over SSH using a static API key. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI when Hermes needs to triage, read, create, or update Freshdesk tickets.
+description: Connect freshdesk to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-freshdesk — connect Freshdesk to a remote Hermes (SSH-first)
+# /integration-freshdesk — connect freshdesk over SSH
 
-You are the engineer connecting Freshdesk to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. Every command in this skill runs on the VPS, not the local
-machine. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the Freshdesk API key in the UI (captcha required).
-2. Confirm the Freshdesk plan / EAP enrollment for the first-party MCP.
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. FRESHDESK_DOMAIN (the bare tenant subdomain) and FRESHDESK_API_KEY. Hosted MCP is an EAP/vendor capability: mcp test must succeed; a REST token check alone does not prove MCP entitlement.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Freshdesk ships a **first-party remote MCP
-server** at `https://<domain>.freshdesk.com/mcp`. It is in **Early Access Program (EAP)**,
-restricted to **Enterprise plan** accounts, with a 100 calls/min and 5,000 calls/month cap
-during EAP. Auth is the raw Freshdesk **API key** in the `Authorization` header —
-**no `Bearer ` prefix** (Freshworks docs are explicit on this). The v2 REST API stays
-available on every plan and uses HTTP Basic auth (API key as username, literal `X` as
-password); use it as the Path B fallback when the MCP EAP is not granted. Community
-servers (`effytech/freshdesk_mcp`, `NeuraLegion/freshdesk_mcp`) exist but are local stdio
-and not maintained by Freshworks — not recommended.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$FRESHDESK_DOMAIN` | Subdomain prefix (e.g. `acme` for `acme.freshdesk.com`) | Freshdesk admin URL |
-| `$FRESHDESK_API_KEY` | Static API key for the integration agent | Log in as the owning agent → profile picture (top right) → **Profile Settings** → right pane **View API key** → complete the captcha → copy. Agent MUST be verified or the field is hidden. |
-| Plan / EAP status | Enterprise + EAP grant for first-party MCP | Confirm with the Freshworks TAM or `support@freshdesk.com`. If not granted, skip to Path B. |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: a version string like `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci freshdesk" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Freshdesk is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write FRESHDESK_API_KEY (length ${#FRESHDESK_API_KEY}, prefix ${FRESHDESK_API_KEY:0:4}...) via 'hermes config set'
-  2. Write FRESHDESK_DOMAIN=${FRESHDESK_DOMAIN} via 'hermes config set'
-  3. chmod 600 ~/.hermes/.env
-  4. Path A (Enterprise + EAP): register MCP at https://${FRESHDESK_DOMAIN}.freshdesk.com/mcp
-     - Patch config.yaml to strip 'Bearer ' from Authorization header
-     OR
-     Path B (any plan): document REST base https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2
-  5. Reload gateway: hermes gateway stop && hermes gateway run
-  6. Verify in logs: grep -i "registered.*freshdesk"
-  7. Smoke test: GET /api/v2/tickets?per_page=1 → expect 200
-
-The API key is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set FRESHDESK_API_KEY '$FRESHDESK_API_KEY'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set FRESHDESK_DOMAIN '$FRESHDESK_DOMAIN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify both vars landed (returns `1` for each, NEVER the value):
-
-```bash
-WROTE_KEY=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^FRESHDESK_API_KEY=' ~/.hermes/.env" || echo 0)
-WROTE_DOM=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^FRESHDESK_DOMAIN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE_KEY" = "1" ] && [ "$WROTE_DOM" = "1" ] \
-  || { echo "FAIL: secret(s) not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter — Freshdesk API keys are alnum but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^FRESHDESK_API_KEY=' ~/.hermes/.env || printf 'FRESHDESK_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^FRESHDESK_API_KEY=.*|FRESHDESK_API_KEY=$FRESHDESK_API_KEY|' ~/.hermes/.env
->   grep -q '^FRESHDESK_DOMAIN=' ~/.hermes/.env || printf 'FRESHDESK_DOMAIN=\n' >> ~/.hermes/.env
->   sed -i 's|^FRESHDESK_DOMAIN=.*|FRESHDESK_DOMAIN=$FRESHDESK_DOMAIN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the MCP server (or REST endpoint if EAP not granted)
-
-Pick the path that matches the account. Path A is preferred when EAP is live.
-
-### Path A (preferred, Enterprise + EAP) — first-party remote MCP
-
-Endpoint: `https://${FRESHDESK_DOMAIN}.freshdesk.com/mcp`
-Auth shape: header `Authorization: <api-key>` — **no `Bearer ` prefix**.
-
-Before registering, sanity-check the MCP endpoint from the VPS with a `tools/list` probe.
-`200` with a JSON-RPC `result` means EAP is live and the key is good. `401` / `403` means
-EAP is not granted on this account — switch to Path B. `404` means the subdomain is wrong.
-
-```bash
-PROBE=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /tmp/fd_probe -w '%{http_code}' \
-    -X POST 'https://${FRESHDESK_DOMAIN}.freshdesk.com/mcp' \
-    -H 'Accept: application/json, text/event-stream' \
-    -H 'Content-Type: application/json' \
-    -H \"Authorization: \$FRESHDESK_API_KEY\" \
-    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"probe\",\"version\":\"0\"}}}'
-")
-case "$PROBE" in
-  200) echo "OK: EAP live; proceeding with Path A." ;;
-  401|403) echo "EAP not granted; switching to Path B."; PATH_B=1 ;;
-  404) echo "FAIL: subdomain wrong. Check FRESHDESK_DOMAIN."; rollback; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $PROBE; check manually." ;;
-esac
-```
-
-If `PATH_B` is unset, register the MCP server:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add freshdesk \
-    --url 'https://${FRESHDESK_DOMAIN}.freshdesk.com/mcp' \
-    --auth-header 'Authorization' \
-    --auth-scheme '' \
-    --placeholder-token 'placeholder'
-"
-```
-
-Hermes' default header template is `Bearer ${MCP_FRESHDESK_API_KEY}`. Freshdesk rejects
-that — strip the `Bearer ` so only the raw key is sent (use `|` as the sed delimiter):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  sed -i 's|Authorization: Bearer \${MCP_FRESHDESK_API_KEY}|Authorization: \${MCP_FRESHDESK_API_KEY}|' \
-    ~/.hermes/config.yaml
-"
-```
-
-Inject the real key into the MCP indirection var (pipe delimiter; tokens may contain `/+=`):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  grep -q '^MCP_FRESHDESK_API_KEY=' ~/.hermes/.env || printf 'MCP_FRESHDESK_API_KEY=\n' >> ~/.hermes/.env
-  sed -i 's|^MCP_FRESHDESK_API_KEY=.*|MCP_FRESHDESK_API_KEY=$FRESHDESK_API_KEY|' ~/.hermes/.env
-  chmod 600 ~/.hermes/.env
-"
-```
-
-### Path B (fallback, any plan) — Freshdesk v2 REST API as a generic HTTP tool
-
-When EAP is not granted, use the REST API directly via the agent's generic HTTP tool
-capability:
-
-- **Base URL:** `https://${FRESHDESK_DOMAIN}.freshdesk.com/api/v2`
-- **Auth:** HTTP Basic with API key as username, literal `X` as password
-  → header `Authorization: Basic $(printf '%s:X' "$FRESHDESK_API_KEY" | base64)`
-- **Content type:** `Content-Type: application/json`
-- **Common endpoints:** `GET /tickets`, `GET /tickets/{id}`, `POST /tickets`,
-  `PUT /tickets/{id}`, `GET /tickets/{id}/conversations`, `POST /tickets/{id}/reply`,
-  `GET /contacts`, `GET /companies`, `GET /agents`, `GET /search/tickets?query="..."`.
-- **Rate limits per plan:** Trial 50/min, Growth 200/min, Pro 400/min, Enterprise 700/min.
-  Read `X-RateLimit-Remaining` and back off on `429`.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-Skip this step entirely on Path B (no MCP registered; smoke test in Step 8 is the proof).
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*freshdesk|MCP server.*freshdesk.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: freshdesk registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-freshdesk
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: freshdesk not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test (inside the container so the key stays on the VPS)
-
-Hits the REST API regardless of which path was used — that's the universal proof the key
-and domain are correct.
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -u \"\$FRESHDESK_API_KEY:X\" \
-    -H 'Content-Type: application/json' \
-    'https://\$FRESHDESK_DOMAIN.freshdesk.com/api/v2/tickets?per_page=1'
-")
-case "$HTTP" in
-  200) echo "OK: Freshdesk API reachable and key valid." ;;
-  401) echo "FAIL: key invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: key valid but agent role cannot list tickets. Use an admin or scoped agent."; exit 1 ;;
-  404) echo "FAIL: subdomain wrong. Check FRESHDESK_DOMAIN."; rollback; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Freshdesk API. Check manually." ;;
-esac
-```
-
-`200` with an empty `[]` is still a pass for wiring — it just means there are no tickets.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove freshdesk 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset FRESHDESK_API_KEY 2>/dev/null || \
-    sed -i '/^FRESHDESK_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset MCP_FRESHDESK_API_KEY 2>/dev/null || \
-    sed -i '/^MCP_FRESHDESK_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset FRESHDESK_DOMAIN 2>/dev/null || \
-    sed -i '/^FRESHDESK_DOMAIN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Freshdesk is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=freshdesk
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${FRESHDESK_API_KEY:-}" || { echo "ABORT: FRESHDESK_API_KEY is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${FRESHDESK_DOMAIN:-}" || { echo "ABORT: FRESHDESK_DOMAIN is empty or unsafe. Nothing was written."; exit 1; }
+case "$FRESHDESK_DOMAIN" in -*|.*|*[!A-Za-z0-9.-]*) echo "ABORT: invalid FRESHDESK_DOMAIN. Nothing was written."; exit 1 ;; esac
+case "$FRESHDESK_DOMAIN" in *[!A-Za-z0-9-]*) echo "ABORT: a bare Freshdesk subdomain is required. Nothing was written."; exit 1 ;; esac
+printf '%s\n' "${FRESHDESK_API_KEY:-}" "${FRESHDESK_DOMAIN:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'FRESHDESK_API_KEY'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'FRESHDESK_DOMAIN'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://'"'"'"'"'"'"'"'"' + d['"'"'"'"'"'"'"'"'FRESHDESK_DOMAIN'"'"'"'"'"'"'"'"'] + '"'"'"'"'"'"'"'"'.freshdesk.com/api/v2/tickets?per_page=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':"Basic "+base64.b64encode((d["FRESHDESK_API_KEY"]+":X").encode()).decode()})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: freshdesk; path: http.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env FRESHDESK_API_KEY "${FRESHDESK_API_KEY:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+put_env FRESHDESK_DOMAIN "${FRESHDESK_DOMAIN:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null 2>&1 || { rollback; exit 1; }
+remote 'hermes -p default config set mcp_servers.freshdesk.url '"'"'https://${FRESHDESK_DOMAIN}.freshdesk.com/mcp'"'"'' >/dev/null 2>&1 || { rollback; exit 1; }
+remote 'hermes -p default config set mcp_servers.freshdesk.headers.Authorization '"'"'${FRESHDESK_API_KEY}'"'"'' >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default config set mcp_servers.$MCP_NAME.enabled true" >/dev/null 2>&1 || { rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: HTTP entry is not enabled."; rollback; exit 1; }
+```
+
+This uses the native `mcp_servers` schema. Custom header names and credential references are preserved; the generic Bearer header wizard cannot express every vendor. Config contains references, never literal credentials.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://'"'"'"'"'"'"'"'"' + d['"'"'"'"'"'"'"'"'FRESHDESK_DOMAIN'"'"'"'"'"'"'"'"'] + '"'"'"'"'"'"'"'"'.freshdesk.com/api/v2/tickets?per_page=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':"Basic "+base64.b64encode((d["FRESHDESK_API_KEY"]+":X").encode()).decode()})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-freshdesk.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Sending `Authorization: Bearer <key>` to the Freshdesk MCP | Freshworks docs require the raw key, no `Bearer ` prefix. Returns 401. | Patch `config.yaml` to drop `Bearer ` (Step 5 Path A). |
-| 2 | Wiring MCP on a non-Enterprise plan or non-EAP account | EAP is gated; endpoint returns 403 or 404. | Probe `tools/list` first; on 401/403 switch to Path B. |
-| 3 | Using a key from an unverified agent | UI hides the API key until the agent is verified. | Verify the agent email first, then mint the key. |
-| 4 | API key inherits the agent's role | A restricted-scope agent silently 403s on tickets it cannot see. | Mint from an admin or a dedicated integration agent with the needed scope. |
-| 5 | Subdomain typo in URL | `acme.freshdesk.com` vs `acme-help.freshdesk.com` returns 404 / wrong tenant. | Confirm the exact subdomain from the Freshdesk admin URL. |
-| 6 | Hitting per-minute rate limits | Bulk syncs exceed plan cap (50-700/min) or EAP cap (100/min, 5000/month). | Honor `X-RateLimit-Remaining`; back off on `429`; batch via search. |
-| 7 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 8 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes config set` (or the safe `printf` + sed fallback) |
-| 9 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, via `config set` |
-| 10 | sed with `/` delimiter on tokens | Tokens may contain `/+=` and break sed | Always use `\|` delimiter |
-| 11 | Container vs host confusion | Skill assumed wrong layer; key invisible to sshd | Step 1's `docker exec` fallback handles it; always check `whoami; hostname` if debugging |
-| 12 | Skipping the verify step | "Silent success" — config written, never picked up | Step 7 polls logs; Step 8 hits the API |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Domain shape | The input is a bare tenant subdomain | Do not include scheme/path or a complete URL |
+| 2 | REST authentication | The account probe uses Basic API-key:X | Keep the read probe distinct from MCP auth |
+| 3 | MCP header | The hosted endpoint expects its vendor-specific header shape | Do not automatically add Bearer |
+| 4 | EAP access | Hosted MCP may require vendor enablement | A failed native connection rolls back |
+| 5 | Ticket privacy | The probe may reach private support data | Suppress its body during installation |
+| 6 | Read vs write | Discovered tools may modify tickets | Only execute authorized changes |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `FRESHDESK_API_KEY` and `FRESHDESK_DOMAIN` written to `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Freshdesk connected via Path A (MCP tools registered, EAP confirmed, no `Bearer ` prefix) or Path B (REST base documented and reachable)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'freshdesk'` within 30s (Path A only)
-- [ ] Smoke test: `GET /api/v2/tickets?per_page=1` from inside the container returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

@@ -9,14 +9,27 @@
 # The log (logs/curl.log) records the full argv, the URL with the token masked, the token LENGTH, whether
 # the token appears in argv, and the status. It never records the token itself.
 #
+# Response bodies for a 200: $HOME/knobs/curl_routes holds lines "URL-SUBSTRING<TAB>BODY"; the first substring that
+# occurs in the URL decides the body (otherwise the Telegram getMe body for */getMe, else {"results":[]}).
 # Knobs (files under $HOME/knobs): net_down -> exit 7 like an unreachable host;
 # curl_force -> lines "N=CODE": the Nth call of this run answers CODE (e.g. 2=401 fails the smoke test).
+# Loopback services of the simulated VPS (http://127.0.0.1:PORT/... or http://localhost:PORT/...: the signal-cli daemon's
+# /api/v1/check, the WhatsApp bridge's /health) take no credential, so they answer 200 regardless of valid_tokens and are
+# not affected by net_down (no egress involved). Knobs: local_down -> exit 7 (nothing listens); local_status -> file holding
+# the HTTP code the service answers (default 200). Their bodies still come from curl_routes (otherwise {}).
+# Vendor token endpoints (platform-teams / platform-google-chat): a `data = "..."` form in the config carries the credential. POST
+# https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token with client_secret=S: 200 + access_token when S is in valid_tokens, else 401
+# invalid_client. POST https://oauth2.googleapis.com/token with assertion=JWT: the stub checks the claims and (knob jwt_pubkey = PEM
+# public key) the RS256 signature, then looks the `iss` e-mail up in valid_tokens; 200 returns an access token ya29.fake-token, which
+# https://pubsub.googleapis.com/v1/... accepts (knob pubsub_status = file holding the HTTP code it answers instead, e.g. 403/404).
+# The log gains form=<the form with the secret or JWT masked>.
 set -u
 H=$HOME
 mkdir -p "$H/logs" "$H/state"
 args=("$@")
 cfg=""
 wfmt=""
+output=""
 url=""
 fail=0
 i=0
@@ -28,7 +41,9 @@ while [ "$i" -lt "$#" ]; do
       if [ "${args[$i]}" = "-" ]; then cfg=$(cat); fi ;;
     -w|--write-out)
       i=$((i + 1)); wfmt=${args[$i]} ;;
-    -o|--output|-H|--header|-d|--data|--max-time|-m|-X|--request)
+    -o|--output)
+      i=$((i + 1)); output=${args[$i]} ;;
+    -H|--header|-d|--data|--max-time|-m|-X|--request)
       i=$((i + 1)) ;;
     -f|--fail|-fsS|-fS|-sf)
       fail=1 ;;
@@ -40,10 +55,74 @@ done
 
 cfg_url=$(printf '%s\n' "$cfg" | sed -n 's/^url *= *"\(.*\)" *$/\1/p' | head -1)
 [ -n "$cfg_url" ] && url=$cfg_url
-tok=$(printf '%s\n' "$cfg" | sed -n 's/^header *= *"Authorization: Bearer \(.*\)" *$/\1/p' | head -1)
+cfg_output=$(printf '%s\n' "$cfg" | sed -n 's/^output *= *"\(.*\)" *$/\1/p' | tail -1)
+cfg_wfmt=$(printf '%s\n' "$cfg" | sed -n 's/^write-out *= *"\(.*\)" *$/\1/p' | tail -1)
+[ -n "$cfg_output" ] && output=$cfg_output
+[ -n "$cfg_wfmt" ] && wfmt=$cfg_wfmt
+# Credential in the config: `header = "Authorization: <Bearer|Bot|Token|...> TOKEN"` or `header = "X-Api-Key: TOKEN"`
+# (first header line; a leading "<Name>: " and one auth scheme word are stripped).
+# Authentication can appear after Accept/Content-Type. Prefer Authorization, then a vendor-specific credential header.
+auth_headers=$(printf '%s\n' "$cfg" | sed -n 's/^header *= *"\(.*\)" *$/\1/p')
+hdrline=$(printf '%s\n' "$auth_headers" | awk 'tolower($0) ~ /^authorization:/ {print; exit}')
+if [ -z "$hdrline" ]; then hdrline=$(printf '%s\n' "$auth_headers" | awk 'NF && tolower($0) !~ /^(accept|content-type|content-length|user-agent|stripe-version|accept-version):/ {print; exit}'); fi
+tok=$(printf '%s\n' "$hdrline" | sed -E 's/^Authorization: *(Bearer|Bot|Token|token|Basic) +//; s/^[A-Za-z-]+: *//')
 case "$url" in
   */bot*/getMe) tok=${url#*/bot}; tok=${tok%/getMe} ;;
 esac
+# curl config user carries Basic auth without a secret in argv. Match the actual Authorization value used by the client.
+cfg_user=$(printf '%s\n' "$cfg" | sed -n 's/^user *= *"\(.*\)" *$/\1/p' | head -1)
+if [ -z "$tok" ] && [ -n "$cfg_user" ]; then tok=$(printf '%s' "$cfg_user" | base64 | tr -d '\r\n'); fi
+# A credential embedded in the config URL itself (a path token or a ?token= query): the first listed valid token that occurs in it.
+if [ -z "$tok" ] && [ -n "$cfg_url" ] && [ -f "$H/valid_tokens" ]; then
+  while IFS= read -r vt; do
+    if [ -n "$vt" ]; then case "$cfg_url" in *"$vt"*) tok=$vt; break ;; esac; fi
+  done < "$H/valid_tokens"
+fi
+# Where the credential sits (bearer header, any other header, a ?token= query, or a URL path), logged to logs/curl-shape.log; the
+# knob knobs/curl_shape (one of bearer, header, path, query) makes the "vendor" accept ONLY that placement (401 otherwise).
+shape=""
+if [ -n "$hdrline" ]; then
+  case "$hdrline" in "Authorization: Bearer "*) shape=bearer ;; *) shape=header ;; esac
+elif [ -n "$tok" ] && [ -n "$cfg_url" ]; then
+  case "$cfg_url" in *token=*) shape=query ;; *) shape=path ;; esac
+fi
+# Form-encoded credential in the config (`data = "..."`). Microsoft identity platform: `client_secret=S` is the credential. Google:
+# `assertion=JWT` is signed with the service-account key; the stub decodes the claims (RS256, aud, scope, exp-iat <= 3600), verifies the
+# signature when knobs/jwt_pubkey holds a PEM public key, and looks the `iss` e-mail up in valid_tokens. $leak is what must never
+# appear in argv (the secret, or the assertion); $form is the form with those values masked, for the log.
+cfg_data=$(printf '%s\n' "$cfg" | sed -n 's/^data *= *"\(.*\)" *$/\1/p' | head -1)
+leak=""
+form=""
+case "$cfg_data" in
+  *client_secret=*)
+    leak=${cfg_data#*client_secret=}; leak=${leak%%&*}; tok=$leak
+    form=${cfg_data//"$leak"/<SECRET>} ;;
+  *assertion=*)
+    leak=${cfg_data#*assertion=}; leak=${leak%%&*}
+    verdict=$(python3 -I - "$leak" "$H/knobs/jwt_pubkey" <<'PY'
+import base64, json, os, subprocess, sys, tempfile
+jwt, pub = sys.argv[1], sys.argv[2]
+try:
+    h, c, s = jwt.split(".")
+    dec = lambda x: base64.urlsafe_b64decode(x + "=" * (-len(x) % 4))
+    hdr, claims = json.loads(dec(h)), json.loads(dec(c))
+    ok = hdr.get("alg") == "RS256" and claims.get("aud") == "https://oauth2.googleapis.com/token" \
+        and bool(claims.get("scope")) and 0 < claims["exp"] - claims["iat"] <= 3600
+    if ok and os.path.exists(pub):
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(dec(s))
+        r = subprocess.run(["openssl", "dgst", "-sha256", "-verify", pub, "-signature", f.name], input=(h + "." + c).encode(), capture_output=True)
+        os.unlink(f.name)
+        ok = r.returncode == 0
+    print(("OK " if ok else "BAD ") + str(claims.get("iss", "")))
+except Exception:
+    print("BAD ")
+PY
+)
+    tok=${verdict#* }; [ "${verdict%% *}" = OK ] || tok="BADJWT:$tok"
+    form=${cfg_data//"$leak"/<JWT>} ;;
+esac
+[ -n "$leak" ] || leak=$tok
 
 n=0
 [ -f "$H/state/curl.count" ] && n=$(cat "$H/state/curl.count")
@@ -53,11 +132,21 @@ echo "$n" > "$H/state/curl.count"
 masked=$url
 [ -n "$tok" ] && masked=${url//"$tok"/<TOKEN>}
 has_tok=0
-if [ -n "$tok" ]; then case "$*" in *"$tok"*) has_tok=1 ;; esac; fi
+if [ -n "$leak" ]; then case "$*" in *"$leak"*) has_tok=1 ;; esac; fi
 has_dollar=0
 case "$tok" in *'$'*) has_dollar=1 ;; esac
 
-if [ -f "$H/knobs/net_down" ]; then
+is_local=0
+case "$url" in http://127.0.0.1:*|http://localhost:*) is_local=1 ;; esac
+if [ "$is_local" = 1 ] && [ -f "$H/knobs/local_down" ]; then
+  printf 'call=%s status=none url=%s token_len=%s token_has_dollar=%s argv_has_token=%s argv=%s\n' \
+    "$n" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$*" >> "$H/logs/curl.log"
+  printf 'curl\n' >> "$H/logs/events.log"
+  echo "curl: (7) Failed to connect to localhost (test double)" >&2
+  exit 7
+fi
+
+if [ "$is_local" = 0 ] && [ -f "$H/knobs/net_down" ]; then
   printf 'call=%s status=none url=%s token_len=%s token_has_dollar=%s argv_has_token=%s argv=%s\n' \
     "$n" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$*" >> "$H/logs/curl.log"
   printf 'curl\n' >> "$H/logs/events.log"
@@ -67,23 +156,49 @@ fi
 
 code=401
 if [ -n "$tok" ] && grep -qxF -- "$tok" "$H/valid_tokens" 2>/dev/null; then code=200; fi
+case "$tok" in ya29.fake-*) code=200 ;; esac   # an access token this stub minted for the Google service-account flow
+case "$url" in https://pubsub.googleapis.com/*) [ -f "$H/knobs/pubsub_status" ] && code=$(cat "$H/knobs/pubsub_status") ;; esac
+if [ "$is_local" = 1 ]; then
+  code=200
+  [ -f "$H/knobs/local_status" ] && code=$(cat "$H/knobs/local_status")
+fi
+if [ -f "$H/knobs/curl_shape" ] && [ "$code" = 200 ] && [ "$shape" != "$(cat "$H/knobs/curl_shape")" ]; then code=401; fi
+printf 'call=%s shape=%s\n' "$n" "$shape" >> "$H/logs/curl-shape.log"
 if [ -f "$H/knobs/curl_force" ]; then
   forced=$(sed -n "s/^$n=//p" "$H/knobs/curl_force" | head -1)
   [ -n "$forced" ] && code=$forced
 fi
 
-printf 'call=%s status=%s url=%s token_len=%s token_has_dollar=%s argv_has_token=%s argv=%s\n' \
-  "$n" "$code" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$*" >> "$H/logs/curl.log"
+printf 'call=%s status=%s url=%s token_len=%s token_has_dollar=%s argv_has_token=%s form=%s argv=%s\n' \
+  "$n" "$code" "$masked" "${#tok}" "$has_dollar" "$has_tok" "$form" "$*" >> "$H/logs/curl.log"
 printf 'curl status=%s\n' "$code" >> "$H/logs/events.log"
 
-if [ -n "$wfmt" ]; then
-  printf '%s' "${wfmt/\%\{http_code\}/$code}"
-else
+emit_body() {
+  routed=""
+  if [ -f "$H/knobs/curl_routes" ] && [ "$code" = 200 ]; then
+    while IFS=$'\t' read -r sub body; do
+      [ -n "$sub" ] || continue
+      case "$url" in *"$sub"*) routed=$body; break ;; esac
+    done < "$H/knobs/curl_routes"
+  fi
+  if [ -n "$routed" ]; then printf '%s' "$routed"; else
   case "$url" in
     */getMe) [ "$code" = 200 ] && printf '{"ok":true,"result":{"id":1,"is_bot":true,"username":"fake_test_bot"}}' ;;
+    https://login.microsoftonline.com/*/oauth2/v2.0/token)
+      if [ "$code" = 200 ]; then printf '{"token_type":"Bearer","expires_in":3599,"ext_expires_in":3599,"access_token":"fake-bot-framework-token"}'
+      else printf '{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided.","error_codes":[7000215]}'; fi ;;
+    https://oauth2.googleapis.com/token)
+      if [ "$code" = 200 ]; then printf '{"access_token":"ya29.fake-token","expires_in":3599,"token_type":"Bearer"}'
+      else printf '{"error":"invalid_grant","error_description":"Invalid JWT Signature."}'; fi ;;
+    http://127.0.0.1:*|http://localhost:*) printf '{}' ;;
     *) printf '{"results":[]}' ;;
   esac
-fi
+  fi
+}
+body=$(emit_body)
+if [ -n "$output" ]; then printf '%s' "$body" > "$output"; else printf '%s' "$body"; fi
+if [ -n "$wfmt" ]; then printf '%b' "${wfmt/\%\{http_code\}/$code}"; fi
+
 if [ "$fail" = 1 ] && [ "$code" -ge 400 ]; then
   echo "curl: (22) The requested URL returned error: $code" >&2
   exit 22

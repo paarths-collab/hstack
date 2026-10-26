@@ -1,6 +1,6 @@
-# hstack — workflows for self-hosted Hermes agents
+# hstack — setup skills and workflows for self-hosted Hermes
 
-**Ready-to-use GitHub reports for your own Hermes server.**
+**97 agent-readable setup procedures and three GitHub-to-Telegram report packs.**
 
 hstack packages three deterministic GitHub-to-private-Telegram workflows: repository activity, requested PR reviews and published releases. Select a pack and generate its private configuration and worker without writing source code or JSON. Hermes supplies native scheduling. The repository also includes 97 setup and integration procedures.
 
@@ -15,7 +15,9 @@ For example:
 Prepare a separate instance for each report, preview its output, then review and
 install it on your existing compatible target using the generated instructions.
 
-**Compatibility:** the default acceptance contract is a legacy 0.15.2 fixture baseline. Hermes 0.22.5 is an explicit, unpromoted candidate with source and offline checks. These checks do not establish live operation, and the catalog has not been re-verified against every vendor. Read [compatibility and promotion](compatibility/README.md) before deployment.
+**Compatibility:** skills and workflow packs target Hermes 0.22.5, pinned to its reviewed source commit. The 0.15.2 acceptance contract remains an offline legacy fixture only. Source checks, sandbox tests and the isolated native cron test do not establish live gateway operation or every vendor connection. Read [compatibility and promotion](compatibility/README.md) before deployment.
+
+The [migration record](compatibility/MIGRATION.md) explains the native routes, removed workarounds and remaining validation limits.
 
 Your server. Your data. No hstack-hosted service. Each pack installs a reviewed Python worker on your existing Hermes target.
 
@@ -23,7 +25,7 @@ Your server. Your data. No hstack-hosted service. Each pack installs a reviewed 
 ![Superpowers 97](https://img.shields.io/badge/superpowers-97-f59e0b)
 ![Integrations 71](https://img.shields.io/badge/integrations-71-2dd4bf)
 ![Platforms 8](https://img.shields.io/badge/platforms-8-229ED9)
-![Hermes compatibility candidate 0.22.5](https://img.shields.io/badge/hermes-0.22.5%20candidate-9d6bff)
+![Hermes source target 0.22.5](https://img.shields.io/badge/hermes-0.22.5%20source--verified-9d6bff)
 
 > Built by Paarth.
 
@@ -51,7 +53,7 @@ python3 -I -B packages/founder-brief/prepare.py \
 
 Follow the generated `NEXT_STEPS.md` to transfer, preview, review, install and run
 the canary. All three packs can coexist on the same exclusive default-profile
-Linux target with the exact Hermes 0.22.5 candidate. Use `--instance team-reviews`
+Linux target with the exact Hermes 0.22.5 target. Use `--instance team-reviews`
 to prepare another copy of a pack with different repositories, chat or cutoff.
 Each instance has its own job, private files, delivery journal and rollback.
 Setup does not provision the target.
@@ -64,9 +66,9 @@ avoids blind retries after uncertain sends, and supports owned rollback.
 | Part | Current status |
 |---|---|
 | Three reports, multiple independent instances, private preparation, preview, schedule, canary and rollback | Implemented |
-| Workflow/native-cron/Telegram-shim checks, including real loopback SSH/HTTP | **56 tests passed; no failures or skips**. Controlled vendors; [evidence and limits](compatibility/VALIDATION.md) |
+| Workflow/native-cron/Telegram-shim checks, including real loopback SSH/HTTP | **Controlled-vendor checks**; [evidence and limits](compatibility/VALIDATION.md) |
 | Real Hermes 0.22.5 target and real Telegram delivery | **Pending target and private credential files** |
-| Seven-day live reliability gate | Not started; candidate remains unpromoted |
+| Seven-day live reliability gate | Not started; live verification remains pending |
 
 **Why use it over Hermes alone?** Use a native Hermes scheduled prompt when a
 flexible AI summary is enough. Use a pack when you want these exact reports and
@@ -90,9 +92,9 @@ the task; custom steps should address a concrete remaining need.
 
 Install hstack once and your coding agent gains all 97:
 
-1. **Prepare a self-hosted Hermes deployment** — installation, configuration, gateway and verification procedures. The current candidate deploy path supports Telegram on one exclusive default-profile target.
+1. **Prepare a self-hosted Hermes deployment** — installation, configuration, gateway and verification procedures. The deploy path supports Telegram on one exclusive default-profile target.
 2. **Find integration guidance for 71 services** — including Notion, Stripe, Postgres, Supabase, Pinecone, GitHub, Twilio and Salesforce. Prefer current native Hermes connectors or plugins where available; the entire catalog has not been re-verified against current vendors.
-3. **Find procedures for 8 messaging platforms** — Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat and Mattermost. The other seven platform recipes remain outside the current-Hermes migration.
+3. **Find procedures for 8 messaging platforms** — Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat and Mattermost. All eight use the reviewed native lifecycle and platform interfaces; live platform verification is still required.
 4. **Operate and recover** — health checks, supported gateway lifecycle commands, backups and failure diagnosis, subject to each procedure's runtime scope.
 
 The procedures follow an SSH-first template with preflight, preview and recovery
@@ -311,7 +313,7 @@ must be checked against the installed release before applying an older workaroun
 
 ## Acceptance transaction (experimental)
 
-The runnable packs are in [`packages/founder-brief/`](packages/founder-brief/README.md): selected GitHub repositories become an activity report, requested-review queue or release digest, with native Hermes scheduling, a checked private Telegram chat, durable API acknowledgements and recovery. They use a deterministic no-agent worker and private, reviewed configuration. Local HTTP integration tests do not prove real recipient delivery; the Hermes 0.22.5 candidate remains unpromoted.
+The runnable packs are in [`packages/founder-brief/`](packages/founder-brief/README.md): selected GitHub repositories become an activity report, requested-review queue or release digest, with native Hermes scheduling, a checked private Telegram chat, durable API acknowledgements and recovery. They use a deterministic no-agent worker and private, reviewed configuration. Local HTTP integration tests do not prove real recipient delivery; Hermes 0.22.5 remains source-verified rather than live-verified.
 
 [`packages/acceptance/`](packages/acceptance/README.md) remains the experimental control-plane transaction and legacy fixture baseline. Installing skill text and creating a generic prompt there is not a complete daily-brief deployment. See [compatibility and promotion](compatibility/README.md) before real-server use.
 

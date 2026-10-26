@@ -36,7 +36,7 @@ class DeploymentTests(unittest.TestCase):
         self.hermes.chmod(0o700)
         self.env = patch.dict(os.environ, {"HERMES_HOME": str(self.home)}, clear=False)
         self.env.start()
-        for key in ("BRIEF_FAIL", "BRIEF_VERSION", "BRIEF_COMMIT"):
+        for key in ("BRIEF_FAIL", "BRIEF_VERSION", "BRIEF_VERSION_TEXT", "BRIEF_COMMIT"):
             os.environ.pop(key, None)
         self.dep = deployment.Deployment(self.home, self.hermes, offline=True)
         self.config = {"schema_version": 1, "repositories": ["example/project"], "telegram_chat_id": "123456789",
@@ -196,6 +196,26 @@ class DeploymentTests(unittest.TestCase):
         (self.home / "profiles").mkdir();(self.home / "profiles/coder").mkdir()
         self.assert_code("native_scope_refused", self.install)
         self.assertFalse(self.dep.root.exists())
+
+    def test_version_is_read_from_the_banner_of_real_multiline_output_and_compared_exactly(self):
+        # Real v0.22.5 output (hermes_cli/_startup_fast.py print_fast_version_info) also prints the release
+        # date, the Python version and the OpenAI SDK version, each shaped like x.y.z.
+        real = ("Hermes Agent v0.22.5 (2026.9.24) \u00b7 upstream bf0203a7\nInstall directory: /srv/hermes\n"
+                "Install method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0\n")
+        for text in (real, "Hermes Agent v0.22.5\n", "Hermes Agent v0.22.5 (2026.9.24)\nPython: 3.11.16\n",
+                     "Hermes Agent v0.22.5 \u00b7 stable\nPython: 3.11.16\n"):
+            os.environ["BRIEF_VERSION_TEXT"] = text
+            self.dep._ready()
+        for text in (
+            real.replace("v0.22.5", "v0.22.4"),                 # other release; 0.22.5 absent from the banner
+            real.replace("v0.22.5 (", "v0.22.5+3.gabc1234 ("),   # derived dev build of 0.22.5 is not 0.22.5
+            real.replace("v0.22.5 (", "v0.22.5.1 ("),
+            "Hermes Agent v0.21.0 (2026.8.31)\nPython: 0.22.5\n",  # a later line must never satisfy the check
+            "Python: 0.22.5\nHermes Agent v0.22.5 (2026.9.24)\n",  # only the first line is the banner
+            "0.22.5\n", "hermes 0.22.5\n", "", "\n",
+        ):
+            os.environ["BRIEF_VERSION_TEXT"] = text
+            self.assert_code("native_version_mismatch", self.dep._ready)
 
     def test_unexpected_credentials_or_invalid_config_refuse_without_cli_calls(self):
         self.credentials["EXTRA_TOKEN"] = "private"

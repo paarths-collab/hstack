@@ -1,302 +1,343 @@
 ---
 name: integration-asana
-description: Connect Asana (team task management) to a self-hosted Hermes Agent over SSH so it can read and create tasks, projects, and comments. Wires the REST API with a static Personal Access Token. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect asana to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-asana — connect Asana to a remote Hermes (SSH-first)
+# /integration-asana — connect asana over SSH
 
-You are the engineer connecting Asana to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the Personal Access Token in the Asana UI.
-2. Confirm the workspace GID the agent should operate in.
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP/REST registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. An Asana MCP app Client ID and secret. Register exactly http://localhost:27890/callback and enable the intended workspace in app distribution. The old PAT and npm proxy are not used.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Asana ships a first-party remote MCP at
-`https://mcp.asana.com/v2/mcp` (streamable HTTP), but it is **OAuth-only** — it requires
-a browser handshake against a registered client ID/secret and rejects static bearer tokens.
-A headless Hermes container cannot complete that flow unattended. The V1 beta endpoint
-`https://mcp.asana.com/sse` is deprecated and shuts down 2026-05-11 — do not use it.
-So we do NOT wire the hosted MCP. We use the **REST API with a Personal Access Token (PAT)**
-— a static credential that needs no browser and is perfect for headless self-hosted agents.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$ASANA_ACCESS_TOKEN` | Personal Access Token (treat as opaque) | <https://app.asana.com/0/my-apps> → "Personal access tokens" → "Create new token" → agree to API terms → name it `hermes-agent` → copy once |
-| `$ASANA_WORKSPACE_GID` | The workspace the agent will operate in | Captured automatically in Step 1 from `GET /users/me` |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-While we have a shell open, validate the PAT against the live REST API. The base is
-`https://app.asana.com/api/1.0`; the PAT goes in `Authorization: Bearer <token>`.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w 'users/me = %{http_code}\n' \
-    -H 'Authorization: Bearer $ASANA_ACCESS_TOKEN' \
-    https://app.asana.com/api/1.0/users/me
-"
-```
-
-- `200` → token valid; capture the workspace GID for later writes.
-- `401` → token wrong, revoked, or has stray whitespace. Abort, do not store.
-
-Capture the workspace GID (most write endpoints need it):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -H 'Authorization: Bearer $ASANA_ACCESS_TOKEN' \
-    'https://app.asana.com/api/1.0/users/me?opt_fields=workspaces.name,workspaces.gid' \
-    | head -c 800
-"
-```
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci asana" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Asana is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write ASANA_ACCESS_TOKEN (length ${#ASANA_ACCESS_TOKEN}, prefix ${ASANA_ACCESS_TOKEN:0:4}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register tool: REST API at https://app.asana.com/api/1.0 (Path B — no static-token MCP exists)
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -i "registered.*asana"
-  6. Smoke test: GET https://app.asana.com/api/1.0/users/me -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set ASANA_ACCESS_TOKEN '$ASANA_ACCESS_TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^ASANA_ACCESS_TOKEN=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: ASANA_ACCESS_TOKEN not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter — PATs are opaque and may contain `/`, `+`, `=`; **never use
-> `echo >>`** which merges onto the previous line if it lacks a trailing newline):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^ASANA_ACCESS_TOKEN=' ~/.hermes/.env || printf 'ASANA_ACCESS_TOKEN=\n' >> ~/.hermes/.env
->   sed -i 's|^ASANA_ACCESS_TOKEN=.*|ASANA_ACCESS_TOKEN=$ASANA_ACCESS_TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the Asana tool
-
-Asana does NOT have a first-party static-token MCP server. Pick the path that matches the
-Hermes build on the VPS. Path B is the recommended default; Path A is only for users who
-have vetted a third-party MCP server and want stdio tools.
-
-### Path A (optional) — community stdio MCP server with static token
-
-A widely used community server is `roychri/mcp-server-asana`
-(<https://github.com/roychri/mcp-server-asana>), which authenticates with an Asana PAT via the
-`ASANA_ACCESS_TOKEN` env var. It is a stdio/Node server, not a hosted HTTP endpoint. Treat
-it as third-party and audit before using.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add asana \
-    --command npx \
-    --args '-y,@roychri/mcp-server-asana' \
-    --env 'ASANA_ACCESS_TOKEN=\${ASANA_ACCESS_TOKEN}'
-"
-```
-
-The flag names vary by Hermes version. If unsure, run `hermes mcp add --help` first and
-match its stdio syntax. The token stays in `~/.hermes/.env` and is referenced via
-`${ASANA_ACCESS_TOKEN}` indirection — never inlined.
-
-### Path B (recommended default) — generic HTTP tool against the Asana REST API
-
-- **Base URL:** `https://app.asana.com/api/1.0`
-- **Auth header:** `Authorization: Bearer ${ASANA_ACCESS_TOKEN}`
-- **Content type:** `Content-Type: application/json`
-- **Common endpoints:**
-  - `GET /users/me` — identity + workspaces
-  - `GET /workspaces` — list workspaces
-  - `GET /projects?workspace=<gid>` — list projects
-  - `GET /tasks?assignee=me&workspace=<gid>` — my tasks
-  - `POST /tasks` with `{"data":{"workspace":"<gid>","name":"...","assignee":"me"}}`
-
-Do NOT try to register `https://mcp.asana.com/v2/mcp` with a bearer token — that endpoint
-is OAuth-only and will return an auth error. Do NOT register the deprecated
-`https://mcp.asana.com/sse` either (shuts down 2026-05-11).
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*asana|MCP server.*asana.*(ok|ready)|tool.*asana.*loaded"; then
-    REGISTERED=1
-    echo "OK: asana registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-asana
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: asana not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test (inside the container so the token stays on the VPS)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X GET 'https://app.asana.com/api/1.0/users/me' \
-    -H \"Authorization: Bearer \$ASANA_ACCESS_TOKEN\"
-")
-case "$HTTP" in
-  200) echo "OK: Asana API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or empty. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but no scope. PAT has full user access — confirm workspace membership."; exit 1 ;;
-  429) echo "WARN: rate-limited. Respect Retry-After header and retry."; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Asana API. Check manually." ;;
-esac
-```
-
-`200` with a body identifying the authenticated user means the token works. Prove it
-end-to-end from chat:
-
-```
-@<agent> list my Asana tasks in <workspace>
-```
-
-A valid empty list is a pass — every layer worked.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove asana 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset ASANA_ACCESS_TOKEN 2>/dev/null || \
-    sed -i '/^ASANA_ACCESS_TOKEN=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Asana is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/asana.json mcp-tokens/asana.client.json mcp-tokens/asana.meta.json mcp-tokens/asana.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/asana.json mcp-tokens/asana.client.json mcp-tokens/asana.meta.json mcp-tokens/asana.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/asana.json mcp-tokens/asana.client.json mcp-tokens/asana.meta.json mcp-tokens/asana.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=asana
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])asana([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
+for k in ASANA_CLIENT_ID ASANA_CLIENT_SECRET; do
+  eval 'v=${'"$k"':-}'
+  case "$v" in ""|*[!A-Za-z0-9_.~+/=-]*) echo "ABORT: invalid Asana app credential. Nothing was written."; exit 1 ;; esac
+done
+```
+
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: asana; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env ASANA_CLIENT_ID "${ASANA_CLIENT_ID:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+put_env ASANA_CLIENT_SECRET "${ASANA_CLIENT_SECRET:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+printf '%s\n' "$ASANA_CLIENT_ID" | remote 'hermes -p default mcp install asana' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *asana .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login asana`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-asana.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wiring the hosted `mcp.asana.com/v2/mcp` with a token | It is **OAuth-only**; needs registered client ID/secret + browser handshake; bearer tokens are rejected | Use REST (Path B) or the community stdio server (Path A) |
-| 2 | Wiring the deprecated `mcp.asana.com/sse` | V1 beta endpoint shuts down 2026-05-11 | Do not use; pin Path B |
-| 3 | PAT acts as the whole user across all workspaces | No per-scope restrictions on a PAT; carries full access of the human who minted it | Mint from a dedicated service user with access only to needed workspace/projects |
-| 4 | Token treated as a parseable string | PATs are opaque; Asana may change the format | Treat as a password; never pattern-match or split |
-| 5 | Silently expired token returns `401` | PATs are persistent by default, but Enterprise+ admins can enforce expiry | Watch for sudden `401`s; rotate proactively |
-| 6 | Missing `workspace` GID on writes | Most write endpoints (`POST /tasks`) require it | Capture in Step 1; reuse from `$ASANA_WORKSPACE_GID` |
-| 7 | Rate limits (`429 Too Many Requests`) | Per-token rate limits; free tier lower than paid | Respect `Retry-After` header; back off and retry |
-| 8 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by runtime | Only `~/.hermes/.env` (`/opt/data/.env` inside container), `chmod 600`, via `config set` |
-| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 10 | `echo >> .env` instead of `config set` | Merges onto a prior line without trailing newline; key is silently invalid | Always `hermes config set`; sed-fallback uses `printf` then `sed -i` |
-| 11 | sed with `/` delimiter on tokens | PATs may contain `/`, `+`, `=` | Always use `\|` delimiter |
-| 12 | Container vs host confusion | Skill assumed wrong layer; SSH keys added inside container are invisible to host sshd | Always check `whoami; hostname` first |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Wrong app type | Asana V2 requires a user-owned MCP app | Create/select that app before starting |
+| 2 | Client credentials | ASANA_CLIENT_ID and ASANA_CLIENT_SECRET are both required | Use the MCP app values, not a PAT |
+| 3 | Callback mismatch | Asana pins localhost:27890/callback exactly | Register the exact redirect and forward port27890 |
+| 4 | Workspace omitted | App distribution must permit the intended workspace | Select that workspace in the app console |
+| 5 | Secret rotation | Native install reuses an existing saved secret | FORCE rewiring must write the replacement before native install |
+| 6 | Disconnected tools | Catalogue install exit0 is not OAuth proof | Run mcp test after native login |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/asana/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/asana/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] PAT validated against `https://app.asana.com/api/1.0/users/me` (returns `200`)
-- [ ] Workspace GID captured for later writes
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `ASANA_ACCESS_TOKEN` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] Tool registered via Path A (community stdio) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'asana'` within 30s
-- [ ] Smoke test: `GET /users/me` from inside the container returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-- [ ] OAuth-only MCP caveat communicated to the user (no static-token first-party MCP as of 2026-06)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

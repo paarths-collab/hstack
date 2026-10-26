@@ -1,300 +1,333 @@
 ---
 name: integration-brave-search
-description: Connect the Brave Search API (real-time web, news, image, video, local POI, summarizer, llm-context) to a self-hosted Hermes agent over SSH. Wires the official open-source MCP server with a static subscription token. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and any AI agent.
+description: Connect brave-search to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-brave-search — connect Brave Search to a remote Hermes (SSH-first)
+# /integration-brave-search — connect brave-search over SSH
 
-You are the engineer connecting Brave Search to a self-hosted Hermes agent on the user's
-VPS. You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work
-over SSH as root against the VPS. Every command in this skill runs on the VPS, not on
-the local machine.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-Do everything autonomously; stop only for the one thing a machine cannot do — minting
-the Brave Search subscription key in the dashboard.
+## Before you start — gather (ask once)
 
-**Honest auth picture (verified 2026-06):** Brave ships an official open-source MCP
-server at `github.com/brave/brave-search-mcp-server` (npm `@brave/brave-search-mcp-server`).
-It supports **stdio (default) and HTTP** transports, takes a static `BRAVE_API_KEY`, and
-is **self-hosted** — there is no first-party hosted remote MCP URL to point at. So we
-either run the official server as a stdio MCP (Path A, preferred) or self-host it in
-HTTP mode and wire via `/hermes-mcp-add` (Path B). Brave's REST API itself authenticates
-via the `X-Subscription-Token` header — NOT `Authorization: Bearer` — which matters for
-the REST fallback and the smoke test.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. BRAVE_API_KEY. BILLING_ACKNOWLEDGED=1 permits a single read-only search during preflight; Brave searches may consume quota.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$BRAVE_API_KEY` | Brave Search subscription token (opaque alnum, no fixed prefix) | <https://api-dashboard.search.brave.com/> -> sign in -> **API Keys** -> **Add API Key** (Free tier: 1 req/sec, 2,000 q/month) |
-| Surface plan | Which endpoints to enable (web, news, image, video, local POI, summarizer, llm-context) | Same dashboard; summarizer + llm-context are plan-gated |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci brave-search" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Brave Search is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write BRAVE_API_KEY (length ${#BRAVE_API_KEY}, prefix ${BRAVE_API_KEY:0:4}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register MCP: hermes mcp add brave-search --command npx --args -y,@brave/brave-search-mcp-server
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -iE "registered.*brave|MCP server.*brave"
-  6. Smoke test: GET https://api.search.brave.com/res/v1/web/search?q=hermes -> expect 200
-
-The token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set BRAVE_API_KEY '$BRAVE_API_KEY'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^BRAVE_API_KEY=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: BRAVE_API_KEY not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; Brave keys are alnum but the pattern is safe for any token):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^BRAVE_API_KEY=' ~/.hermes/.env || printf 'BRAVE_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^BRAVE_API_KEY=.*|BRAVE_API_KEY=$BRAVE_API_KEY|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the Brave Search MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred.
-
-### Path A (preferred) — official stdio MCP server with static token
-
-`@brave/brave-search-mcp-server` reads `BRAVE_API_KEY` from env and exposes web, news,
-image, video, local POI, summarizer, and `llm-context` tools over stdio.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add brave-search \
-    --command npx \
-    --args '-y,@brave/brave-search-mcp-server' \
-    --env 'BRAVE_API_KEY=\${BRAVE_API_KEY}'
-"
-```
-
-Use `${BRAVE_API_KEY}` indirection so the secret stays only in `~/.hermes/.env`. The
-default transport is stdio; no extra flags needed. Flag names (`--command` / `--args` /
-`--env`) vary by Hermes version — run `hermes mcp add --help` first and match its
-stdio syntax if uncertain.
-
-**Warm the npx cache** to avoid a first-call timeout while npm fetches the package:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  if [ -n \"\$AGENT\" ]; then
-    docker exec \"\$AGENT\" sh -c 'npx -y @brave/brave-search-mcp-server --help' >/dev/null 2>&1 || true
-  else
-    npx -y @brave/brave-search-mcp-server --help >/dev/null 2>&1 || true
-  fi
-"
-```
-
-### Path B (fallback) — self-host the official MCP server in HTTP mode
-
-If the Hermes build is HTTP-MCP-only and cannot spawn a stdio command, run the same
-server as a sidecar with `BRAVE_MCP_TRANSPORT=http` (defaults: `BRAVE_MCP_HOST=0.0.0.0`,
-`BRAVE_MCP_PORT=8080`), then point `/hermes-mcp-add` at it. The server reads
-`BRAVE_API_KEY` from its own env, so the Hermes-side MCP needs no auth header.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  NET=\$(docker inspect -f '{{range \$k,\$v := .NetworkSettings.Networks}}{{\$k}}{{end}}' \"\$AGENT\")
-  docker rm -f brave-mcp 2>/dev/null || true
-  docker run -d --name brave-mcp \
-    --network \"\$NET\" \
-    -e BRAVE_API_KEY='$BRAVE_API_KEY' \
-    -e BRAVE_MCP_TRANSPORT=http \
-    -p 127.0.0.1:8080:8080 \
-    ghcr.io/brave/brave-search-mcp-server:latest
-"
-```
-
-Then follow `/hermes-mcp-add` end-to-end with `URL=http://brave-mcp:8080/mcp`,
-`NAME=brave-search`, auth=none. The probe matrix in `/hermes-mcp-add` Step 1 should
-return 200 on variant B (bare, no header) since auth is enforced by Brave's REST under
-the hood, not by the MCP wrapper.
-
-### Path C (last resort) — generic HTTP tool against the Brave REST API
-
-If neither MCP path is viable, document the REST surface for a generic HTTP capability:
-
-- **Base URL:** `https://api.search.brave.com/res/v1`
-- **Auth header:** `X-Subscription-Token: ${BRAVE_API_KEY}` (NOT `Authorization: Bearer`)
-- **Accept:** `application/json`
-- **Accept-Encoding:** `gzip`
-
-Endpoints: `GET /web/search?q=<query>`, `GET /news/search`, `GET /images/search`,
-`GET /videos/search`, `GET /summarizer/search?key=<summarizer_key>` (key returned by
-web search), `GET /local/pois`.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*brave|MCP server.*brave.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: brave-search registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-brave-search
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: brave-search not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test (inside the VPS so the token stays there)
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  curl -sS -o /dev/null -w "%{http_code}" \
-    -H "Accept: application/json" \
-    -H "Accept-Encoding: gzip" \
-    -H "X-Subscription-Token: $BRAVE_API_KEY" \
-    "https://api.search.brave.com/res/v1/web/search?q=hermes+agent&count=1"
-')
-case "$HTTP" in
-  200) echo "OK: Brave Search API reachable and token valid." ;;
-  401) echo "FAIL: token invalid or empty (check X-Subscription-Token header, NOT Bearer)."; rollback; exit 1 ;;
-  403) echo "FAIL: endpoint not on your plan (summarizer/llm-context are plan-gated)."; exit 1 ;;
-  429) echo "WARN: rate limited (Free tier = 1 req/sec, 2000/month). Token works." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Brave API. Check manually." ;;
-esac
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove brave-search 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "docker rm -f brave-mcp 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset BRAVE_API_KEY 2>/dev/null || \
-    sed -i '/^BRAVE_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Brave Search is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=brave-search
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
+fi
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+[ "${BILLING_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: BILLING_ACKNOWLEDGED=1 required for the quota-consuming search probe. Nothing was written."; exit 1; }
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${BRAVE_API_KEY:-}" || { echo "ABORT: BRAVE_API_KEY is empty or unsafe. Nothing was written."; exit 1; }
+
+printf '%s\n' "${BRAVE_API_KEY:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'BRAVE_API_KEY'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.search.brave.com/res/v1/web/search?q=hermes&count=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'X-Subscription-Token'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'BRAVE_API_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: brave-search; path: stdio.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Store the selected settings privately and register only the reviewed connector.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env BRAVE_API_KEY "${BRAVE_API_KEY:-}" || { echo "FAIL: private setting write."; rollback; exit 1; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+if [ "${FORCE:-0}" = 1 ]; then printf 'y\n' | remote "hermes -p default mcp remove $MCP_NAME" >/dev/null || { rollback; exit 1; }; fi
+printf 'y\n' | remote 'hermes -p default mcp add brave-search --env '"'"'BRAVE_API_KEY=${BRAVE_API_KEY}'"'"' --command npx --args -y @brave/brave-search-mcp-server@2.1.4' >/dev/null 2>&1 || { echo "FAIL: stdio registration."; rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null || { echo "FAIL: MCP is not enabled."; rollback; exit 1; }
+```
+
+The one stdin answer enables discovered tools. `--env` precedes `--args`; every argument is a separate token. Environment references are expanded by Hermes when it starts the server. A zero exit from add does not prove registration. Vendor package compatibility remains live-unverified; failure must roll back.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; rollback; exit 1; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; rollback; exit 1; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.search.brave.com/res/v1/web/search?q=hermes&count=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'X-Subscription-Token'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'BRAVE_API_KEY'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; rollback; exit 1; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-brave-search.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Sending `Authorization: Bearer <key>` | Brave rejects it — REST auth is `X-Subscription-Token`. Returns `401`. | Use `X-Subscription-Token` exactly (case-sensitive). |
-| 2 | Looking for a hosted remote MCP URL | None exists; the server is self-hosted only. Wiring a made-up URL fails. | Use Path A (stdio) or Path B (self-host + wire). |
-| 3 | Free-tier rate limit | 1 req/sec, 2,000 q/month. Bursty agent traffic hits `429`. | Backoff on `429`; cache repeats; upgrade for production. |
-| 4 | `summarizer` / `llm-context` plan gating | Higher-tier endpoints return `403` on Free. | Confirm plan before enabling those tools in chat. |
-| 5 | `npx` cold start in Path A | First call after gateway boot times out while npm fetches the package. | Warm it once (Step 5 includes the warm command). |
-| 6 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env`. | Always `stop` + `run`. |
-| 7 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline. | Always `hermes config set`. |
-| 8 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by Hermes runtime. | Only `~/.hermes/.env`, `chmod 600`. |
-| 9 | sed with `/` delimiter on tokens | Tokens may contain `/+=`; sed breaks. | Always use `\|` delimiter. |
-| 10 | Container vs host confusion | Skill assumed wrong layer; key invisible to sshd or runtime. | Step 1 detects host vs container; always check `whoami; hostname`. |
-| 11 | Skipping the verify step | "Silent success" — config written, never picked up by gateway. | Always poll logs + smoke test. |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Billing gate | Even a read-only search can consume quota | Require BILLING_ACKNOWLEDGED=1 |
+| 2 | Header spelling | Brave uses X-Subscription-Token | Do not substitute Authorization Bearer |
+| 3 | Package pin | The stdio command uses a fixed published version | Keep the reviewed pin |
+| 4 | Query scope | The setup probe asks for one result | Do not expand the probe into bulk searches |
+| 5 | Key failure | A stored key may be expired or under-scoped | Fail before snapshot if the search is rejected |
+| 6 | Connection proof | Starting npx is not tool discovery proof | Require enabled mcp list and mcp test |
 
----
+Pinned package metadata: [@brave/brave-search-mcp-server 2.1.4](https://registry.npmjs.org/@brave%2fbrave-search-mcp-server/2.1.4). Search can consume quota; the billing gate applies to the read-only probe as well.
+
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `BRAVE_API_KEY` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] MCP registered via Path A (stdio), Path B (self-hosted HTTP via `/hermes-mcp-add`), or REST documented via Path C
-- [ ] Gateway reloaded with `stop` + `run` (NOT `restart`)
-- [ ] Logs show `registered N tool(s) for 'brave-search'` within 30s
-- [ ] Smoke test: `GET /res/v1/web/search` returned `200` (or `429` = key valid, just throttled)
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

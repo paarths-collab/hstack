@@ -12,7 +12,7 @@
 # overwrite anything the user changed after apply.
 #
 # HONESTY: legacy recovery retains the small declared surface
-#   hermes --version | cron list|create|remove | gateway stop|run --daemon
+#   hermes --version | cron list|create|remove | gateway restart
 # (`cron list` is assumed to print one job per line: <id> TAB <schedule> TAB <prompt>).
 # That surface is UNVERIFIED against real Hermes; the test double is tests/acceptance/stubs/hermes.
 # Candidate v0.22.5 uses a bundled, version-specific structured jobs.json reader and native
@@ -103,10 +103,14 @@
 #     (absent -> create, identical -> unchanged, different -> create new then remove old = updated;
 #     entries WITHOUT the marker are never touched), then writes `applied`. If the prompt lacks the
 #     marker the script PREFIXES it. Emits env_swapped=0|1, cron_<id>=created|unchanged|updated, applied=1.
-#   reload <txn>   (needs applied or restored)
-#     Legacy: `gateway stop || true; sleep 2; gateway run --daemon`; delay HSTACK_RELOAD_DELAY.
-#     Native: exclusive-default service check, gateway stop --yes, start, ensure --json;
-#     no foreground/all/force fallback. Emits reloaded=1 only after readiness confirmation.
+#   reload <txn> [--interrupt-live-sessions]   (needs applied or restored)
+#     Legacy (0.15.2): `gateway restart` (there is no `gateway run --daemon` and no -y, --detach or `ensure` at that
+#     release), then a HSTACK_RELOAD_DELAY pause; the flag has no meaning there and is ignored.
+#     Native (0.22.5): exclusive-default service check; remember the current instance_id (`gateway ensure --json
+#     --timeout 10`); `gateway restart --detach` (plus `-y` only with --interrupt-live-sessions: without it Hermes
+#     refuses while sessions are live and the reload FAILS, naming restart_refused_or_failed); then `gateway ensure
+#     --json --timeout 60` must exit 0 (5/6 retried twice) with state ready AND a different instance_id.
+#     Emits reloaded=1 only after the command (legacy) or that readiness proof (native).
 #   verify <txn> --destination-fp <16hex> --allow-var VAR --dest-var VAR --cron-id ID --schedule 'S'
 #          [--skills a,b]
 #     TARGET-STATE checks only (delivery is NOT checked here). Emits, for each of env-boundary,
@@ -344,7 +348,7 @@ native_call() { # stdout is internal structured evidence, never raw jobs/prompts
   [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
   rv=$(parse_version "$(run_hermes --version)")
   [ "$rv" = 0.22.5 ] || fail 4 runtime_unavailable "native_adapter_requires_0.22.5"
-  if [ $# -ge 2 ]; then
+  if [ $# -ge 2 ] && [ "$1" != reload ]; then
     plan=$2/native-cron.plan.json
     seal=$2/native-cron.plan.sha256
     if [ -e "$plan" ] || [ -L "$plan" ]; then
@@ -361,6 +365,8 @@ native_call() { # stdout is internal structured evidence, never raw jobs/prompts
       out conflict cron; fail 3 restore_conflict cron
     fi
     case $rc in 1|3|4) ;; *) rc=4 ;; esac
+    # A reload refusal carries a fixed reason code (restart refused, readiness unconfirmed, instance unchanged ...).
+    if [ "$1" = reload ]; then fail "$rc" native_adapter_failed "reload:$(native_field detail)"; fi
     fail "$rc" native_adapter_failed "op:$1"
   fi
   if [ "$1" = intend ]; then
@@ -377,7 +383,9 @@ legacy_runtime_check() {
   resolve_hermes
   [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
   rv=$(parse_version "$(run_hermes --version)")
-  [ "$rv" != 0.22.5 ] || fail 4 legacy_runtime_incompatible "recover_with_original_runtime_or_manual_reconciliation"
+  # The TSV protocol is a contract for the original 0.15.2 fixture only.
+  # Recovery must not mutate an upgraded or unrecognized runtime.
+  [ "$rv" = 0.15.2 ] || fail 4 legacy_runtime_incompatible "recover_with_original_runtime_or_manual_reconciliation"
 }
 
 lock_is_stale() { # <lockdir>: holder pid dead, or no pid file for more than a minute (mtime)
@@ -696,12 +704,23 @@ keys_of_txn() { # -> LIST_OUT = managed keys of the loaded txn
 # ----------------------------------------------------------------------------------------------
 # op: inspect
 # ----------------------------------------------------------------------------------------------
+# The Hermes release token of `hermes --version`, verbatim, or nothing. Real output is a multi-line report
+# (hermes_cli/_startup_fast.py print_fast_version_info): the first line is the banner
+# `Hermes Agent v<ver> (<release date>)[ · ...]`; the Install directory / Python / OpenAI SDK lines after it carry
+# unrelated x.y.z tokens, so only line 1 is read. The offline test double prints `hermes <ver>`. The token is never
+# truncated: `0.22.5.1`, `0.22.5.dev3` and `0.22.5+3.gabc` are reported as such and are NOT `0.22.5`. The grammar is
+# the receipt schema's runtime_version pattern, so what is printed here can be recorded as observed.
 parse_version() {
-  local v
-  v=$(printf '%s\n' "$1" | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+([.+-][0-9A-Za-z.+-]*)?' | head -1)
-  v=${v%.}
-  local re='^[0-9A-Za-z.+-]+$'
-  if [ -n "$v" ] && [ "${#v}" -le 64 ] && [[ $v =~ $re ]]; then printf '%s' "$v"; fi
+  local line v re='^[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.-]{1,32})?$'
+  line=${1%%$'\n'*}
+  line=${line%$'\r'}
+  case $line in
+    "Hermes Agent v"*) v=${line#"Hermes Agent v"} ;;
+    "hermes "*) v=${line#"hermes "} ;;
+    *) return 0 ;;
+  esac
+  v=${v%% *}
+  if [[ $v =~ $re ]]; then printf '%s' "$v"; fi
 }
 
 os_release_field() {
@@ -1364,7 +1383,9 @@ op_apply() {
 # op: reload
 # ----------------------------------------------------------------------------------------------
 op_reload() {
-  [ $# -eq 1 ] || usage "reload <txn>"
+  local interrupt=0
+  if [ $# -eq 2 ] && [ "$2" = --interrupt-live-sessions ]; then interrupt=1; set -- "$1"; fi
+  [ $# -eq 1 ] || usage "reload <txn> [--interrupt-live-sessions]"
   txn_light "$1"
   lock_acquire
   txn_load "$1"
@@ -1374,13 +1395,18 @@ op_reload() {
   resolve_hermes
   [ -n "$HERMES" ] || fail 4 runtime_unavailable "hermes_not_found"
   if [ "$ADAPTER" = native-v0.22.5 ]; then
-    native_call reload
+    if [ "$interrupt" = 1 ]; then native_call reload --interrupt-live-sessions; else native_call reload; fi
     [ "$(native_field native_gateway_reloaded)" = 1 ] || fail 1 native_adapter_failed "reload_confirmation_missing"
   else
     legacy_runtime_check
-    run_hermes gateway stop >/dev/null || true
+    # Hermes 0.15.2 (upstream tag v2026.5.29.2) has no `gateway run --daemon` (hermes_cli/main.py gateway parsers,
+    # 11494-11526: `run` is the foreground gateway) and no `gateway ensure`. Its reload is `gateway restart`
+    # (main.py:11557 parser; hermes_cli/gateway.py gateway_command `restart` branch, 5483-5600: through the installed
+    # systemd/launchd service, else stop + FOREGROUND run), with no -y flag and no live-session guard.
+    # The service manager's own failure is reported by a non-zero exit, but a linger warning exits 0, so this
+    # offline-fixture recovery path can only report that the command succeeded.
+    run_hermes gateway restart >/dev/null || fail 1 gateway_restart_failed "hermes_gateway_restart_failed"
     sleep "$delay"
-    run_hermes gateway run --daemon >/dev/null || fail 1 gateway_run_failed "hermes_gateway_run_failed"
   fi
   out op reload
   out reloaded 1

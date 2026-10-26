@@ -290,7 +290,8 @@ hs_gen_mdc() {
   echo "---"
   if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
   echo
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+  # drop only the frontmatter block (first two fence lines); later "---" lines are body
+  awk 'n < 2 && /^---[[:space:]]*$/ { n++; next } n >= 2 { print }' "$src"
 }
 
 # Cursor .mdc rule. Written through a temp file onto a fresh path, never through an

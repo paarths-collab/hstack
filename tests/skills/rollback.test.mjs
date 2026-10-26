@@ -14,13 +14,13 @@ const seed = { env: "PUBLIC_FIXTURE=prior\n", config: "model.default: prior/mode
 const targets = ["integration-github", "integration-notion", "hermes-model", "platform-telegram", "hermes-deploy", TEMPLATE_PATH];
 
 for (const skill of ["integration-github", "hermes-deploy"]) {
-  it(`${skill}: a native stop refusal preserves the recovery point without forcing interruption`, async () => {
+  it(`${skill}: a restart refused because of live sessions preserves the recovery point without forcing interruption`, async () => {
     const deploy = skill === "hermes-deploy";
     const snapshot = deploy ? "deploy_snapshot" : "snapshot";
     const rollback = deploy ? "deploy_rollback" : "rollback";
     const script = assemble([
       "set +e\n", { skill, ids: ["step0#1"] }, `${snapshot} || exit 2\n`,
-      'touch "$HSTACK_FAKE/knobs/fail.gateway.stop"\n',
+      'touch "$HSTACK_FAKE/knobs/live_sessions"\n',
       `${rollback}\nrc=$?\nexit "$rc"\n`,
     ]);
     await scenario({ name: "rollback-stop-refusal", seed, script, env: modelEnv }, async run => {
@@ -28,9 +28,10 @@ for (const skill of ["integration-github", "hermes-deploy"]) {
       assert.ok(run.sb.exists(`.hermes/.hstack-backup/${skill}`));
       assert.ok(!run.sb.exists(`.hermes/.hstack-backup/${skill}.prev`));
       assert.ok(!run.out.includes("rollback: restored"));
-      assert.ok(!run.sb.hermesCalls().some(c => c.some(x => ["--force", "--all", "--yes", "--interrupt"].includes(x))));
+      assert.match(run.out, /refused|live session/i);
+      assert.ok(!run.sb.hermesCalls().some(c => c.some(x => ["--force", "--all", "--yes", "-y", "--interrupt"].includes(x))));
       assertStateIdentical(run);
-      const retry = assemble([{ skill, ids: ["step0#1"] }, 'rm "$HSTACK_FAKE/knobs/fail.gateway.stop"\n', `${rollback} || exit 1\n`]);
+      const retry = assemble([{ skill, ids: ["step0#1"] }, 'rm "$HSTACK_FAKE/knobs/live_sessions"\n', `${rollback} || exit 1\n`]);
       const recovered = await run.sb.run(retry, { env: modelEnv });
       assert.equal(recovered.code, 0, recovered.out);
       assert.ok(run.sb.exists(`.hermes/.hstack-backup/${skill}.prev`));
@@ -38,7 +39,7 @@ for (const skill of ["integration-github", "hermes-deploy"]) {
   });
 }
 
-describe("rollback requires a successful gateway health command", { concurrency: 6 }, () => {
+describe("rollback requires the native readiness proof (gateway ensure ready + a new instance)", { concurrency: 6 }, () => {
   for (const skill of targets) {
     const name = skill === TEMPLATE_PATH ? "fixture-integration" : skill;
     const deploy = skill === "hermes-deploy";
@@ -46,10 +47,11 @@ describe("rollback requires a successful gateway health command", { concurrency:
     const script = assemble([
       "set +e\n", { skill, ids: ["step0#1"], placeholders: { "skill-name": name } },
       `${deploy ? "deploy_snapshot" : "snapshot"} || exit 2\n`,
-      'printf "gateway running\\n" > "$HSTACK_FAKE/knobs/status_override"\nprintf 1 > "$HSTACK_FAKE/knobs/status_exit"\n',
+      // "ensure" never reaches ready (exit 5 = deadline); the old text-grep health check would have said "running".
+      'printf "gateway running\\n" > "$HSTACK_FAKE/knobs/status_override"\nprintf 5 > "$HSTACK_FAKE/knobs/ensure_exit"\n',
       `${rollback}\nrc=$?\nexit "$rc"\n`,
     ]);
-    it(`${name}: nonzero status cannot retire the active recovery point`, async () => {
+    it(`${name}: an ensure that never reports ready cannot retire the active recovery point`, async () => {
       await scenario({ name: "rollback-status-error", seed, script, env: modelEnv }, async (run) => {
         assert.equal(run.code, 1, run.out);
         assert.ok(!run.out.includes("rollback: restored"));
@@ -57,12 +59,34 @@ describe("rollback requires a successful gateway health command", { concurrency:
         assert.ok(!run.sb.exists(`.hermes/.hstack-backup/${name}.prev`));
         const retry = assemble([
           { skill, ids: ["step0#1"], placeholders: { "skill-name": name } },
-          'rm "$HSTACK_FAKE/knobs/status_exit"\n', `${rollback} || exit 1\n`,
+          'rm "$HSTACK_FAKE/knobs/ensure_exit"\n', `${rollback} || exit 1\n`,
         ]);
         const recovered = await run.sb.run(retry, { env: modelEnv });
         assert.equal(recovered.code, 0, recovered.out);
         assert.ok(run.sb.exists(`.hermes/.hstack-backup/${name}.prev`));
         assertStateIdentical(run);
+      });
+    });
+  }
+});
+
+describe("a restart that silently did nothing is not a successful reload", { concurrency: 6 }, () => {
+  for (const skill of targets) {
+    const name = skill === TEMPLATE_PATH ? "fixture-integration" : skill;
+    const deploy = skill === "hermes-deploy";
+    const rollback = deploy ? "deploy_rollback" : "rollback";
+    it(`${name}: unchanged instance_id after restart keeps the snapshot and fails`, async () => {
+      const script = assemble([
+        "set +e\n", { skill, ids: ["step0#1"], placeholders: { "skill-name": name } },
+        `${deploy ? "deploy_snapshot" : "snapshot"} || exit 2\n`,
+        'touch "$HSTACK_FAKE/knobs/restart_noop"\n',
+        `${rollback}\nrc=$?\nexit "$rc"\n`,
+      ]);
+      await scenario({ name: "rollback-noop", seed, script, env: modelEnv }, async (run) => {
+        assert.equal(run.code, 1, run.out);
+        assert.match(run.out, /instance did not change|did NOT come back/);
+        assert.ok(run.sb.exists(`.hermes/.hstack-backup/${name}`));
+        assert.ok(!run.sb.exists(`.hermes/.hstack-backup/${name}.prev`));
       });
     });
   }

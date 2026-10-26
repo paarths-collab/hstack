@@ -36,8 +36,9 @@ export const FAKE = {
   chat: '-1009998887776',
 };
 
+/** The legacy fixture version the offline stub prints by default (HERMES_VERSION is the 0.22.5 skills target). */
 export function pinnedHermesVersion() {
-  const m = /^HERMES_VERSION=(.+)$/m.exec(readFileSync(join(REPO, 'VERSIONS.txt'), 'utf8'));
+  const m = /^HERMES_LEGACY_FIXTURE_VERSION=(.+)$/m.exec(readFileSync(join(REPO, 'VERSIONS.txt'), 'utf8'));
   return m[1].trim();
 }
 

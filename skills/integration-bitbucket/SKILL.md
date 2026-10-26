@@ -1,300 +1,451 @@
 ---
 name: integration-bitbucket
-description: Connect Bitbucket Cloud (repos, branches, pull-request lifecycle) to a self-hosted Hermes Agent over SSH via the official Atlassian Rovo remote MCP server. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect bitbucket to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-bitbucket — connect Bitbucket Cloud to a remote Hermes (SSH-first)
+# /integration-bitbucket — connect bitbucket over SSH
 
-You are the engineer connecting Bitbucket Cloud to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Mint the API token (or have an org admin mint a service-account key) in the Atlassian UI.
-2. Have an org admin enable API-token auth for the Rovo MCP server in Atlassian Administration.
+## Before you start — gather (ask once)
 
-Everything else — token storage, MCP registration, gateway reload, verification — runs
-on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. BITBUCKET_AUTH: the complete Basic base64(email:API-token) or Bearer service-account header. It stays on stdin and in .env; the Atlassian Jira/Confluence MCP is not a Bitbucket connector.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Atlassian ships a first-party remote MCP server
-(`atlassian/atlassian-mcp-server`) at `https://mcp.atlassian.com/v1/mcp` that DOES cover
-Bitbucket Cloud. But unlike Jira/Confluence, **Bitbucket Cloud tools are available only via
-API-token auth — OAuth 2.1 does not cover Bitbucket yet.** Static-token auth keeps the
-one-click promise. The legacy `/v1/sse` endpoint is unsupported after 2026-06-30 — do not use it.
-
-There are two credential shapes, and picking the wrong header is the #1 footgun:
-
-- **Personal API token** → HTTP Basic of `email:token` (NOT Bearer).
-- **Service-account API key** → Bearer directly (recommended for always-on agents).
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$BITBUCKET_AUTH` | Complete `Authorization` value: either `Basic <b64(email:token)>` or `Bearer <service-key>` | <https://id.atlassian.com/manage-profile/security/api-tokens> → *Create API token with scopes*, OR Atlassian Administration → Rovo / MCP settings → service-account key |
-| Scopes on the token | At least `read:repository:bitbucket`, `read:pullrequest:bitbucket`; add `write:pullrequest:bitbucket` to create/comment/merge PRs | Set when minting the token; scope to narrowest workspace/repos needed |
-| Org-admin toggle | API-token auth for Rovo MCP must be enabled in Atlassian Administration | Org admin task; if `401`/`403` on a correctly-formed request, this is usually the cause |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
-If you are minting `$BITBUCKET_AUTH` locally, build it correctly **before** sending it to the VPS:
-
-- Personal token (Linux): `BITBUCKET_AUTH="Basic $(printf '%s' 'you@example.com:<token>' | base64 -w0)"`
-- Personal token (BSD/macOS): `BITBUCKET_AUTH="Basic $(printf '%s' 'you@example.com:<token>' | base64 | tr -d '\n')"`
-- Service-account key: `BITBUCKET_AUTH="Bearer <service-account-api-key>"`
-
-`-w0` (or `tr -d '\n'`) is mandatory — a wrapped base64 value is an invalid header and silently 401s.
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`. If you land in a container shell with `root@<hex-string>`, exit
-to the host first — keys/configs added inside a container are invisible to the host.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci bitbucket" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Bitbucket is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write MCP_BITBUCKET_API_KEY (length ${#BITBUCKET_AUTH}, prefix ${BITBUCKET_AUTH:0:6}...) via 'hermes config set'
-  2. chmod 600 ~/.hermes/.env
-  3. Register MCP: hermes mcp add bitbucket --url https://mcp.atlassian.com/v1/mcp --auth header (Authorization)
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify in logs: grep -i "registered.*bitbucket"
-  6. Smoke test: GET https://api.bitbucket.org/2.0/user → expect 200 (Bearer key) or use /workspaces for Basic
-EOF
-echo "The Authorization value is NEVER printed in plaintext."
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-The whole `Authorization` value (including the literal word `Basic ` or `Bearer ` and the space)
-lives in `MCP_BITBUCKET_API_KEY`. `config.yaml` will reference it with no literal prefix.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set MCP_BITBUCKET_API_KEY '$BITBUCKET_AUTH'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^MCP_BITBUCKET_API_KEY=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: MCP_BITBUCKET_API_KEY not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern with `|` as
-> delimiter (the base64/key contains `/`, `+`, `=` — a `/`-delimited sed will break):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^MCP_BITBUCKET_API_KEY=' ~/.hermes/.env || printf 'MCP_BITBUCKET_API_KEY=\n' >> ~/.hermes/.env
->   sed -i 's|^MCP_BITBUCKET_API_KEY=.*|MCP_BITBUCKET_API_KEY=$BITBUCKET_AUTH|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-> Never `echo >>` the value: a missing trailing newline on the prior line merges values and
-> the runtime silently picks up garbage.
-
----
-
-## Step 5 — register the Bitbucket MCP server
-
-Pick the path that matches the Hermes build on the VPS. Path A is preferred.
-
-### Path A (preferred) — official Atlassian Rovo remote MCP server
-
-The full `Authorization` value (including `Basic ` / `Bearer `) is already in
-`MCP_BITBUCKET_API_KEY`, so `config.yaml` references it with **no literal prefix**:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  printf 'y\nAuthorization\nplaceholder\n' | \
-    hermes mcp add bitbucket \
-      --url 'https://mcp.atlassian.com/v1/mcp' \
-      --auth header
-"
-```
-
-Then swap the placeholder for the env-var reference (pipe delimiter — never `/`):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" \
-  "sed -i 's|Authorization: placeholder|Authorization: \${MCP_BITBUCKET_API_KEY}|' ~/.hermes/config.yaml"
-```
-
-The result in `config.yaml` should look like:
-
-```yaml
-bitbucket:
-  url: https://mcp.atlassian.com/v1/mcp
-  headers:
-    Authorization: ${MCP_BITBUCKET_API_KEY}
-  enabled: true
-```
-
-If `mcp add` generated a literal `Bearer ${MCP_BITBUCKET_API_KEY}` line, edit `config.yaml` to
-drop the literal `Bearer ` — otherwise the prefix is duplicated and the server 401s every call.
-
-### Path B (fallback) — generic HTTP tool against the Bitbucket Cloud REST API
-
-If the Hermes build cannot register a remote MCP, or the org-admin Rovo toggle is not yet on:
-
-- **Base URL:** `https://api.bitbucket.org/2.0`
-- **Auth header:** `Authorization: ${MCP_BITBUCKET_API_KEY}` (the env var already contains `Basic ...` or `Bearer ...`)
-- **Common endpoints:** `/user`, `/workspaces`, `/repositories/{workspace}`, `/repositories/{workspace}/{repo_slug}/pullrequests`
-
-Do NOT use the legacy `https://mcp.atlassian.com/v1/sse` endpoint — it is unsupported after 2026-06-30.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*bitbucket|MCP server.*bitbucket.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: bitbucket registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-bitbucket
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: bitbucket not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test
-
-Use a side-effect-free call. For a Bearer service-account key, `/user` works. For a Basic
-personal token, prefer `/workspaces` (which always succeeds with any read-scope token):
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X GET 'https://api.bitbucket.org/2.0/workspaces?pagelen=1' \
-    -H \"Authorization: \$MCP_BITBUCKET_API_KEY\"
-")
-case "$HTTP" in
-  200) echo "OK: Bitbucket API reachable and Authorization valid." ;;
-  401) echo "FAIL: Authorization invalid. Common causes: wrong shape (Bearer vs Basic), wrapped base64, missing email in Basic, org-admin API-token toggle off."; rollback; exit 1 ;;
-  403) echo "FAIL: Authorization valid but scope missing. Re-mint with read:repository:bitbucket, read:pullrequest:bitbucket, write:pullrequest:bitbucket."; exit 1 ;;
-  429) echo "WARN: rate-limited by Atlassian. Back off and retry; do not tight-loop." ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from Bitbucket API. Check manually." ;;
-esac
-```
-
-A `200` with an empty list is still a pass — it proves auth/routing; the account simply has no
-workspaces shared with the token yet.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove bitbucket 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset MCP_BITBUCKET_API_KEY 2>/dev/null || \
-    sed -i '/^MCP_BITBUCKET_API_KEY=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Bitbucket is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in skills/hstack-bitbucket/SKILL.md skills/hstack-bitbucket/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Refuse to replace a changed or foreign native workflow. A concurrent user edit
+# belongs to the user; retain all recovery artifacts for manual reconciliation.
+p="$HOME/.hermes/skills/hstack-bitbucket"
+original="$b/skills_hstack-bitbucket_SKILL.md"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] || exit 1
+  entries=$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  if [ "$entries" = 0 ] && [ -f "$original.absent" ]; then :
+  else
+    [ "$entries" = 2 ] && [ -f "$p/SKILL.md" ] && [ -f "$p/.hstack-managed" ] \
+      && [ ! -L "$p/SKILL.md" ] && [ ! -L "$p/.hstack-managed" ] \
+      && [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] \
+      || { echo "extra_restore: native skill was edited or is unowned; active backup retained." >&2; exit 1; }
+  fi
+elif [ ! -f "$original.absent" ]; then
+  echo "extra_restore: previous native skill was removed; active backup retained." >&2
+  exit 1
+fi
+# Validate all copies before restoring any artifact.
+for rel in skills/hstack-bitbucket/SKILL.md skills/hstack-bitbucket/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in skills/hstack-bitbucket/SKILL.md skills/hstack-bitbucket/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+case "${BITBUCKET_AUTH:-}" in "Basic "*|"Bearer "*) ;; *) echo "ABORT: complete Basic/Bearer header required. Nothing was written."; exit 1 ;; esac
+secret_chars_ok "${BITBUCKET_AUTH#* }" || { echo "ABORT: malformed Bitbucket credential. Nothing was written."; exit 1; }
+
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: local skill is not safely replaceable. Nothing was written."; exit 1; }
+p="$HOME/.hermes/skills/hstack-bitbucket"
+[ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] && [ -f "$p/.hstack-managed" ] && [ -f "$p/SKILL.md" ] && [ ! -L "$p/SKILL.md" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] || exit 1
+  [ "$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ] || exit 1
+fi
+REMOTE
+printf '%s\n' "${BITBUCKET_AUTH:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'BITBUCKET_AUTH'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.bitbucket.org/2.0/workspaces?pagelen=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'BITBUCKET_AUTH'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: bitbucket; path: rest.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Install a discoverable read-only Hermes skill with owned-file recovery.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env BITBUCKET_AUTH "${BITBUCKET_AUTH:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native skill installation."; fail_transaction; }
+set -e
+p="$HOME/.hermes/skills/hstack-bitbucket"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+mkdir -p "$p" && chmod 700 "$p"
+t=$(mktemp "$p/.SKILL.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'HSTACK_NATIVE_SKILL'
 ---
+name: hstack-bitbucket
+description: Read bitbucket account data using a private host credential; use for the installed read-only bitbucket connection.
+---
+
+# bitbucket: read-only account access
+
+Only run this read request when the user asks for bitbucket account data. Do not print credentials.
+This connector is read-only; changes require a separately reviewed workflow and user authorization.
+The script reads the private ~/.hermes/.env without sourcing it as executable shell code.
+Use the following command through the native terminal tool on the Hermes host:
+
+
+    python3 -c 'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+    d={}
+    p=os.path.expanduser("~/.hermes/.env")
+    if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+    if os.path.isfile(p):
+     for line in open(p):
+      k, sep, v=line.rstrip("\n").partition("=")
+      if sep:
+       v=v.strip()
+       if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+       d[k]=v
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+      raise RuntimeError("Redirect refused; credentials were not forwarded")
+    def req(url, headers=None, body=None):
+     if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+     r=urllib.request.Request(url,headers=headers or {},data=body)
+     with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+      if f.status != 200: raise RuntimeError("Non-200 response")
+      data=f.read(2 * 1024 * 1024 + 1)
+      if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+      return data
+    result=req('"'"'https://api.bitbucket.org/2.0/workspaces?pagelen=1'"'"',{'"'"'Authorization'"'"':'"'"''"'"'+d['"'"'BITBUCKET_AUTH'"'"']})
+    print(result.decode())
+    '
+
+Return only requested account fields. Keep the fixed read-only endpoint and never expose .env values.
+HSTACK_NATIVE_SKILL
+chmod 600 "$t"
+mv "$t" "$p/SKILL.md"
+cksum < "$p/SKILL.md" > "$p/.hstack-managed"
+chmod 600 "$p/.hstack-managed"
+REMOTE
+remote 'hermes -p default skills list --enabled-only | grep -F "hstack-bitbucket"' >/dev/null || { echo "FAIL: installed skill is not discoverable/enabled."; fail_transaction; }
+```
+
+This installs a real Hermes-discoverable native skill, with an executable read request and managed-file checksum. Existing user edits or unowned files are refused. The previous skill file and marker are recovered with the transaction.
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+req('"'"'"'"'"'"'"'"'https://api.bitbucket.org/2.0/workspaces?pagelen=1'"'"'"'"'"'"'"'"',{'"'"'"'"'"'"'"'"'Authorization'"'"'"'"'"'"'"'"':'"'"'"'"'"'"'"'"''"'"'"'"'"'"'"'"'+d['"'"'"'"'"'"'"'"'BITBUCKET_AUTH'"'"'"'"'"'"'"'"']})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; fail_transaction; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-bitbucket.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Using `Bearer` with a **personal** API token | Personal tokens need `Basic base64(email:token)`; Bearer is only for service-account keys | Match header shape to credential type (see Before you start) |
-| 2 | Forgetting the email in the Basic value | The credential is `email:token`, not the token alone | Always base64 `email:token` |
-| 3 | Wrapped base64 | `base64` without `-w0` inserts newlines → malformed header → silent 401 | `base64 -w0` (Linux) or `base64 \| tr -d '\n'` (BSD/macOS) |
-| 4 | Expecting OAuth | OAuth 2.1 works for Jira/Confluence but **not** Bitbucket Cloud yet | Use an API token / service-account key; do not wait for OAuth |
-| 5 | API-token auth not enabled org-wide | Org admin must enable API-token auth for the Rovo MCP server; otherwise every token 401s | Confirm the Atlassian Admin toggle before debugging headers |
-| 6 | Over-broad token scope | A workspace/account-wide token gives the agent more than the task needs | Scope to specific repos/PR permissions; prefer a service account |
-| 7 | Legacy `/v1/sse` endpoint | Unsupported after 2026-06-30 | Use `https://mcp.atlassian.com/v1/mcp` |
-| 8 | Literal `Bearer ` in `config.yaml` AND in the env var | Prefix gets duplicated → 401 every call | Either keep the full prefix in the env var (recommended) OR keep it literal in `config.yaml` — never both |
-| 9 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 10 | `echo >> .env` instead of `hermes config set` | Missing trailing newline merges values onto one line — runtime picks up garbage | Always `hermes config set` (or the sed fallback in Step 4) |
-| 11 | Secret in `config.yaml` instead of `.env` | World-readable; defeats `chmod 600`; may not be loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, env-var reference in `config.yaml` |
-| 12 | sed with `/` delimiter on tokens | Tokens / base64 contain `/`, `+`, `=` | Always use `\|` as the sed delimiter |
-| 13 | Container vs host confusion | `root@<hex>` is inside a container; keys/configs added there are invisible to host sshd | `whoami; hostname` first; `exit` until you are on the host |
-| 14 | Skipping the verify step | "Silent success" — config written, never picked up | Always poll logs + smoke-test the API |
-| 15 | Rate limits | Atlassian throttles MCP/API calls per token; bursty PR automation can 429 | Back off on `429`; avoid tight polling loops |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Credential scheme | API tokens can require Basic while service keys use Bearer | Supply the complete intended authorization header |
+| 2 | Wrong product MCP | Atlassian Jira/Confluence MCP is not this Bitbucket client | Use the fixed Bitbucket REST read |
+| 3 | Read scope | This client lists accessible workspaces only | Request no repository mutations through this skill |
+| 4 | Credential encoding | Basic auth is encoded text, not encryption | Keep the header private over SSH and HTTPS |
+| 5 | Workspace identity | Accessible workspaces depend on the credential owner | Check the intended account result |
+| 6 | Ownership | The installed skill can be edited by its owner | Refuse to overwrite modified or unowned files |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded (Step 1 host/container check passed)
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `MCP_BITBUCKET_API_KEY` holds the full `Basic <b64>` or `Bearer <key>` value in `~/.hermes/.env`, `chmod 600`
-- [ ] Secret NOT in `config.yaml` and NOT echoed in chat; literal `Bearer `/`Basic ` not duplicated between env and config
-- [ ] MCP registered via Path A (Rovo remote MCP) with `Authorization: ${MCP_BITBUCKET_API_KEY}`, OR Path B (REST) documented
-- [ ] Org admin has enabled API-token auth for the Rovo MCP server
-- [ ] Token scoped to the minimum repos / PR permissions the agent actually needs
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for 'bitbucket'` within 30s
-- [ ] Smoke test: `GET /2.0/workspaces` (or `/2.0/user` for Bearer) returned `200`
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

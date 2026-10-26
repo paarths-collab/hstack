@@ -11,7 +11,7 @@ for people who want the supplied deterministic report without writing a worker,
 assembling configuration or integrating a sender. See the executable
 [setup comparison](COMPARISON.md) for what was measured.
 
-It is an **unpromoted Hermes 0.22.5 candidate**. Local HTTP integration tests and
+It targets **Hermes 0.22.5** (`HERMES_VERSION`), which is source-verified and **not live-verified**. Local HTTP integration tests and
 native CLI fixtures do not establish real-server or recipient delivery. A Telegram
 API acknowledgement means the API accepted the exact text for the checked chat;
 it does not mean a person read it. Live promotion still requires the evidence in
@@ -26,7 +26,7 @@ Controlled endpoints do not establish real Telegram delivery. The latest
 unauthenticated public preview hit an API rate limit.
 
 The opt-in [native cron check](../../tests/founder-brief/REAL_NATIVE.md) also runs
-the exact candidate's parser, store, claims, worker subprocess and scheduler tick.
+the exact 0.22.5 source's parser, store, claims, worker subprocess and scheduler tick.
 Its vendors are controlled loopback APIs and Linux gateway readiness is bypassed.
 
 Live completion still needs the Linux target, selected repositories, private chat,
@@ -110,7 +110,8 @@ No token goes in command arguments or logs. An existing runtime can also run
 
 ## Target prerequisites and configuration reference
 
-The target must already have the exact candidate Hermes installation, an installed
+The target must already have the exact Hermes 0.22.5 installation (`hermes --version` must print
+`Hermes Agent v0.22.5` on its first line; the installer compares that token exactly), an installed
 systemd gateway, Python 3.9+ with timezone data, and an exclusive default profile.
 The Hermes home and scripts directory must belong to the target user and must not
 be writable by other users. Named private workflow directories require mode `700`.
@@ -214,6 +215,14 @@ confirmed window is revisited. The minute trigger avoids depending on the gatewa
 timezone and follows daylight saving changes: repeated hours use the first occurrence;
 nonexistent wall times shift forward by the DST gap.
 
+A window ends at the latest daily cutoff. When `window_hours` is a whole number of days (24, 48, ...) it starts at
+the local cutoff that many days earlier, so consecutive 24-hour reports tile exactly: "facts inside the stated
+reporting window" leaves no unreported hour and none reported twice. On the day after a DST change that window is
+23 or 25 elapsed hours long (for example, `America/New_York` at 09:00 reports 25 hours on 2025-11-02 and 23 hours on
+2026-03-08). Any other `window_hours` is that many elapsed hours before the cutoff (a 12-hour window leaves a
+deliberate gap each day; a 30-hour window overlaps).
+Seven local days may span 169 elapsed hours after autumn DST; scheduled collection accepts that calendar window. Explicit collector windows still have a 168-hour elapsed limit, and non-calendar workflow windows keep their fixed elapsed duration.
+
 The first automatic brief waits for a cutoff after installation. Following downtime,
 the latest eligible window is attempted; the worker does not flood all missed days.
 Reporting windows can overlap when `window_hours` exceeds a day. Partial GitHub
@@ -251,7 +260,7 @@ control-plane fixture; installing skill text there is not this runnable workflow
 ## Offline checks
 
 ```bash
-node --test --test-concurrency=3 tests/founder-brief/
+node --test --test-concurrency=3 tests/founder-brief/*.test.mjs
 node --test tests/acceptance/observer.test.mjs tests/acceptance/untrusted.test.mjs
 ```
 

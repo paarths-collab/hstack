@@ -1,370 +1,459 @@
 ---
 name: integration-auth0
-description: Connect Auth0 (identity + access management — users, roles, apps, actions, logs, org management) to a self-hosted Hermes Agent over SSH via the official auth0/auth0-mcp-server stdio MCP with Client Credentials Flow. Path A stdio MCP with M2M app; Path B direct REST via Management API bearer token. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, Gemini CLI, and OpenClaw.
+description: Connect auth0 to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-auth0 — connect Auth0 to a remote Hermes (SSH-first)
+# /integration-auth0 — connect auth0 over SSH
 
-You are the engineer connecting Auth0 (enterprise identity provider — users, roles, apps,
-actions, logs, tenants) to a self-hosted Hermes agent on the user's VPS. You (the AI agent
-— Hermes, Claude Code, Codex, Cursor, Gemini, OpenClaw, any of them) work over SSH as root
-against the VPS. The user does two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Create a **Machine-to-Machine (M2M) application** in Auth0 Dashboard → Applications →
-   Applications → Create → M2M → authorize it for the Auth0 Management API with least-
-   privilege scopes.
-2. Copy the M2M app's Client ID + Client Secret from the Settings tab.
+## Before you start — gather (ask once)
 
-Everything else — credential storage, live Management API token exchange, MCP registration
-via stdio, gateway reload, live user-list smoke test — runs on the VPS via SSH, idempotently
-with a rollback path.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. AUTH0_DOMAIN (bare tenant hostname), AUTH0_CLIENT_ID and AUTH0_CLIENT_SECRET from an existing least-privilege M2M app authorized for read:users. This recipe does not create clients or grants.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Auth0 ships an **official stdio MCP** at
-`github.com/auth0/auth0-mcp-server`. Two auth modes:
-
-- **Device authorization (interactive):** logs you into your Auth0 tenant via browser.
-  **Not usable for Hermes** — headless.
-- **Client Credentials Flow (M2M app, headless):** Auth0 domain + M2M client ID + M2M
-  client secret. This is what this skill wires.
-
-Sources:
-- https://github.com/auth0/auth0-mcp-server
-- https://auth0.com/blog/announcement-auth0-mcp-server-is-here/
-- https://auth0.com/docs/api/management/v2
-
-**Two paths:**
-
-- **Path A (default) — official stdio MCP via `npx`.** Full Management API surface (users,
-  roles, apps, actions, logs, connections, orgs).
-- **Path B (fallback) — direct REST** against `https://<tenant>.auth0.com/api/v2` with a
-  bearer token. Same permissions model; no MCP indirection.
-
-**Scope minimalism:** the Auth0 Management API has ~50 scopes. Grant only what the agent
-actually needs. `read:users` for a lookup agent. `create:users` + `update:users` for a
-provisioning agent. NEVER grant `create:tenants` or `delete:tenants` to an agent.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$AUTH0_DOMAIN` | Tenant domain (`<name>.<region>.auth0.com` or custom domain) | Auth0 Dashboard → Applications → Settings → Domain |
-| `$AUTH0_CLIENT_ID` | M2M app Client ID (32-char alphanumeric) | Same M2M app → Settings tab |
-| `$AUTH0_CLIENT_SECRET` | M2M app Client Secret | Same page — copy immediately |
-| `$AUTH0_MGMT_AUDIENCE` *(optional, auto-derived)* | Usually `https://<AUTH0_DOMAIN>/api/v2/` | Auth0 Dashboard → APIs → Auth0 Management API → Identifier field |
-| `$WIRE_PATH` *(optional)* | `A` (stdio MCP, default) or `B` (direct REST) | A requires `npx` on the VPS |
-
-Confirm SSH access:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-auth0
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
-
-## Step 1 — verify Hermes + Path A prereqs
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    HERMES="$(command -v hermes)"
-  elif [ -x "$HOME/.local/bin/hermes" ]; then
-    HERMES="$HOME/.local/bin/hermes"
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    HERMES="docker exec $AGENT hermes"
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-  echo "Using: $HERMES"
-  $HERMES --version
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-
-if [ "${WIRE_PATH:-A}" = "A" ]; then
-  ssh "$VPS_USER@$VPS_IP" "command -v npx >/dev/null 2>&1" \
-    || { echo "ABORT: Path A requires npx on the VPS. Install Node.js or pick Path B (WIRE_PATH=B)."; exit 1; }
-fi
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci auth0" || echo 0)
-HAS_DOMAIN=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^AUTH0_DOMAIN=' ~/.hermes/.env 2>/dev/null" || echo 0)
-HAS_CLIENT=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^AUTH0_CLIENT_ID=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if [ "$HAS_DOMAIN" = "1" ] && [ "$HAS_CLIENT" = "1" ] && [ "${FORCE:-0}" != "1" ]; then
-  if [ "${WIRE_PATH:-A}" = "A" ] && [ "$ALREADY" -gt 0 ]; then
-    echo "Auth0 already wired (Path A). Set FORCE=1 to rewire."; exit 0
-  fi
-  if [ "${WIRE_PATH:-A}" = "B" ]; then
-    echo "Auth0 credentials present (Path B). Set FORCE=1 to rewire."; exit 0
-  fi
-fi
-```
-
----
-
-## Step 3 — HARD GATE (domain + client credentials + live token exchange)
-
-```bash
-# Domain format: <sub>.<region>.auth0.com or <custom>
-printf '%s' "$AUTH0_DOMAIN" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z0-9.-]+$' \
-  || { echo "ABORT: AUTH0_DOMAIN must be a domain (e.g. acme.us.auth0.com or auth.acme.com)."; exit 1; }
-
-# Client ID: 32-char alphanumeric
-printf '%s' "$AUTH0_CLIENT_ID" | grep -qE '^[A-Za-z0-9]{20,64}$' \
-  || { echo "ABORT: AUTH0_CLIENT_ID must be alphanumeric (20-64 chars typically)."; exit 1; }
-
-# Secret sanity
-[ "${#AUTH0_CLIENT_SECRET}" -ge 30 ] \
-  || { echo "ABORT: AUTH0_CLIENT_SECRET looks too short (<30 chars). Did you paste the right value?"; exit 1; }
-
-# Derive audience if not supplied
-MGMT_AUDIENCE=${AUTH0_MGMT_AUDIENCE:-https://$AUTH0_DOMAIN/api/v2/}
-
-# Live Client Credentials Flow exchange
-TOK_RESP=$(curl -sS --max-time 10 \
-  -X POST "https://$AUTH0_DOMAIN/oauth/token" \
-  -H 'Content-Type: application/json' \
-  -d "{\"client_id\":\"$AUTH0_CLIENT_ID\",\"client_secret\":\"$AUTH0_CLIENT_SECRET\",\"audience\":\"$MGMT_AUDIENCE\",\"grant_type\":\"client_credentials\"}" \
-  2>/dev/null) || TOK_RESP=""
-ACCESS=$(printf '%s' "$TOK_RESP" | grep -oE '"access_token":"[^"]+"' | head -1 | cut -d'"' -f4)
-if [ -z "$ACCESS" ]; then
-  if printf '%s' "$TOK_RESP" | grep -q 'access_denied\|Client is not authorized'; then
-    echo "ABORT: M2M app not authorized for the Management API audience."
-    echo "Fix: Dashboard → Applications → your M2M app → APIs tab → authorize Auth0 Management API → grant scopes."
-  elif printf '%s' "$TOK_RESP" | grep -q 'invalid_client'; then
-    echo "ABORT: invalid_client — CLIENT_ID or CLIENT_SECRET is wrong."
-  else
-    echo "ABORT: token exchange failed. Response:"
-    echo "$TOK_RESP" | head -3
-  fi
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
   exit 1
 fi
-echo "Auth0 M2M OK. Got Management API access token (expires in ~24h, agent must re-mint)."
-
-# List scopes on the token (useful debug info)
-SCOPES=$(printf '%s' "$TOK_RESP" | grep -oE '"scope":"[^"]*"' | head -1 | cut -d'"' -f4)
-[ -n "$SCOPES" ] && echo "Granted scopes: $SCOPES" || echo "WARN: no explicit scope on token — token may have default access."
-```
-
----
-
-## Step 4 — DRY RUN preview (always show before writing)
-
-```bash
-PATH_CHOSEN=${WIRE_PATH:-A}
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  Path: $PATH_CHOSEN
-
-  Always:
-    1. Write AUTH0_DOMAIN ($AUTH0_DOMAIN)
-    2. Write AUTH0_CLIENT_ID ($AUTH0_CLIENT_ID — public)
-    3. Write AUTH0_CLIENT_SECRET (length ${#AUTH0_CLIENT_SECRET}) — NEVER plaintext-logged
-    4. Write AUTH0_MGMT_AUDIENCE ($MGMT_AUDIENCE)
-    5. chmod 600 ~/.hermes/.env
-
-  Path A (official stdio MCP):
-    6. Register MCP: hermes mcp add auth0 --command npx --args -y,@auth0/auth0-mcp-server,run
-       --env AUTH0_DOMAIN + AUTH0_CLIENT_ID + AUTH0_CLIENT_SECRET
-    7. Reload gateway: stop + run
-    8. Verify in logs: grep "registered.*auth0"
-
-  Path B (direct REST — no MCP):
-    6. No MCP registered; generic HTTP tool re-mints Management token per call
-    7. Reload gateway: stop + run
-    8. Smoke test: token mint → GET /api/v2/users?per_page=1
-
-Secrets are NEVER printed in plaintext beyond a length.
-Granted scopes: ${SCOPES:-(default)}
-EOF
-```
-
-Wait for confirmation (or `AUTO_APPROVE=1`).
-
----
-
-## Step 5 — write secrets (chmod 600)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set AUTH0_DOMAIN '$AUTH0_DOMAIN'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AUTH0_CLIENT_ID '$AUTH0_CLIENT_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AUTH0_CLIENT_SECRET '$AUTH0_CLIENT_SECRET'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set AUTH0_MGMT_AUDIENCE '$MGMT_AUDIENCE'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-
-COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^(AUTH0_DOMAIN|AUTH0_CLIENT_ID|AUTH0_CLIENT_SECRET|AUTH0_MGMT_AUDIENCE)=' ~/.hermes/.env" || echo 0)
-[ "$COUNT" = "4" ] || { echo "FAIL: Auth0 vars did not all land (got $COUNT, need 4). Rolling back."; rollback; exit 1; }
-```
-
-Never `echo >>`. Never put the client secret in `config.yaml`.
-
----
-
-## Step 6 — register the MCP (Path A) or document REST (Path B)
-
-### Path A — official stdio MCP
-
-```bash
-if [ "${WIRE_PATH:-A}" = "A" ]; then
-  ssh "$VPS_USER@$VPS_IP" "
-    hermes mcp add auth0 \
-      --command 'npx' \
-      --args '-y,@auth0/auth0-mcp-server,run' \
-      --env 'AUTH0_DOMAIN=\${AUTH0_DOMAIN},AUTH0_CLIENT_ID=\${AUTH0_CLIENT_ID},AUTH0_CLIENT_SECRET=\${AUTH0_CLIENT_SECRET}'
-  "
-fi
-```
-
-### Path B — direct REST
-
-```bash
-if [ "${WIRE_PATH:-A}" = "B" ]; then
-  cat <<'EOF'
-Path B: no MCP server registered. The agent's generic HTTP tool layer must, per call:
-  1. POST https://$AUTH0_DOMAIN/oauth/token
-     Body: {"client_id":"...","client_secret":"...","audience":"$AUTH0_MGMT_AUDIENCE","grant_type":"client_credentials"}
-  2. Extract access_token (JWT, 24h TTL)
-  3. Call REST: Authorization: Bearer <access_token>
-     Base: https://$AUTH0_DOMAIN/api/v2/
-     e.g. GET /users?per_page=10&page=0
-  4. Re-mint on 401 (token expired) — NO refresh token in Client Credentials Flow
-
-Common endpoints:
-  - GET  /users        — list users
-  - GET  /users/{id}   — get user
-  - POST /users        — create user
-  - PATCH /users/{id}  — update
-  - DELETE /users/{id} — delete
-  - GET  /roles        — list roles
-  - GET  /logs         — tenant logs
-  - GET  /clients      — list applications
-EOF
-fi
-```
-
----
-
-## Step 7 — reload the gateway (stop + run, NOT restart)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 8 — verify + smoke test
-
-```bash
-if [ "${WIRE_PATH:-A}" = "A" ]; then
-  REGISTERED=0
-  for i in $(seq 1 6); do
-    if ssh "$VPS_USER@$VPS_IP" "hermes logs gateway -n 200 2>&1" \
-         | grep -qiE "registered.*tool.*auth0|MCP server.*auth0.*(ok|ready)"; then
-      REGISTERED=1; echo "OK: auth0 MCP registered."; break
-    fi
-    sleep 5
-  done
-  [ "$REGISTERED" = "1" ] || { echo "FAIL: auth0 not in logs after 30s. Rolling back."; rollback; exit 1; }
-fi
-
-# Smoke: token mint + GET /users?per_page=1 from VPS
-RESULT=$(ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  . ~/.hermes/.env 2>/dev/null || true
-  TOK=\$(curl -sS --max-time 10 -X POST \"https://\$AUTH0_DOMAIN/oauth/token\" \
-    -H 'Content-Type: application/json' \
-    -d '{\"client_id\":\"'\"\$AUTH0_CLIENT_ID\"'\",\"client_secret\":\"'\"\$AUTH0_CLIENT_SECRET\"'\",\"audience\":\"'\"\$AUTH0_MGMT_AUDIENCE\"'\",\"grant_type\":\"client_credentials\"}' \
-    | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')
-  [ -z \"\$TOK\" ] && echo NO_TOKEN && exit 0
-  curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-    -H \"Authorization: Bearer \$TOK\" \
-    \"https://\$AUTH0_DOMAIN/api/v2/users?per_page=1\"
-")
-case "$RESULT" in
-  200) echo "OK: Auth0 Management API reachable from VPS." ;;
-  NO_TOKEN) echo "FAIL: token exchange failed on VPS. Rolling back."; rollback; exit 1 ;;
-  403) echo "FAIL: 403 — M2M app lacks read:users scope. Add via Dashboard → APIs → Management API → Machine to Machine Applications."; rollback; exit 1 ;;
-  *) echo "WARN: unexpected HTTP $RESULT." ;;
-esac
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
-rollback() {
-  if [ "${WIRE_PATH:-A}" = "A" ]; then
-    ssh "$VPS_USER@$VPS_IP" "hermes mcp remove auth0 2>/dev/null || true"
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-  ssh "$VPS_USER@$VPS_IP" "
-    sed -i '/^AUTH0_DOMAIN=/d;
-            /^AUTH0_CLIENT_ID=/d;
-            /^AUTH0_CLIENT_SECRET=/d;
-            /^AUTH0_MGMT_AUDIENCE=/d' ~/.hermes/.env
-    chmod 600 ~/.hermes/.env
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Rotate the M2M client secret in Dashboard → Applications → your M2M app → Settings → Rotate."
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in skills/hstack-auth0/SKILL.md skills/hstack-auth0/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Refuse to replace a changed or foreign native workflow. A concurrent user edit
+# belongs to the user; retain all recovery artifacts for manual reconciliation.
+p="$HOME/.hermes/skills/hstack-auth0"
+original="$b/skills_hstack-auth0_SKILL.md"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] || exit 1
+  entries=$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  if [ "$entries" = 0 ] && [ -f "$original.absent" ]; then :
+  else
+    [ "$entries" = 2 ] && [ -f "$p/SKILL.md" ] && [ -f "$p/.hstack-managed" ] \
+      && [ ! -L "$p/SKILL.md" ] && [ ! -L "$p/.hstack-managed" ] \
+      && [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] \
+      || { echo "extra_restore: native skill was edited or is unowned; active backup retained." >&2; exit 1; }
+  fi
+elif [ ! -f "$original.absent" ]; then
+  echo "extra_restore: previous native skill was removed; active backup retained." >&2
+  exit 1
+fi
+# Validate all copies before restoring any artifact.
+for rel in skills/hstack-auth0/SKILL.md skills/hstack-auth0/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in skills/hstack-auth0/SKILL.md skills/hstack-auth0/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${AUTH0_DOMAIN:-}" || { echo "ABORT: AUTH0_DOMAIN is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${AUTH0_CLIENT_ID:-}" || { echo "ABORT: AUTH0_CLIENT_ID is empty or unsafe. Nothing was written."; exit 1; }
+secret_chars_ok "${AUTH0_CLIENT_SECRET:-}" || { echo "ABORT: AUTH0_CLIENT_SECRET is empty or unsafe. Nothing was written."; exit 1; }
+case "$AUTH0_DOMAIN" in -*|.*|*[!A-Za-z0-9.-]*) echo "ABORT: invalid AUTH0_DOMAIN. Nothing was written."; exit 1 ;; esac
+
+case "$AUTH0_DOMAIN" in *.*) ;; *) echo "ABORT: tenant hostname required. Nothing was written."; exit 1 ;; esac
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: local skill is not safely replaceable. Nothing was written."; exit 1; }
+p="$HOME/.hermes/skills/hstack-auth0"
+[ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] && [ -f "$p/.hstack-managed" ] && [ -f "$p/SKILL.md" ] && [ ! -L "$p/SKILL.md" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] || exit 1
+  [ "$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ] || exit 1
+fi
+REMOTE
+printf '%s\n' "${AUTH0_DOMAIN:-}" "${AUTH0_CLIENT_ID:-}" "${AUTH0_CLIENT_SECRET:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'AUTH0_DOMAIN'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AUTH0_CLIENT_ID'"'"'"'"'"'"'"'"', '"'"'"'"'"'"'"'"'AUTH0_CLIENT_SECRET'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+token=json.loads(req("https://"+d["AUTH0_DOMAIN"]+"/oauth/token",{"Content-Type":"application/json"},json.dumps({"grant_type":"client_credentials","client_id":d["AUTH0_CLIENT_ID"],"client_secret":d["AUTH0_CLIENT_SECRET"],"audience":"https://"+d["AUTH0_DOMAIN"]+"/api/v2/"}).encode()))["access_token"]
+req("https://"+d["AUTH0_DOMAIN"]+"/api/v2/users?per_page=1",{"Authorization":"Bearer "+token})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: auth0; path: rest.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Install a discoverable read-only Hermes skill with owned-file recovery.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env AUTH0_DOMAIN "${AUTH0_DOMAIN:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+put_env AUTH0_CLIENT_ID "${AUTH0_CLIENT_ID:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+put_env AUTH0_CLIENT_SECRET "${AUTH0_CLIENT_SECRET:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native skill installation."; fail_transaction; }
+set -e
+p="$HOME/.hermes/skills/hstack-auth0"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+mkdir -p "$p" && chmod 700 "$p"
+t=$(mktemp "$p/.SKILL.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'HSTACK_NATIVE_SKILL'
 ---
+name: hstack-auth0
+description: Read auth0 account data using a private host credential; use for the installed read-only auth0 connection.
+---
+
+# auth0: read-only account access
+
+Only run this read request when the user asks for auth0 account data. Do not print credentials.
+This connector is read-only; changes require a separately reviewed workflow and user authorization.
+The script reads the private ~/.hermes/.env without sourcing it as executable shell code.
+Use the following command through the native terminal tool on the Hermes host:
+
+
+    python3 -c 'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+    d={}
+    p=os.path.expanduser("~/.hermes/.env")
+    if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+    if os.path.isfile(p):
+     for line in open(p):
+      k, sep, v=line.rstrip("\n").partition("=")
+      if sep:
+       v=v.strip()
+       if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+       d[k]=v
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+      raise RuntimeError("Redirect refused; credentials were not forwarded")
+    def req(url, headers=None, body=None):
+     if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+     r=urllib.request.Request(url,headers=headers or {},data=body)
+     with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+      if f.status != 200: raise RuntimeError("Non-200 response")
+      data=f.read(2 * 1024 * 1024 + 1)
+      if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+      return data
+    token=json.loads(req("https://"+d["AUTH0_DOMAIN"]+"/oauth/token",{"Content-Type":"application/json"},json.dumps({"grant_type":"client_credentials","client_id":d["AUTH0_CLIENT_ID"],"client_secret":d["AUTH0_CLIENT_SECRET"],"audience":"https://"+d["AUTH0_DOMAIN"]+"/api/v2/"}).encode()))["access_token"]
+    result=req("https://"+d["AUTH0_DOMAIN"]+"/api/v2/users?per_page=1",{"Authorization":"Bearer "+token})
+    print(result.decode())
+    '
+
+Return only requested account fields. Keep the fixed read-only endpoint and never expose .env values.
+HSTACK_NATIVE_SKILL
+chmod 600 "$t"
+mv "$t" "$p/SKILL.md"
+cksum < "$p/SKILL.md" > "$p/.hstack-managed"
+chmod 600 "$p/.hstack-managed"
+REMOTE
+remote 'hermes -p default skills list --enabled-only | grep -F "hstack-auth0"' >/dev/null || { echo "FAIL: installed skill is not discoverable/enabled."; fail_transaction; }
+```
+
+This installs a real Hermes-discoverable native skill, with an executable read request and managed-file checksum. Existing user edits or unowned files are refused. The previous skill file and marker are recovered with the transaction.
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+token=json.loads(req("https://"+d["AUTH0_DOMAIN"]+"/oauth/token",{"Content-Type":"application/json"},json.dumps({"grant_type":"client_credentials","client_id":d["AUTH0_CLIENT_ID"],"client_secret":d["AUTH0_CLIENT_SECRET"],"audience":"https://"+d["AUTH0_DOMAIN"]+"/api/v2/"}).encode()))["access_token"]
+req("https://"+d["AUTH0_DOMAIN"]+"/api/v2/users?per_page=1",{"Authorization":"Bearer "+token})
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; fail_transaction; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-auth0.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | M2M app not authorized for Management API | Token mint returns `access_denied` — bot silent | Dashboard → Applications → your M2M app → APIs → authorize Management API + grant scopes |
-| 2 | Missing scopes on the M2M authorization | Token mints but API calls return 403 | Grant precise scopes (read:users, etc.); Step 8 detects 403 explicitly |
-| 3 | Granting `create:tenants` / `delete:tenants` to an agent | Tenant nuke risk | NEVER grant these to an M2M app; principle of least privilege |
-| 4 | Client Credentials returns NO refresh token | Access token expires in ~24h; caching breaks | Tool must re-mint on 401 or every ~23h; document contract |
-| 5 | Confusing tenant domain with custom domain | Tokens issued for one domain can't be used against the other | Match `$AUTH0_DOMAIN` to whichever domain your M2M is registered under |
-| 6 | Client secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
-| 7 | Not rotating client secret periodically | Long-lived credentials = larger blast radius | Rotate quarterly; auto-mint new via Auth0 API |
-| 8 | Rate limits on Management API | Bursty user-provisioning loops hit rate limits (esp. free/dev tenants) | Back off on 429; batch operations |
-| 9 | Enterprise vs Bearer confusion | Auth0 uses `Authorization: Bearer <JWT>` — NOT `Basic` and NOT the M2M secret directly | The M2M secret is only used to EXCHANGE for a bearer JWT; never send secret directly on data-plane calls |
-| 10 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
-| 11 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
-| 12 | sed with `/` delimiter | Domain and audience contain `/` | Always `\|` delimiter |
-| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
-| 14 | Custom domain not verified | Token mint returns error for unverified domains | Confirm domain shows "Verified" in Dashboard → Branding → Custom Domains |
-| 15 | Log-out on the wrong tenant | If a person also has device-auth logged in via `auth0-mcp-server session`, agent uses stale creds | Don't mix device auth with M2M creds; wipe `~/.auth0` on the VPS if seen |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Credential source | The read client uses an existing M2M application | Do not silently initialize a separate MCP keychain login |
+| 2 | Tenant mismatch | The client secret must belong to the chosen tenant | Check AUTH0_DOMAIN before preflight |
+| 3 | Audience | Management API tokens target the tenant api/v2 audience | Keep that exact audience |
+| 4 | Scope | The user listing requires read:users | Do not grant write scopes for this read-only client |
+| 5 | Token lifetime | Management access tokens expire | Mint a new token for each read request |
+| 6 | Rollback scope | The installed skill is an owned local file | Restore its prior bytes along with private settings |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
-- [ ] Path A: `npx` present on VPS
-- [ ] Idempotency check ran (skipped if already wired, unless `FORCE=1`)
-- [ ] HARD GATE passed: domain format valid; client ID + secret shape check passed; live Client Credentials exchange returned an access_token
-- [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
-- [ ] All 4 env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
-- [ ] Path A: stdio MCP `auth0` registered with env indirection (AUTH0_DOMAIN + CLIENT_ID + CLIENT_SECRET)
-- [ ] Path B: REST + token-exchange contract documented for the generic tool layer
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Path A: logs show `registered N tool(s) for 'auth0'` within 30s
-- [ ] Smoke test: token mint + `/users?per_page=1` from VPS returned 200
-- [ ] User informed of 24h token TTL + tool-must-remint contract
-- [ ] Scope minimalism confirmed (agent grants only what it needs — never `create:tenants`)
-- [ ] Rollback function defined; secret-rotation instructions included
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, M2M
-authorization, and Auth0 Management API failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

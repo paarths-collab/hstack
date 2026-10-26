@@ -16,7 +16,9 @@ import uuid
 home = Path(os.environ["HERMES_HOME"])
 args = sys.argv[1:]
 if args == ["--profile", "default", "--version"]:
-    print("Hermes Agent v0.22.5")
+    # Real v0.22.5 multi-line format (hermes_cli/_startup_fast.py print_fast_version_info).
+    sys.stdout.buffer.write(("Hermes Agent v0.22.5 (2026.9.24) \u00b7 upstream bf0203a7\nInstall directory: /home/operator/.hermes/hermes-agent\n"
+                             "Install method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0\n").encode("utf-8"))
     sys.exit()
 if args[:2] != ["--profile", "default"]:
     sys.exit(90)

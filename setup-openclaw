@@ -291,7 +291,8 @@ hs_gen_mdc() {
   echo "---"
   if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
   echo
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+  # drop only the frontmatter block (first two fence lines); later "---" lines are body
+  awk 'n < 2 && /^---[[:space:]]*$/ { n++; next } n >= 2 { print }' "$src"
 }
 
 # Cursor .mdc rule. Written through a temp file onto a fresh path, never through an
@@ -361,6 +362,10 @@ SECTION="$MARK_START
 hstack skills are loaded from $OPENCLAW_SKILLS. Every skill is SSH-first (needs \$VPS_IP +
 \$VPS_USER) and idempotent. Use /hermes-deploy for the full end-to-end setup, then any
 /platform-* or /integration-* skill to wire a service into the running Hermes agent.
+Platforms: telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal.
+Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Use the native catalog/MCP or installed skill route documented for each integration. Reload with
+/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"
 
 # >>> hstack-instruction-block (identical in setup, setup-codex, setup-gemini, setup-openclaw;

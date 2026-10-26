@@ -190,7 +190,12 @@ def iso(value):
 
 
 def reporting_window(config, now=None):
-    """Latest local daily cutoff; gaps shift forward, repeated hours use fold 0."""
+    """Latest local daily cutoff; gaps shift forward, repeated hours use fold 0.
+
+    A whole number of days (24, 48, ... hours) starts at the local cutoff that many days earlier, so consecutive
+    24 h windows tile exactly: the window after a DST change is 23 or 25 elapsed hours long instead of leaving an
+    hour unreported (fall back) or reporting it twice (spring forward). Any other length is that many elapsed hours.
+    """
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     zone = ZoneInfo(config["timezone"])
     day = now.astimezone(zone).date()
@@ -203,7 +208,8 @@ def reporting_window(config, now=None):
     if end > now:
         day -= timedelta(days=1)
         end = cutoff(day)
-    start = end - timedelta(hours=config["window_hours"])
+    whole_days, extra_hours = divmod(config["window_hours"], 24)
+    start = cutoff(day - timedelta(days=whole_days)) if extra_hours == 0 else end - timedelta(hours=config["window_hours"])
     return {"window_id": "daily:" + day.isoformat(), "start": iso(start), "end": iso(end)}
 
 
@@ -224,7 +230,7 @@ def collect_report(config, start, end, *, _client=None, github_token=""):
     raw = {"schema_version": 1, "repositories": config["repositories"], "start": start, "end": end}
     if "workflow" in config:
         raw["workflow"] = config["workflow"]
-    selected = collector.validate_config(raw)
+    selected = collector.validate_config(raw, calendar_timezone=config["timezone"] if config["window_hours"] % 24 == 0 else None)
     result = collector.collect(selected, _client or collector.GitHubClient(github_token))
     if not result.get("complete"):
         # Expose fixed reason codes so preview can distinguish a quiet repo,
@@ -574,7 +580,7 @@ def main(argv=None):
         if args.command == "packs":
             print(safe_summary({"workflows": [{"id": key, **value} for key, value in WORKFLOWS.items()],
                                 "installation_scope": "multiple_named_workflow_instances_per_default_profile_target",
-                                "requirements": "Linux, exact Hermes 0.22.5 candidate, Python 3.9+, private Telegram chat",
+                                "requirements": "Linux, exact Hermes 0.22.5, Python 3.9+, private Telegram chat",
                                 "limits": "1-8 repositories; 3 pages of 100 items per source; 2 MiB per response; 90 seconds collection",
                                 "access": "Public repositories: optional token. Private: grant the selected repositories and the read permissions listed for that pack."}))
             return 0

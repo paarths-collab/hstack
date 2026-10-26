@@ -55,11 +55,12 @@ Usage:
   curl -fsSL https://raw.githubusercontent.com/paarths-collab/hstack/main/install.sh | bash -s -- [FLAGS]
   bash install.sh [FLAGS]
 
-Flags:
+Flags (a value may be given as --flag=VALUE or --flag VALUE):
   --all              install every integration, no prompt
   --tier=a,b         install the named integration tiers (e.g. --tier=memory,database)
   --include=x,y      install specific integrations or tiers (e.g. --include=notion,stripe)
-  --pick             interactive picker (reads the terminal, works when piped)
+  --pick             interactive picker (reads the terminal, works when piped; with no
+                     terminal available it falls back to --all)
   --ide=a,b          only wire these agents: claude, codex, cursor, hermes, gemini, openclaw
                      (or "all"). Default: every agent detected on this machine.
   --local            use the checkout this script lives in instead of cloning ~/.hstack
@@ -68,6 +69,8 @@ Flags:
 
 Core (hermes-*, blueprint-*, setup-ssh-keys) and platform-* skills are always installed.
 With no selection flags: interactive picker on a terminal, all integrations otherwise.
+Precedence when several selection flags are given: --all, then --include, then --tier
+(the lower ones are ignored, with a warning). Unknown flags are an error (exit 2).
 
 Environment overrides:
   HSTACK_REPO_URL, HSTACK_INSTALL_DIR, HSTACK_BRANCH
@@ -132,26 +135,53 @@ tier_members() {
 INTEGRATION_TIERS="memory database vector auth observability rag code ai-tools storage crm docs dev pm cloud payments commerce email support forms search"
 ALL_IDES="claude codex cursor hermes gemini openclaw"
 
+# Set of selected IDEs as a space-delimited string (bash 3.2 has no associative arrays).
+IDES=" "
+ide_add() { case "$IDES" in *" $1 "*) ;; *) IDES="$IDES$1 " ;; esac; }
+ide_has() { case "$IDES" in *" $1 "*) return 0 ;; esac; return 1; }
+
 # ---------------------------------------------------------------------------
 # Parse CLI flags
 # ---------------------------------------------------------------------------
 
-for arg in "$@"; do
+bad_usage() {
+  printf 'hstack: %s\n\n' "$*" >&2
+  usage >&2
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  arg="$1"
+  shift
+  case "$arg" in
+    --include | --tier | --ide | --branch)
+      # space form: the value is the next argument
+      [ $# -gt 0 ] || bad_usage "$arg needs a value (use $arg=VALUE or $arg VALUE)"
+      case "$1" in
+        -*) bad_usage "$arg needs a value, got '$1'" ;;
+      esac
+      arg="$arg=$1"
+      shift
+      ;;
+  esac
   case "$arg" in
     --pick) PICK_MODE=1 ;;
     --all) INSTALL_ALL=1 ;;
     --local) LOCAL_RUN=1 ;;
-    --include=*) INCLUDE="${arg#--include=}" ;;
-    --tier=*) TIER="${arg#--tier=}" ;;
-    --ide=*) IDE_FILTER="${arg#--ide=}" ;;
-    --branch=*) BRANCH="${arg#--branch=}" ;;
+    --include=* | --tier=* | --ide=* | --branch=*)
+      [ -n "${arg#*=}" ] || bad_usage "${arg%%=*} needs a value"
+      case "$arg" in
+        --include=*) INCLUDE="${arg#--include=}" ;;
+        --tier=*) TIER="${arg#--tier=}" ;;
+        --ide=*) IDE_FILTER="${arg#--ide=}" ;;
+        --branch=*) BRANCH="${arg#--branch=}" ;;
+      esac
+      ;;
     -h | --help)
       usage
       exit 0
       ;;
-    *)
-      echo "WARN: unknown flag '$arg' — ignoring" >&2
-      ;;
+    *) bad_usage "unknown flag or argument '$arg'" ;;
   esac
 done
 
@@ -176,6 +206,27 @@ heading(){ printf "\n${BOLD}%s${RESET}\n" "$*"; }
 csv_items() { printf '%s\n' "$1" | tr ',' '\n' | tr -d ' '; }
 
 hs_warn() { warn "$@"; }
+
+# --ide= selects exactly the requested agents (even ones not detected: the target dir is
+# created). Resolved before anything is fetched so a typo fails fast; with nothing valid left
+# the run stops (exit 2) instead of "succeeding" with nothing installed.
+if [ -n "$IDE_FILTER" ]; then
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ "$p" = "all" ]; then
+      for k in $ALL_IDES; do ide_add "$k"; done
+      break
+    fi
+    case " $ALL_IDES " in
+      *" $p "*) ide_add "$p" ;;
+      *) warn "unknown IDE '$p' — skipping (available: $ALL_IDES, all)" ;;
+    esac
+  done <<<"$(csv_items "$IDE_FILTER")"
+  if [ "$IDES" = " " ]; then
+    printf '%s no valid IDE in --ide=%s (available: %s, all)\n' "${RED}✗${RESET}" "$IDE_FILTER" "$ALL_IDES" >&2
+    exit 2
+  fi
+fi
 
 # >>> hstack-ownership (this block is identical in install.sh and every setup* script;
 # >>> tests/installer/test-install.sh fails if the copies drift apart)
@@ -443,7 +494,8 @@ hs_gen_mdc() {
   echo "---"
   if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
   echo
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+  # drop only the frontmatter block (first two fence lines); later "---" lines are body
+  awk 'n < 2 && /^---[[:space:]]*$/ { n++; next } n >= 2 { print }' "$src"
 }
 
 # Cursor .mdc rule. Written through a temp file onto a fresh path, never through an
@@ -495,17 +547,42 @@ if [ "$LOCAL_RUN" = "1" ]; then
   info "Running from local checkout: $INSTALL_DIR"
 else
   command -v git >/dev/null 2>&1 || die "git is required. Install git and re-run."
+  git check-ref-format --branch "$BRANCH" >/dev/null 2>&1 || die "'$BRANCH' is not a valid branch name."
   heading "==> Fetching hstack"
   # </dev/null: when this script is piped into bash, stdin IS the script — keep git off it.
   if [ -d "$INSTALL_DIR/.git" ]; then
-    info "Updating existing checkout at $INSTALL_DIR"
-    (cd "$INSTALL_DIR" && git fetch origin --quiet </dev/null && git checkout --quiet "$BRANCH" && git pull --ff-only --quiet </dev/null) \
-      || warn "Could not fast-forward. Continuing with existing checkout."
+    info "Updating existing checkout at $INSTALL_DIR (branch $BRANCH)"
+    # The first clone is --depth 1 and single-branch, so a plain `git fetch origin` never sees
+    # another branch: fetch the requested one explicitly (shallow when we have none of it yet).
+    update_checkout() {
+      cd "$INSTALL_DIR" || return 1
+      if git rev-parse --verify --quiet "refs/remotes/origin/$BRANCH" >/dev/null </dev/null; then
+        git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" </dev/null || return 1
+      else
+        git fetch --quiet --depth 1 origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" </dev/null || return 1
+      fi
+      # (a single-branch clone's refspec hides other branches from checkout's own DWIM,
+      # so a branch we have not had before is created from the ref fetched above)
+      if git show-ref --verify --quiet "refs/heads/$BRANCH" </dev/null; then
+        git checkout --quiet "$BRANCH" </dev/null || return 1
+      else
+        git checkout --quiet -b "$BRANCH" "refs/remotes/origin/$BRANCH" </dev/null || return 1
+      fi
+      git merge --ff-only --quiet "refs/remotes/origin/$BRANCH" </dev/null || return 1
+    }
+    if ! (update_checkout); then
+      cur="$(git -C "$INSTALL_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null </dev/null || true)"
+      if [ "$cur" != "$BRANCH" ]; then
+        die "Could not switch the existing checkout at $INSTALL_DIR to branch '$BRANCH' (it is on '${cur:-a detached HEAD}'). Fix the branch name or the checkout and re-run."
+      fi
+      warn "Could not fast-forward. Continuing with existing checkout."
+    fi
   elif [ -d "$INSTALL_DIR" ] && [ "$(ls -A "$INSTALL_DIR" 2>/dev/null | wc -l)" -gt 0 ]; then
     die "$INSTALL_DIR exists and is not a git checkout of hstack. Move it aside and re-run."
   else
     info "Cloning $REPO_URL → $INSTALL_DIR (branch $BRANCH)"
-    git clone --depth 1 --branch "$BRANCH" --quiet "$REPO_URL" "$INSTALL_DIR" </dev/null
+    git clone --depth 1 --branch "$BRANCH" --quiet "$REPO_URL" "$INSTALL_DIR" </dev/null ||
+      die "git clone of $REPO_URL (branch $BRANCH) into $INSTALL_DIR failed."
   fi
   ok "hstack checkout ready"
 fi
@@ -529,33 +606,14 @@ done
 
 heading "==> Detecting IDEs / agents"
 
-# Set of selected IDEs as a space-delimited string (bash 3.2 has no associative arrays).
-IDES=" "
-ide_add() { case "$IDES" in *" $1 "*) ;; *) IDES="$IDES$1 " ;; esac; }
-ide_has() { case "$IDES" in *" $1 "*) return 0 ;; esac; return 1; }
-
-[ -d "$HOME/.claude" ]    && ide_add claude
-[ -d "$HOME/.agents" ]    && ide_add codex
-[ -d "$HOME/.cursor" ]    && ide_add cursor
-[ -d "$HOME/.hermes" ]    && ide_add hermes
-[ -d "$HOME/.gemini" ]    && ide_add gemini
-[ -d "$HOME/.openclaw" ]  && ide_add openclaw
-
-# --ide= selects exactly the requested agents (even ones not detected: the target dir is created)
-if [ -n "$IDE_FILTER" ]; then
-  IDES=" "
-  while IFS= read -r p; do
-    [ -n "$p" ] || continue
-    if [ "$p" = "all" ]; then
-      IDES=" "
-      for k in $ALL_IDES; do ide_add "$k"; done
-      break
-    fi
-    case " $ALL_IDES " in
-      *" $p "*) ide_add "$p" ;;
-      *) warn "unknown IDE '$p' — skipping (available: $ALL_IDES, all)" ;;
-    esac
-  done <<<"$(csv_items "$IDE_FILTER")"
+# Auto-detect by directory presence, unless --ide= already chose (resolved above).
+if [ -z "$IDE_FILTER" ]; then
+  [ -d "$HOME/.claude" ]    && ide_add claude
+  [ -d "$HOME/.agents" ]    && ide_add codex
+  [ -d "$HOME/.cursor" ]    && ide_add cursor
+  [ -d "$HOME/.hermes" ]    && ide_add hermes
+  [ -d "$HOME/.gemini" ]    && ide_add gemini
+  [ -d "$HOME/.openclaw" ]  && ide_add openclaw
 fi
 
 IDE_COUNT=0
@@ -631,11 +689,30 @@ tier_by_number() {
 pick_from_tier core
 pick_from_tier platforms
 
+# The picker needs a readable terminal. With none (cron, CI, a new session, `--pick` under a
+# script), say so and install everything - the documented non-interactive default.
+PICKER=0
+if [ "$INSTALL_ALL" != "1" ] && [ -z "$INCLUDE" ] && [ -z "$TIER" ] && { [ "$PICK_MODE" = "1" ] || [ -t 0 ]; }; then
+  if { : <"${HSTACK_TTY:-/dev/tty}"; } 2>/dev/null; then
+    PICKER=1
+  else
+    info "No terminal available for the picker - falling back to --all (every integration)."
+    info "Use --tier=... or --include=... for a smaller install."
+    INSTALL_ALL=1
+  fi
+fi
+
 if [ "$INSTALL_ALL" = "1" ]; then
   info "Installing ALL integrations (--all)"
+  if [ -n "$INCLUDE" ] || [ -n "$TIER" ]; then
+    warn "--all given: ignoring ${INCLUDE:+--include=$INCLUDE }${TIER:+--tier=$TIER}"
+  fi
   pick_all_integrations
 elif [ -n "$INCLUDE" ]; then
   info "Installing only: $INCLUDE"
+  if [ -n "$TIER" ]; then
+    warn "--include overrides --tier: ignoring --tier=$TIER (core + platforms + the --include items are installed)"
+  fi
   while IFS= read -r p; do
     [ -n "$p" ] || continue
     pick_token "$p" || warn "unknown skill or tier: '$p' — skipping"
@@ -650,8 +727,8 @@ elif [ -n "$TIER" ]; then
       warn "unknown tier: '$t' — skipping (available: $INTEGRATION_TIERS)"
     fi
   done <<<"$(csv_items "$TIER")"
-elif [ "$PICK_MODE" = "1" ] || [ -t 0 ]; then
-  # Interactive picker — only if TTY is present
+elif [ "$PICKER" = "1" ]; then
+  # Interactive picker — only if a terminal is readable
   cat <<EOF
 
 hstack currently has 71 integrations across 20 tiers.

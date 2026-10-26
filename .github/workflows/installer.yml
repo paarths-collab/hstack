@@ -8,23 +8,35 @@ on:
   push:
     paths:
       - "install.sh"
+      - "install.ps1"
       - "setup"
       - "setup-*"
+      - "setup.ps1"
       - "tests/installer/**"
       - "skills/**"
+      - "VERSIONS.txt"
       - "scripts/validate-skills.sh"
       - "scripts/check-skill-refs.sh"
+      - "scripts/lint-md-bash.sh"
+      - "metrics/**"
       - ".github/workflows/installer.yml"
+      - ".github/workflows/clone-traffic.yml"
   pull_request:
     paths:
       - "install.sh"
+      - "install.ps1"
       - "setup"
       - "setup-*"
+      - "setup.ps1"
       - "tests/installer/**"
       - "skills/**"
+      - "VERSIONS.txt"
       - "scripts/validate-skills.sh"
       - "scripts/check-skill-refs.sh"
+      - "scripts/lint-md-bash.sh"
+      - "metrics/**"
       - ".github/workflows/installer.yml"
+      - ".github/workflows/clone-traffic.yml"
   workflow_dispatch:
 
 permissions:
@@ -44,6 +56,28 @@ jobs:
       - name: Installer tests (default bash)
         shell: bash
         run: bash tests/installer/test-install.sh
+
+      - name: Script, metrics and workflow tests
+        shell: bash
+        run: bash tests/installer/test-scripts.sh
+
+  powershell:
+    # install.ps1 / setup.ps1 had no CI at all: the array-binding, git-failure and parse bugs
+    # shipped because nothing ran them. ubuntu-latest ships PowerShell 7; the job runs as the
+    # unprivileged runner user, as a real user would (a root run hides permission failures).
+    # Windows PowerShell 5.1 and real Windows behaviour (junctions, ACLs) are still not covered.
+    name: PowerShell installer tests (pwsh on ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show PowerShell version and user
+        run: |
+          pwsh -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'
+          id -un
+
+      - name: install.ps1 / setup.ps1 tests
+        run: pwsh -NoProfile -File tests/installer/test-install.ps1
 
   macos-bash32:
     name: Installer on macOS /bin/bash 3.2

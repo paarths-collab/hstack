@@ -16,10 +16,11 @@ source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
 The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
-targeting **8 messaging platforms** in the catalog. The legacy acceptance fixture
-baseline is Hermes **v0.15.2**; the three runnable GitHub report packs are an explicit, unpromoted
-**v0.22.5** candidate. Current compatibility and live-validation status are recorded
-in `compatibility/hermes.json` and `compatibility/VALIDATION.md`.
+targeting **8 messaging platforms** in the catalog. The skills target Hermes **v0.22.5** only (`HERMES_VERSION` in `VERSIONS.txt`): source-verified against the tagged
+source, live validation pending. The promotion policy in `compatibility/hermes.json` governs any "live-verified"
+claim. Hermes **v0.15.2** (`HERMES_LEGACY_FIXTURE_VERSION`) survives only in the legacy offline acceptance contract and its
+fixtures. Current compatibility and live-validation status are recorded in `compatibility/hermes.json` and
+`compatibility/VALIDATION.md`.
 
 ## Universal installer (`install.sh` / `install.ps1`)
 
@@ -52,7 +53,7 @@ Design notes for anyone touching the installer:
 - **Ownership:** hstack replaces only what it installed (its own symlinks, copies whose `.hstack-managed` checksum still matches, generated files whose signed marker line still matches). Anything else at a destination is moved aside, never deleted: skill dirs to `<skills-parent>/.hstack-backups/<stamp>/<name>`, files to `<file>.hstack-backup-<stamp>`. A destination that is, or resolves into, an hstack skills tree is refused. If a backup cannot be made, the entry is left untouched and the run exits non-zero.
 - **Instruction files** (CLAUDE.md / AGENTS.md / GEMINI.md, written only by `setup`, `setup-codex`, `setup-gemini` and `setup-openclaw`; never by `install.sh`): only the block between `<!-- hstack:start -->` and `<!-- hstack:end -->` is replaced, atomically (temp file + verified rename, mode kept), after a backup. A start marker without an end marker leaves the file untouched with a warning.
 - **Windows fallback:** symlinks aren't guaranteed on Windows without dev mode, so `install.ps1` and `setup.ps1` always copy (`Copy-Item -Recurse`).
-- **Tests:** `bash tests/installer/test-install.sh` (any bash ≥ 3.2; run it under `/bin/bash` on macOS too) and `pwsh -NoProfile -File tests/installer/test-install.ps1` (verified on Linux pwsh only). Both are offline and use a throwaway HOME. The ownership blocks must stay byte-identical across the copies; the test enforces it.
+- **Tests:** `bash tests/installer/test-install.sh` (any bash ≥ 3.2; run it under `/bin/bash` on macOS too) and `pwsh -NoProfile -File tests/installer/test-install.ps1` (PowerShell 7 tested on macOS; Linux is covered by CI; native Windows remains unverified). Both are offline and use a throwaway HOME. The ownership blocks must stay byte-identical across the copies; the test enforces it.
 
 ---
 
@@ -118,18 +119,17 @@ edit a tier, edit `install.sh` first and mirror it here.
 The SSH-first hardening template every `integration-*/SKILL.md` follows:
 
 1. **SSH access check** — verify we're on the VPS host, not a container (`whoami; hostname`).
-2. **Verify Hermes** — select the declared baseline/candidate from `VERSIONS.txt`, check the procedure's supported scope, gateway and private credential files. A legacy fixture pin is not live compatibility evidence.
+2. **Verify Hermes** — abort unless `hermes --version` names the `HERMES_VERSION` target (0.22.5, `VERSIONS.txt`), check the procedure's supported scope, gateway and private credential files. Source verification is not live compatibility evidence; each skill states its vendor and runtime validation limits.
 3. **Idempotency check** — abort if the integration is already wired and green.
 4. **HARD GATE (Step 3)** — local format check, then a live read-only vendor call from the VPS with the secret passed as an ssh-stdin curl config. Runs BEFORE the dry run and BEFORE `snapshot`; a failure means `ABORT … Nothing was written.`
 5. **DRY_RUN preview** — print secret length + prefix only, never plaintext.
 6. **Write secrets** — `~/.hermes/.env` with `chmod 600`, `${VAR}` indirection in config.yaml.
-7. **Register MCP or document REST** — MCP endpoint when the vendor ships one, otherwise
-   a first-class REST doc under `/opt/data/`.
-8. **Gateway lifecycle** — use the selected release's supported service interface. The current candidate uses explicit default-profile service operations and checked readiness; `gateway run --daemon` is a legacy fixture command, not a supported candidate command.
+7. **Register native MCP or install a native skill** — use the pinned Hermes catalog or `mcp add`; when a suitable MCP is unavailable, install a discoverable skill with an executable vendor client and scoped rollback. Do not leave inert REST notes under `/opt/data/`.
+8. **Gateway lifecycle** — use the selected release's supported service interface. Skills use the shared `gw_reload` / `gw_ready` helpers: `hermes -p default gateway restart --detach`, then `gateway ensure --json --timeout 60` must exit 0 with `"state":"ready"` and a new `instance_id`. `gateway run` is the foreground command; `--daemon` does not exist; `gateway status` text is never a health check.
 9. **Verify in logs + live smoke test** — call a real vendor endpoint through Hermes.
 10. **Step 0 helpers `snapshot`/`rollback`/`finish`**, defined before anything can fail. `snapshot` runs just before the first write and refuses to run over a leftover snapshot; every later failure is `rollback; exit 1`, and rollback RESTORES the pre-skill `~/.hermes/.env` and `config.yaml` byte for byte (never just unsets keys). There is no second `rollback()` at the bottom.
 
-- Bash fences run on the agent's local machine (possibly macOS bash 3.2) and reach the VPS via `remote()`, which exports `~/.local/bin` on PATH. Secrets travel over ssh stdin only — never in argv, a URL or a single-quoted remote string. Smoke tests read the value back from `~/.hermes/.env`, never `$TOKEN`.
+- Bash fences run on the agent's local machine (possibly macOS bash 3.2) and reach the VPS via `remote()`, which exports `~/.local/bin` on PATH. Secrets reach the VPS over ssh stdin only — never in the local ssh argv, a URL or a single-quoted remote string. On the VPS, `hermes config set KEY "$v"` does put the value in the remote `hermes` process argv for a moment (readable via `/proc` by anyone on that host); the stdin-fed `.env` upsert avoids even that. Smoke tests read the value back from `~/.hermes/.env`, never `$TOKEN`.
 
 Consent / cost gates you'll see across skills:
 `PROD_ACKNOWLEDGED=1` (Clerk `sk_live_`), `OWNS_VOICE_ACKNOWLEDGED=1` (ElevenLabs voice
@@ -242,9 +242,9 @@ Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
 
 1. **Probe before configuring** — never trust supplied URL forms; run the 5-variant curl matrix.
 2. **Initialize ≠ auth** — probe `tools/list` without auth; the error message is the spec.
-3. **Placeholder token in CLI** — pipe `placeholder` through `printf | docker exec`; inject real value with `sed`.
-4. **`|` delimiter in sed** — tokens contain `/+= `; use `sed 's|...|...|'` not `sed 's/.../.../'`.
-5. **Supported gateway lifecycle** — env changes need a clean re-read; use the reviewed service interface for the selected release and verify readiness. Do not copy legacy `run --daemon` commands onto current Hermes.
+3. **Native registration** — prefer `hermes mcp install NAME` (catalog) or `mcp add NAME --url U --auth header` with `MCP_<NAME>_API_KEY` already in `~/.hermes/.env` (Hermes then skips the token prompt and stores `Authorization: Bearer ${MCP_<NAME>_API_KEY}`); feed the prompts on stdin and verify with `mcp list` and `mcp test`, because `mcp add` exits 0 even when it saved nothing.
+4. **Never put the secret in config.yaml or on the local command line** — only `${VAR}` references go in `config.yaml`; shapes `mcp add` cannot express use `config set mcp_servers.<name>.…` with a `${VAR}` reference.
+5. **Supported gateway lifecycle** — reload with `gw_reload` (restart, then `gateway ensure --json` ready); a restarted gateway re-reads `.env` (`gateway/run.py:1583-1585`, v0.22.5). Do not copy legacy `run --daemon` commands onto current Hermes.
 6. **Two `.env` files** — compose `.env` (container-level) vs `/opt/data/.env` (Hermes runtime). MCP secrets go in the Hermes one.
 
 ---

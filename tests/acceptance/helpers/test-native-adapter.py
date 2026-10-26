@@ -435,24 +435,133 @@ class NativeAdapterTests(unittest.TestCase):
             with self.assertRaises(native.Refusal):
                 self.dispatch("service-check")
 
-    def test_reload_requires_release_bound_machine_readiness(self):
+    def ready_payload(self, instance="new-instance"):
         fixture = Path(__file__).resolve().parents[1] / "fixtures/hermes-v0.22.5-ensure.contract.json"
         ready = json.loads(fixture.read_text())["result"]
         ready["endpoint"]["profile_id"] = str(self.home)
+        ready["endpoint"]["instance_id"] = instance
+        return ready
+
+    def run_reload(self, handler, interrupt=False):
+        """Run adapter.reload() with subprocess.run replaced by handler(argv) -> (returncode, payload or None)."""
         adapter = native.Adapter(str(self.home), "/example/hermes")
+        calls = []
+        def fake(argv, **kwargs):
+            calls.append(argv[4:])
+            code, payload = handler(argv[4:])
+            return types.SimpleNamespace(returncode=code, stdout=b"" if payload is None else json.dumps(payload).encode())
+        with patch.object(native.subprocess, "run", side_effect=fake), patch.object(native.time, "sleep"):
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as printed:
+                    adapter.reload(interrupt_live_sessions=interrupt)
+                return calls, None, printed.getvalue()
+            except native.Refusal as refusal:
+                return calls, refusal, ""
+
+    def test_reload_requires_release_bound_machine_readiness(self):
+        ready = self.ready_payload()
+        old = self.ready_payload("old-instance")
         for payload, passes in ((ready, True), ({**ready, "state": "starting"}, False),
                                 ({**ready, "endpoint": {**ready["endpoint"], "profile_id": "/foreign"}}, False),
                                 ({**ready, "client_code_sha": "unreviewed"}, False)):
+            calls, refusal, printed = self.run_reload(lambda argv: (0, old if argv[1:4] == ["--json", "--timeout", "10"] else (payload if argv[0] == "ensure" else None)))
+            self.assertEqual(refusal is None, passes, payload.get("state"))
+            # remember the instance, `restart --detach` (NO -y), readiness; never stop/start, never `run --daemon`
+            self.assertEqual(calls, [["ensure", "--json", "--timeout", "10"], ["restart", "--detach"], ["ensure", "--json", "--timeout", "60"]])
+            self.assertFalse(any("--daemon" in call or "-y" in call or call[:1] == ["run"] for call in calls))
+            if passes:
+                self.assertIn("native_gateway_reloaded=1", printed)
+
+    def test_reload_adds_y_only_on_explicit_opt_in(self):
+        ready, old = self.ready_payload(), self.ready_payload("old-instance")
+        handler = lambda argv: (0, old if argv[3] == "10" else ready) if argv[0] == "ensure" else (0, None)
+        calls, refusal, _ = self.run_reload(handler, interrupt=True)
+        self.assertIsNone(refusal)
+        self.assertEqual(calls[1], ["restart", "-y", "--detach"])
+        calls, refusal, _ = self.run_reload(handler, interrupt=False)
+        self.assertEqual(calls[1], ["restart", "--detach"])
+        self.dispatch("service-check")
+        with self.assertRaises(native.Refusal):
+            self.dispatch("reload", "--interrupt-live-sessions", "extra")
+        with self.assertRaises(native.Refusal):
+            self.dispatch("service-check", "--interrupt-live-sessions")
+
+    def test_reload_refused_restart_is_a_failure_and_readiness_is_not_consulted(self):
+        old = self.ready_payload("old-instance")
+        def refused(argv):
+            return (0, old) if argv[0] == "ensure" else (1, None)
+        calls, refusal, printed = self.run_reload(refused)
+        self.assertEqual(refusal.detail, "native_restart_refused_or_failed")
+        self.assertEqual(calls, [["ensure", "--json", "--timeout", "10"], ["restart", "--detach"]])
+        self.assertNotIn("native_gateway_reloaded", printed)
+
+    def test_reload_requires_a_new_instance_and_retries_only_transient_readiness(self):
+        same = self.ready_payload("same-instance")
+        calls, refusal, _ = self.run_reload(lambda argv: (0, same) if argv[0] == "ensure" else (0, None))
+        self.assertEqual(refusal.detail, "native_instance_unchanged", "restart exited 0 but the gateway process did not change")
+        # Without a baseline, success cannot prove that the gateway restarted.
+        ready = self.ready_payload("fresh")
+        calls, refusal, _ = self.run_reload(lambda argv: (1, None) if argv[:4] == ["ensure", "--json", "--timeout", "10"] else ((0, ready) if argv[0] == "ensure" else (0, None)))
+        self.assertEqual(refusal.detail, "native_previous_instance_unconfirmed")
+        self.assertEqual(calls, [["ensure", "--json", "--timeout", "10"]])
+        for bad in ({**same, "state": "starting"}, {**same, "client_code_sha": "unreviewed"},
+                    {**same, "endpoint": {**same["endpoint"], "profile_id": "/foreign"}}):
+            calls, refusal, _ = self.run_reload(lambda argv: (0, bad))
+            self.assertEqual(refusal.detail, "native_previous_instance_unconfirmed")
+            self.assertEqual(calls, [["ensure", "--json", "--timeout", "10"]])
+        # Native exit 6 retains a draining endpoint; it must still be compared.
+        for next_instance, succeeds in (("same-instance", False), ("fresh", True)):
+            def draining(argv):
+                if argv[0] != "ensure":
+                    return 0, None
+                if argv[3] == "10":
+                    return 6, {**same, "state": "draining"}
+                return 0, self.ready_payload(next_instance)
+            _, refusal, printed = self.run_reload(draining)
+            self.assertEqual(refusal is None, succeeds)
+            if not succeeds:
+                self.assertEqual(refusal.detail, "native_instance_unchanged")
+                self.assertNotIn("native_gateway_reloaded", printed)
+        # exit 5/6 are transient (two retries); a third consecutive one fails; other non-zero codes are not retried
+        for transient, expected_ok, expected_ready_calls in ((5, True, 3), (6, True, 3), (5, False, 3), (7, False, 1), (1, False, 1)):
+            seen = {"n": 0}
+            old = self.ready_payload("old-instance")
+            def handler(argv, transient=transient, seen=seen, old=old):
+                if argv[0] != "ensure":
+                    return 0, None
+                if argv[3] == "10":
+                    return 0, old
+                seen["n"] += 1
+                if expected_ok and seen["n"] == 3:
+                    return 0, ready
+                return transient, {"state": "pending"}
+            calls, refusal, _ = self.run_reload(handler)
+            self.assertEqual(refusal is None, expected_ok, (transient, expected_ok))
+            self.assertEqual(sum(call[:4] == ["ensure", "--json", "--timeout", "60"] for call in calls), expected_ready_calls, (transient, expected_ok))
+
+    def test_reload_fails_closed_when_restart_fails_or_hangs_and_ensure_is_not_consulted(self):
+        adapter = native.Adapter(str(self.home), "/example/hermes")
+        for failure in (types.SimpleNamespace(returncode=1, stdout=b""), subprocess.TimeoutExpired("hermes", 120), OSError("gone")):
             def subprocess_result(argv, **kwargs):
-                return types.SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())
+                if argv[4] == "ensure":
+                    return types.SimpleNamespace(returncode=0, stdout=json.dumps(self.ready_payload("old-instance")).encode())
+                if isinstance(failure, BaseException):
+                    raise failure
+                return failure
             with patch.object(native.subprocess, "run", side_effect=subprocess_result) as run:
-                if passes:
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        adapter.reload()
-                else:
-                    with self.assertRaises(native.Refusal):
-                        adapter.reload()
-            self.assertEqual([call.args[0][4] for call in run.call_args_list], ["stop", "start", "ensure"])
+                with self.assertRaises(native.Refusal):
+                    adapter.reload()
+            self.assertEqual([call.args[0][4] for call in run.call_args_list], ["ensure", "restart"])
+        calls = []
+        old = self.ready_payload("old-instance")
+        def readiness_hangs(argv, **kwargs):
+            calls.append(argv[4])
+            if argv[4] == "ensure" and argv[-1] == "60":
+                raise subprocess.TimeoutExpired("hermes", 70)
+            return types.SimpleNamespace(returncode=0, stdout=json.dumps(old).encode() if argv[4] == "ensure" else b"")
+        with patch.object(native.subprocess, "run", side_effect=readiness_hangs), self.assertRaises(native.Refusal):
+            adapter.reload()
+        self.assertEqual(calls, ["ensure", "restart", "ensure"])
 
 
 if __name__ == "__main__":

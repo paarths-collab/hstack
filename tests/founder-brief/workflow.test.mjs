@@ -10,5 +10,5 @@ test("daily workflow: scoped collector to private Telegram HTTP proof, retry/rec
     encoding: "utf8", timeout: 85_000, maxBuffer: 4 * 1024 * 1024,
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /Ran 21 tests/);
+  assert.match(result.stderr, /Ran 24 tests/);
 });

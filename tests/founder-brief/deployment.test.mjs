@@ -10,5 +10,5 @@ test("first-install deployment, native CLI reconciliation and conflict-safe roll
   const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "helpers/test-deployment.py");
   const result = spawnSync(command, [...prefix, "-I", "-B", script], { encoding: "utf8", timeout: 60_000 });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stderr, /Ran 16 tests/);
+  assert.match(result.stderr, /Ran 17 tests/);
 });

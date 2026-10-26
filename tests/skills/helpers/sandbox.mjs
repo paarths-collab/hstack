@@ -36,7 +36,24 @@ export function installStubs(home) {
   put(path.join(home, "remote_bin"), "crontab");
   put(path.join(home, "remote_bin"), "sleep");
   put(path.join(home, "remote_bin"), "forbidden", "docker");
+  // A mutation/control test may run a skill variant that kills processes by name. On the real host that would signal the
+  // node test processes themselves (their command lines contain "hermes"), so the simulated VPS must never have a working
+  // process killer: the attempt is logged (logs/local-forbidden.log) and fails.
+  for (const tool of ["pkill", "killall", "pgrep"]) put(path.join(home, "remote_bin"), "forbidden", tool);
   put(path.join(home, ".local", "bin"), "hermes");
+  // The hermes stub rejects invalid invocations with the REAL v0.22.5 argparse (vendored fixture + syntax-only
+  // harness), so it needs to find them from the clean environment of the simulated VPS. It also sources
+  // $HOME/.local/hermes.d/<command>.sh for per-command behaviour.
+  mkdirSync(path.join(home, ".hstack-native"), { recursive: true });
+  writeFileSync(path.join(home, ".hstack-native", "parser"), path.join(here, "native-parser.py"));
+  writeFileSync(path.join(home, ".hstack-native", "fixture"), path.join(here, "..", "fixtures", "hermes-v0.22.5"));
+  // Cross-sandbox cache of the (pure) argparse verdicts; see nat_parse_check in stubs/hermes.
+  writeFileSync(path.join(home, ".hstack-native", "cache"), path.join(os.tmpdir(), "hstack-native-parse-cache"));
+  const hd = path.join(here, "..", "stub-commands");
+  if (existsSync(hd)) {
+    mkdirSync(path.join(home, ".local", "hermes.d"), { recursive: true });
+    for (const f of readdirSync(hd)) copyFileSync(path.join(hd, f), path.join(home, ".local", "hermes.d", f));
+  }
 }
 
 export class Sandbox {
@@ -117,7 +134,7 @@ export class Sandbox {
   }
 
   /** Run a script (string) with /bin/bash under a minimal environment. Resolves to { code, out }. */
-  run(script, { env = {}, timeoutMs = 90000 } = {}) {
+  run(script, { env = {}, timeoutMs = Number(process.env.HSTACK_SCRIPT_TIMEOUT_MS) || 90000 } = {}) {
     const file = path.join(this.root, "script.sh");
     writeFileSync(file, script);
     const childEnv = {
@@ -162,7 +179,7 @@ export async function scenario(opts, fn) {
     for (const [rel, content] of Object.entries(opts.files || {})) sb.write(rel, content);
     if (opts.setup) opts.setup(sb);
     const before = sb.state();
-    const res = await sb.run(opts.script, { env: opts.env || {} });
+    const res = await sb.run(opts.script, { env: opts.env || {}, timeoutMs: opts.timeoutMs ?? (Number(process.env.HSTACK_TEST_TIMEOUT_MS || 0) || undefined) });
     const run = { sb, before, after: sb.state(), code: res.code, out: res.out, completed: res.out.includes("SCRIPT-COMPLETED") };
     try {
       await fn(run);

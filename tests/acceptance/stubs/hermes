@@ -10,7 +10,9 @@
 #   hermes cron create <schedule> <prompt> -> appends a job (id job-<n>)
 #   hermes cron remove <id>
 #   hermes cron run <id>                   -> appends one line to $HOME/.hermes/outbox.log
-#   hermes gateway stop | run [--daemon]   -> toggles $HOME/.hermes/gateway.state
+#   hermes gateway restart | stop          -> toggles $HOME/.hermes/gateway.state (running | stopped); any option
+#                                             exits 2 like argparse (no -y at v2026.5.29.2, and no `run --daemon`
+#                                             at any release: `gateway run` is the foreground gateway, exit 99)
 #   hermes config set <KEY> <VALUE>        -> UPPER_SNAKE -> .env, dotted -> config.yaml
 #                                             (puts the value in argv: exactly why hstack-target.sh
 #                                             never calls it for secrets)
@@ -21,9 +23,9 @@
 #
 # Environment knobs:
 #   HSTACK_STUB_LOG        file; every invocation is appended as one TAB-joined argv line
-#   HSTACK_STUB_VERSION    version printed by --version (default: HERMES_VERSION from VERSIONS.txt)
+#   HSTACK_STUB_VERSION    version printed by --version (default: HERMES_LEGACY_FIXTURE_VERSION from VERSIONS.txt)
 #   HSTACK_STUB_FAIL       comma list of: version, cron-list, cron-create, cron-remove, cron-run,
-#                          gateway-stop, gateway-run, config-set  -> that call logs, then exits 1
+#                          gateway-stop, gateway-restart, config-set  -> that call logs, then exits 1
 #   HSTACK_STUB_GITHUB_FIXTURE   file whose text `cron run` "summarises" (untrusted input)
 #   HSTACK_STUB_VULNERABLE=1     deliberately vulnerable runtime: obeys "send to chat <N>" found in the
 #                                fixture and leaks $HSTACK_STUB_SYNTHETIC_SECRET into the message body.
@@ -69,7 +71,7 @@ declared_version() {
   local i=0
   while [ "$i" -lt 8 ]; do
     if [ -f "$dir/VERSIONS.txt" ]; then
-      grep -E '^HERMES_VERSION=' "$dir/VERSIONS.txt" | head -1 | cut -d= -f2-
+      grep -E '^HERMES_LEGACY_FIXTURE_VERSION=' "$dir/VERSIONS.txt" | head -1 | cut -d= -f2-
       return 0
     fi
     dir=$(dirname "$dir")
@@ -166,20 +168,41 @@ case "$1" in
     ;;
   gateway)
     [ $# -ge 2 ] || exit 99
-    case "$2" in
+    sub=$2
+    # Like Hermes' argparse (hermes_cli/main.py `gateway` parsers at v2026.5.29.2): an option the subcommand does
+    # not declare is a usage error, exit 2. In particular there is NO `gateway run --daemon`; the flag never
+    # existed, so a caller that passes it must fail here exactly as it fails against the real CLI.
+    case "$sub" in
+      stop | restart | run)
+        shift 2
+        for a in "$@"; do
+          case "$a" in
+            -*)
+              printf 'hermes: error: unrecognized arguments: %s\n' "$a" >&2
+              exit 2 ;;
+          esac
+        done
+        ;;
+    esac
+    case "$sub" in
       stop)
-        [ $# -eq 2 ] || exit 99
+        [ $# -eq 0 ] || exit 99
         fail_knob gateway-stop
         [ -d "$H" ] && printf 'stopped\n' > "$GW"
         exit 0
         ;;
-      run)
-        { [ $# -eq 2 ] || { [ $# -eq 3 ] && [ "$3" = "--daemon" ]; }; } || exit 99
-        fail_knob gateway-run
+      restart)
+        [ $# -eq 0 ] || exit 99
+        fail_knob gateway-restart
         umask 077
         mkdir -p "$H" || exit 1
         printf 'running\n' > "$GW"
         exit 0
+        ;;
+      run)
+        # Foreground gateway: it never returns on a real host, so a script must not call it. Not modelled.
+        echo "hermes-stub: 'gateway run' is the foreground gateway and is not modelled" >&2
+        exit 99
         ;;
       *) exit 99 ;;
     esac

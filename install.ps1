@@ -1,38 +1,50 @@
 # hstack universal installer (PowerShell).
 #
-# Usage — one-liner (installs to every detected IDE with all skills):
+# Usage - one-liner (installs to every detected IDE with all skills):
 #   iwr -useb https://raw.githubusercontent.com/paarths-collab/hstack/main/install.ps1 | iex
+#   (iex cannot pass parameters: use one of the forms below to choose tiers)
 #
-# Usage — with interactive picker:
+# Usage - with explicit choices (download first, then run the file):
 #   iwr -useb https://raw.githubusercontent.com/paarths-collab/hstack/main/install.ps1 -OutFile hstack-install.ps1
 #   .\hstack-install.ps1 -Pick
+#   .\hstack-install.ps1 -Tier memory,database
+#   .\hstack-install.ps1 -Include notion,stripe,mem0
+#   .\hstack-install.ps1 -Ide claude,openclaw
 #
-# Usage — non-interactive with explicit choices:
-#   iwr -useb ... | iex; hstack-install -Tier memory,database
-#   .\install.ps1 -Include notion,stripe,mem0
-#   .\install.ps1 -Ide claude,openclaw
+# Usage - without saving a file (a script block accepts parameters):
+#   & ([scriptblock]::Create((iwr -useb https://raw.githubusercontent.com/paarths-collab/hstack/main/install.ps1).Content)) -Tier memory,database
+#
+# -Tier / -Include / -Ide take a comma list (or a single "a,b" string). Precedence when several
+# selection switches are given: -All, then -Include, then -Tier.
 #
 # What it does:
 #   1. Clones or updates hstack into ~\.hstack
 #   2. Detects installed IDEs / agents
 #   3. Optionally prompts you to pick integrations (or accepts flags)
-#   4. Copies/symlinks the chosen skills into each detected IDE's skill directory
+#   4. Copies the chosen skills into each detected IDE's skill directory
 #   5. Reports what got wired where
+#
+# This file is pure ASCII on purpose: Windows PowerShell 5.1 reads a BOM-less file as the
+# ANSI code page and mis-parses UTF-8 punctuation (an em dash becomes a quote character).
 
 [CmdletBinding()]
 param(
     [switch]$Pick,
     [switch]$All,
     [switch]$Local,
-    [string]$Include = "",
-    [string]$Tier = "",
-    [string]$Ide = "",
+    [string[]]$Include = @(),
+    [string[]]$Tier = @(),
+    [string[]]$Ide = @(),
     [string]$Branch = "main",
     [switch]$Help
 )
 
 if ($Help) {
-    Get-Content $PSCommandPath | Select-Object -First 30 | ForEach-Object { $_ }
+    # print the leading comment block (the usage text above)
+    foreach ($helpLine in (Get-Content $PSCommandPath)) {
+        if ($helpLine -notmatch '^#') { break }
+        $helpLine
+    }
     exit 0
 }
 
@@ -42,7 +54,16 @@ $RepoUrl     = if ($env:HSTACK_REPO_URL)     { $env:HSTACK_REPO_URL }     else {
 $InstallDir  = if ($env:HSTACK_INSTALL_DIR)  { $env:HSTACK_INSTALL_DIR }  else { (Join-Path $HOME ".hstack") }
 if ($env:HSTACK_BRANCH) { $Branch = $env:HSTACK_BRANCH }
 
-# Tier → integration mapping
+# "-Tier a,b" binds as an array, "-Tier 'a,b'" as one string: accept both (and stray spaces).
+function ConvertTo-HstackList {
+    param($Value)
+    return @($Value | ForEach-Object { "$_" -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+$IncludeList = ConvertTo-HstackList $Include
+$TierList = ConvertTo-HstackList $Tier
+$IdeList = ConvertTo-HstackList $Ide
+
+# Tier -> integration mapping
 $Tiers = @{
     core         = @('blueprint-install','blueprint-saas-founder','setup-ssh-keys','hermes-backup','hermes-cron','hermes-deploy','hermes-fix','hermes-home','hermes-install','hermes-integrate','hermes-mcp-add','hermes-memory','hermes-model','hermes-restart','hermes-skills','hermes-soul','hermes-status','hermes-update')
     platforms    = @('platform-discord','platform-google-chat','platform-mattermost','platform-signal','platform-slack','platform-teams','platform-telegram','platform-whatsapp')
@@ -70,10 +91,10 @@ $Tiers = @{
 
 $IntegrationTiers = @('memory','database','vector','auth','observability','rag','code','ai-tools','storage','crm','docs','dev','pm','cloud','payments','commerce','email','support','forms','search')
 
-function Write-Ok    { param($m) Write-Host "✓ $m" -ForegroundColor Green }
+function Write-Ok    { param($m) Write-Host "OK $m" -ForegroundColor Green }
 function Write-Info  { param($m) Write-Host $m -ForegroundColor DarkGray }
 function Write-WarnX { param($m) Write-Host "! $m" -ForegroundColor Yellow }
-function Write-Die   { param($m) Write-Host "✗ $m" -ForegroundColor Red; exit 1 }
+function Write-Die   { param($m) Write-Host "x $m" -ForegroundColor Red; exit 1 }
 function Write-Head  { param($m) Write-Host ""; Write-Host $m -ForegroundColor White }
 
 # >>> hstack-ownership (this block is identical in install.ps1 and setup.ps1, and mirrors the
@@ -145,7 +166,11 @@ function Get-HstackLinkTarget {
     if (-not $t) { return $null }
     $t = [string]$t
     if ($t.StartsWith('\??\')) { $t = $t.Substring(4) }
-    if (-not [IO.Path]::IsPathRooted($t)) { $t = Join-Path (Split-Path -Parent $Path) $t }
+    if (-not [IO.Path]::IsPathRooted($t)) {
+        # Split-Path -Parent /var is empty on Unix; .NET preserves the filesystem root.
+        $parent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($Path))
+        $t = Join-Path $parent $t
+    }
     return [IO.Path]::GetFullPath($t)
 }
 
@@ -661,29 +686,59 @@ if ($Local) {
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         Write-Die "git is required. Install git and re-run."
     }
+    # Native commands do not throw on failure: every git call below checks $LASTEXITCODE.
+    function Invoke-HstackGit {
+        param([string[]]$GitArgs, [switch]$Quiet)
+        if ($Quiet) { & git @GitArgs | Out-Null } else { & git @GitArgs | Out-Host }
+        return $LASTEXITCODE
+    }
+    if ((Invoke-HstackGit @('check-ref-format', '--branch', $Branch) -Quiet) -ne 0) {
+        Write-Die "'$Branch' is not a valid branch name."
+    }
     Write-Head "==> Fetching hstack"
     if (Test-Path (Join-Path $InstallDir ".git")) {
-        Write-Info "Updating existing checkout at $InstallDir"
+        Write-Info "Updating existing checkout at $InstallDir (branch $Branch)"
+        $updated = $false
         Push-Location $InstallDir
         try {
-            git fetch origin --quiet
-            git checkout --quiet $Branch
-            git pull --ff-only --quiet
-        } catch {
+            # The first clone is --depth 1 and single-branch: fetch the requested branch explicitly
+            # (shallow when we have none of it yet), then switch and fast-forward.
+            $spec = "+refs/heads/${Branch}:refs/remotes/origin/${Branch}"
+            $haveRef = (Invoke-HstackGit @('rev-parse', '--verify', '--quiet', "refs/remotes/origin/$Branch") -Quiet) -eq 0
+            if ($haveRef) { $fetchArgs = @('fetch', '--quiet', 'origin', $spec) }
+            else { $fetchArgs = @('fetch', '--quiet', '--depth', '1', 'origin', $spec) }
+            # (a single-branch clone's refspec hides other branches from checkout's own DWIM,
+            # so a branch we have not had before is created from the ref fetched above)
+            $haveLocal = (Invoke-HstackGit @('show-ref', '--verify', '--quiet', "refs/heads/$Branch") -Quiet) -eq 0
+            if ($haveLocal) { $coArgs = @('checkout', '--quiet', $Branch) }
+            else { $coArgs = @('checkout', '--quiet', '-b', $Branch, "refs/remotes/origin/$Branch") }
+            $updated = ((Invoke-HstackGit $fetchArgs) -eq 0) -and
+                ((Invoke-HstackGit $coArgs) -eq 0) -and
+                ((Invoke-HstackGit @('merge', '--ff-only', '--quiet', "refs/remotes/origin/$Branch")) -eq 0)
+            $current = ((& git symbolic-ref --quiet --short HEAD) | Out-String).Trim()
+        } finally {
+            Pop-Location
+        }
+        if (-not $updated) {
+            if ($current -ne $Branch) {
+                if (-not $current) { $current = 'a detached HEAD' }
+                Write-Die "Could not switch the existing checkout at $InstallDir to branch '$Branch' (it is on '$current'). Fix the branch name or the checkout and re-run."
+            }
             Write-WarnX "Could not fast-forward. Continuing with existing checkout."
         }
-        Pop-Location
     } elseif ((Test-Path $InstallDir) -and (Get-ChildItem $InstallDir -Force | Measure-Object).Count -gt 0) {
         Write-Die "$InstallDir exists and is not a git checkout of hstack. Move it aside and re-run."
     } else {
-        Write-Info "Cloning $RepoUrl → $InstallDir (branch $Branch)"
-        git clone --depth 1 --branch $Branch --quiet $RepoUrl $InstallDir
+        Write-Info "Cloning $RepoUrl -> $InstallDir (branch $Branch)"
+        if ((Invoke-HstackGit @('clone', '--depth', '1', '--branch', $Branch, '--quiet', $RepoUrl, $InstallDir)) -ne 0) {
+            Write-Die "git clone of $RepoUrl (branch $Branch) into $InstallDir failed."
+        }
     }
     Write-Ok "hstack checkout ready"
 }
 
 Set-Location $InstallDir
-if (-not (Test-Path (Join-Path $InstallDir "skills"))) { Write-Die "$InstallDir\skills not found — checkout is broken." }
+if (-not (Test-Path (Join-Path $InstallDir "skills"))) { Write-Die "$InstallDir\skills not found - checkout is broken." }
 $SourceRoot = (Get-Location).ProviderPath
 # Skills trees whose links count as "ours": the one being installed, the default
 # ~\.hstack checkout, and a custom HSTACK_INSTALL_DIR.
@@ -705,15 +760,20 @@ if (Test-Path (Join-Path $HOME ".hermes"))    { $Ides['hermes']   = $true }
 if (Test-Path (Join-Path $HOME ".gemini"))    { $Ides['gemini']   = $true }
 if (Test-Path (Join-Path $HOME ".openclaw"))  { $Ides['openclaw'] = $true }
 
-if ($Ide) {
+if ($IdeList.Count -gt 0) {
+    $knownIdes = @('claude','codex','cursor','hermes','gemini','openclaw')
     $requested = @{}
-    foreach ($p in $Ide -split ',') {
-        $p = $p.Trim()
-        if ($p -eq 'all') {
-            foreach ($k in @('claude','codex','cursor','hermes','gemini','openclaw')) { $requested[$k] = $true }
+    foreach ($p in $IdeList) {
+        if ($p -ceq 'all') {
+            foreach ($k in $knownIdes) { $requested[$k] = $true }
             break
         }
-        $requested[$p] = $true
+        if ($knownIdes -ccontains $p) { $requested[$p] = $true }
+        else { Write-WarnX "unknown IDE '$p' - skipping (available: $($knownIdes -join ' '), all)" }
+    }
+    if ($requested.Count -eq 0) {
+        Write-Host "x no valid IDE in -Ide $($IdeList -join ',') (available: $($knownIdes -join ' '), all)" -ForegroundColor Red
+        exit 2
     }
     $Ides = $requested
 }
@@ -740,7 +800,9 @@ foreach ($k in @('claude','codex','cursor','hermes','gemini','openclaw')) {
 
 Write-Head "==> Choosing skills"
 
-$Chosen = @{}
+# $script:Chosen on purpose: Add-Tier writes it as $script:Chosen, and a plain $Chosen would be a
+# different variable when this file runs as a script block (& ([scriptblock]::Create(...))).
+$script:Chosen = @{}
 foreach ($s in $Tiers['core'])      { $Chosen[$s] = $true }
 foreach ($s in $Tiers['platforms']) { $Chosen[$s] = $true }
 
@@ -753,21 +815,24 @@ function Add-Tier {
 
 if ($All) {
     Write-Info "Installing ALL integrations (-All)"
+    if (($IncludeList.Count -gt 0) -or ($TierList.Count -gt 0)) {
+        Write-WarnX "-All given: ignoring -Include / -Tier"
+    }
     foreach ($t in $IntegrationTiers) { Add-Tier $t }
-} elseif ($Include) {
-    Write-Info "Installing only: $Include"
-    foreach ($p in $Include -split ',') {
-        $p = $p.Trim()
-        if (-not $p) { continue }
+} elseif ($IncludeList.Count -gt 0) {
+    Write-Info "Installing only: $($IncludeList -join ',')"
+    if ($TierList.Count -gt 0) {
+        Write-WarnX "-Include overrides -Tier: ignoring -Tier $($TierList -join ',') (core + platforms + the -Include items are installed)"
+    }
+    foreach ($p in $IncludeList) {
         if ($Tiers.ContainsKey($p)) { Add-Tier $p; continue }
         if (Test-Path (Join-Path "skills" "integration-$p")) { $Chosen["integration-$p"] = $true; continue }
         if (Test-Path (Join-Path "skills" $p)) { $Chosen[$p] = $true; continue }
-        Write-WarnX "unknown: '$p' — skipping"
+        Write-WarnX "unknown: '$p' - skipping"
     }
-} elseif ($Tier) {
-    Write-Info "Installing tiers: $Tier"
-    foreach ($t in $Tier -split ',') {
-        $t = $t.Trim()
+} elseif ($TierList.Count -gt 0) {
+    Write-Info "Installing tiers: $($TierList -join ',')"
+    foreach ($t in $TierList) {
         if ($Tiers.ContainsKey($t)) { Add-Tier $t } else { Write-WarnX "unknown tier: '$t'" }
     }
 } elseif ($Pick -or (-not [Console]::IsInputRedirected)) {
@@ -839,7 +904,7 @@ or 'all' (or 1) for everything, or press Enter to skip integrations.
         }
     }
 } else {
-    Write-Info "Non-interactive install (no flags) — including all integrations."
+    Write-Info "Non-interactive install (no flags) - including all integrations."
     foreach ($t in $IntegrationTiers) { Add-Tier $t }
 }
 
@@ -847,7 +912,7 @@ or 'all' (or 1) for everything, or press Enter to skip integrations.
 $Final = @{}
 foreach ($name in $Chosen.Keys) {
     if (Test-Path (Join-Path (Join-Path "skills" $name) "SKILL.md")) { $Final[$name] = $true }
-    else { Write-WarnX "skill '$name' not found in checkout — skipping" }
+    else { Write-WarnX "skill '$name' not found in checkout - skipping" }
 }
 
 $skillCount = $Final.Count
@@ -909,14 +974,14 @@ function Install-To-Claude {
     $target = $TargetDirs.claude
     if (-not (Test-HstackTargetOk $target)) { return }
     $n = Install-SkillDirs $target
-    Write-Ok "claude    → $target ($n skills)"
+    Write-Ok "claude    -> $target ($n skills)"
 }
 
 function Install-To-Codex {
     $target = $TargetDirs.codex
     if (-not (Test-HstackTargetOk $target)) { return }
     $n = Install-SkillDirs $target
-    Write-Ok "codex     → $target ($n skills)"
+    Write-Ok "codex     -> $target ($n skills)"
 }
 
 function Install-To-Cursor {
@@ -937,14 +1002,14 @@ function Install-To-Cursor {
         if (-not (Write-HstackFileSafe $dst ($utf8.GetBytes($marked)))) { continue }
         $n++
     }
-    Write-Ok "cursor    → $target ($n skills, converted to .mdc)"
+    Write-Ok "cursor    -> $target ($n skills, converted to .mdc)"
 }
 
 function Install-To-Hermes {
     $target = $TargetDirs.hermes
     if (-not (Test-HstackTargetOk $target)) { return }
     $n = Install-SkillDirs $target
-    Write-Ok "hermes    → $target ($n skills)"
+    Write-Ok "hermes    -> $target ($n skills)"
 }
 
 function Install-To-Gemini {
@@ -963,19 +1028,20 @@ function Install-To-Gemini {
         if (-not (Write-HstackFileSafe $dst ($latin1.GetBytes($body + (Get-HstackMarkerLine $body) + "`n")))) { continue }
         $n++
     }
-    Write-Ok "gemini    → $target ($n skills)"
+    Write-Ok "gemini    -> $target ($n skills)"
 }
 
 function Install-To-Openclaw {
     $target = $TargetDirs.openclaw
     if (-not (Test-HstackTargetOk $target)) { return }
     $n = Install-SkillDirs $target
-    Write-Ok "openclaw  → $target ($n skills)"
+    Write-Ok "openclaw  -> $target ($n skills)"
 }
 
-foreach ($ide in @('claude','codex','cursor','hermes','gemini','openclaw')) {
-    if ($Ides.ContainsKey($ide)) {
-        & "Install-To-$($ide.Substring(0,1).ToUpper() + $ide.Substring(1))"
+# (not $ide: variable names are case-insensitive and $Ide is the [string[]] parameter)
+foreach ($ideName in @('claude','codex','cursor','hermes','gemini','openclaw')) {
+    if ($Ides.ContainsKey($ideName)) {
+        & "Install-To-$($ideName.Substring(0,1).ToUpper() + $ideName.Substring(1))"
     }
 }
 
@@ -994,7 +1060,7 @@ Write-Host "  1. Deploy Hermes to your own server (~30 min):"
 Write-Host "     Open any of your IDEs and run:  /hermes-deploy"
 Write-Host ""
 Write-Host "  2. After deploy, wire integrations one at a time:"
-Write-Host "     /integration-notion · /integration-stripe · etc."
+Write-Host "     /integration-notion / /integration-stripe / etc."
 Write-Host ""
 Write-Host "  3. Or wire many at once:"
 Write-Host "     /hermes-integrate"
@@ -1003,7 +1069,7 @@ Write-Host "Repo:    $InstallDir"
 Write-Host "Docs:    https://github.com/paarths-collab/hstack"
 Write-Host ""
 Write-Host "To re-run this installer with different choices:"
-Write-Host "  powershell -File $InstallDir\install.ps1 -Pick"
+Write-Host "  powershell -File $(Join-Path $InstallDir 'install.ps1') -Pick"
 if ($script:HstackFailures -gt 0) {
     Write-WarnX "$($script:HstackFailures) entries could not be installed and were left untouched (see the warnings above). Exiting with an error."
     exit 1

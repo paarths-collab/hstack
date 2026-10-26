@@ -5,47 +5,35 @@ on:
     paths:
       - "packages/**"
       - "tests/**"
+      - "skills/hermes-*/**"
+      - "skills/platform-*/**"
+      - "skills/integration-*/**"
       - "skills/blueprint-*/**"
+      - "skills/setup-*/**"
+      - "templates/**"
       - "blueprints/**"
       - "recipes/**"
       - "apps/composer/**"
       - "acceptance/**"
       - "connectors/**"
       - "VERSIONS.txt"
-      - "skills/platform-telegram/**"
-      - "skills/integration-github/**"
-      - "skills/hermes-home/**"
-      - "skills/hermes-cron/**"
-      - "skills/integration-notion/**"
-      - "skills/hermes-model/**"
-      - "skills/hermes-deploy/**"
-      - "skills/hermes-install/**"
-      - "skills/hermes-memory/**"
-      - "skills/hermes-update/**"
-      - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   pull_request:
     paths:
       - "packages/**"
       - "tests/**"
+      - "skills/hermes-*/**"
+      - "skills/platform-*/**"
+      - "skills/integration-*/**"
       - "skills/blueprint-*/**"
+      - "skills/setup-*/**"
+      - "templates/**"
       - "blueprints/**"
       - "recipes/**"
       - "apps/composer/**"
       - "acceptance/**"
       - "connectors/**"
       - "VERSIONS.txt"
-      - "skills/platform-telegram/**"
-      - "skills/integration-github/**"
-      - "skills/hermes-home/**"
-      - "skills/hermes-cron/**"
-      - "skills/integration-notion/**"
-      - "skills/hermes-model/**"
-      - "skills/hermes-deploy/**"
-      - "skills/hermes-install/**"
-      - "skills/hermes-memory/**"
-      - "skills/hermes-update/**"
-      - "templates/SKILL.template.md"
       - ".github/workflows/recipe-tests.yml"
   workflow_dispatch:
 
@@ -72,29 +60,32 @@ jobs:
           python-version: "3.x"
 
       - name: Run recipe tests
-        run: node --test tests/recipes/
+        run: node --test tests/recipes/*.mjs
 
+      # node --test gets files, not directories (a directory argument is not accepted on Node 22),
+      # as unquoted globs expanded by bash (quoted globs need Node 21+). tests/installer/test-scripts.sh verifies that
+      # these expand to exactly the files the old directory form ran.
       # Offline: sandbox filesystem + bash test-double `hermes` + golden SSH command fixtures.
       # Docker-gated tests are skipped with an explicit reason unless HSTACK_DOCKER=1.
       - name: Run acceptance tests
-        run: node --test tests/acceptance/
+        run: node --test tests/acceptance/*.mjs tests/acceptance/target/*.test.mjs tests/acceptance/docker/*.test.mjs
 
       # Real loopback HTTP and disposable local SSH transport; vendor APIs and
       # the exact-version Hermes command surface remain explicit test fixtures.
       - name: Run ready-to-use workflow tests
-        run: node --test --test-concurrency=3 tests/founder-brief/
+        run: node --test --test-concurrency=3 tests/founder-brief/*.test.mjs
 
       # Offline: the repaired SKILL.md bash blocks run in one /bin/bash against a simulated VPS (stub ssh, curl,
       # hermes, crontab). Covers the credential gates, rollback, and deploy composition on bash 3.2 (macOS) and 5.x.
       - name: Run skill block tests
-        run: node --test tests/skills/
+        run: node --test --test-concurrency=3 tests/skills/*.test.mjs
 
       # Real sshd in a local Docker container (ubuntu runners only; macOS runners have no Docker).
       - name: Run acceptance tests against a Docker sshd target
         if: runner.os == 'Linux'
         env:
           HSTACK_DOCKER: "1"
-        run: node --test tests/acceptance/docker/
+        run: node --test tests/acceptance/docker/*.test.mjs
 
       - name: Validate sample blueprints
         shell: bash

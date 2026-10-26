@@ -1,41 +1,311 @@
-#!/usr/bin/env bash
-# Docker-test-only shim in FRONT of the stub hermes (the stub is moved to hermes.stub next to it) for the
-# Telegram skill test. It adapts only the default-profile forms exercised by the current skill and adds
-# commands the legacy acceptance stub's declared surface lacks:
-#   hermes -p default ... / hermes --profile default ... -> the same legacy-stub call without the prefix
-#   hermes config set KEY -- VALUE   -> stub `config set KEY VALUE`   (the skill's `--` guard for negative ids)
-#   hermes gateway ensure --json --timeout 60 -> stub `gateway run --daemon`, then a fixture ready response
-#   hermes gateway status            -> "gateway: running|stopped" from the stub's gateway.state
-#   hermes logs gateway -n N         -> a "telegram connected" line only while the gateway state is running
-# The shared stub and its legacy version pin are unchanged. This adaptation is a TEST DOUBLE, not evidence
-# that either Hermes release supports another release's lifecycle commands or that a real gateway is ready.
-set -u
-here=$(cd "$(dirname "$0")" && pwd)
-stub="$here/hermes.stub"
-case "${1:-}" in
-  -p|--profile)
-    [ $# -ge 3 ] && [ "$2" = default ] || exit 99
-    shift 2 ;;
-  --profile=default) shift ;;
-  --profile=*) exit 99 ;;
-esac
-state=$(cat "$HOME/.hermes/gateway.state" 2>/dev/null || echo stopped)
-case "${1:-} ${2:-}" in
-  "gateway ensure")
-    [ $# -eq 5 ] && [ "$3" = --json ] && [ "$4" = --timeout ] && [ "$5" = 60 ] || exit 99
-    "$stub" gateway run --daemon || exit $?
-    printf '{"state":"ready","evidence":"test-double"}\n'
-    exit 0 ;;
-  "gateway status")
-    [ $# -eq 2 ] || exit 99
-    if [ "$state" = running ]; then echo "gateway: running"; else echo "gateway: stopped"; fi
-    exit 0 ;;
-  "logs gateway")
-    [ $# -eq 4 ] && [ "$3" = -n ] || exit 99
-    case "$4" in ''|*[!0-9]*) exit 99 ;; esac
-    if [ "$state" = running ]; then echo "[gateway] telegram connected (long-poll)"; else echo "[gateway] not started"; fi
-    exit 0 ;;
-  "config set")
-    if [ $# -eq 5 ] && [ "$4" = "--" ]; then exec "$stub" config set "$3" "$5"; fi ;;
-esac
-exec "$stub" "$@"
+#!/usr/bin/env python3
+"""Docker-test-only shim in FRONT of the stub hermes, for the Telegram skill test. NOT Hermes.
+
+The shared legacy stub (moved to `hermes.stub` next to this file) models the 0.15.2 fixture surface. The
+Telegram skill targets Hermes v0.22.5, so this shim answers the commands that skill calls the way the v0.22.5
+CLI parses them: every command's options are declared with argparse, copied from the tagged parsers, so an
+undeclared option (for example the nonexistent `gateway run --daemon`) is a usage error, exit 2, exactly like
+the real CLI. State changes are delegated to the stub (`config set`, `gateway restart`, `gateway stop`).
+
+Parsers mirrored (tag v0.22.5):
+  gateway {status,start,stop,restart,ensure,run}   hermes_cli/subcommands/gateway.py:70-155
+  config {set,unset}                               hermes_cli/subcommands/config.py
+  logs [name] [-n N] [--since T] ...               hermes_cli/subcommands/logs.py:36-48
+  send [-t TO] [message] ...                       hermes_cli/send_cmd.py:243-262
+  pairing {list,approve,revoke,clear-pending}     hermes_cli/subcommands/pairing.py
+  --version                                        the multi-line report of hermes_cli/_startup_fast.py
+  -p/--profile default                             only the default profile is accepted (exit 99 otherwise)
+
+Behaviour that is a TEST DOUBLE and not evidence about Hermes:
+  * a real `gateway restart` gives the gateway a fresh instance_id (uuid4 per process, gateway/run_runtime.py:144);
+    the shim counts restarts. `gateway ensure` starts an absent gateway, like the real one.
+  * HSTACK_SHIM_LIVE_SESSIONS=1: `gateway restart` without -y/--yes refuses with exit 1 (non-interactive, live sessions).
+  * HSTACK_SHIM_RESTART_NOOP=1: `gateway restart` exits 0 without restarting (the linger case).
+  * `logs gateway` shows a "telegram connected" line only while the stub's gateway.state says running.
+Exit 99 = a command this double does not model (as in the stub); exit 2 = argparse usage error.
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+STUB = os.path.join(HERE, "hermes.stub")
+HOME = os.environ.get("HOME", "/nonexistent")
+STATE = os.path.join(HOME, ".hermes")
+
+
+def log(argv):
+    path = os.environ.get("HSTACK_STUB_LOG")
+    if path:
+        with open(path, "a") as out:
+            out.write("\t".join(argv) + "\n")
+
+
+def stub(*argv):
+    """Run the legacy stub (it logs its own call and honours its failure knobs)."""
+    return subprocess.run([STUB] + list(argv), stdout=subprocess.DEVNULL).returncode
+
+
+def parser(name):
+    return argparse.ArgumentParser(prog="hermes " + name, add_help=False)
+
+
+def flag(p, *names, **kw):
+    p.add_argument(*names, action="store_true", **kw)
+
+
+def gateway_running():
+    try:
+        with open(os.path.join(STATE, "gateway.state")) as handle:
+            return handle.read().strip() == "running"
+    except OSError:
+        return False
+
+
+def instance_file():
+    import hashlib
+    base = os.path.join(os.environ.get("TMPDIR", "/tmp"), "hstack-shim")
+    os.makedirs(base, exist_ok=True)
+    return os.path.join(base, hashlib.sha256(HOME.encode()).hexdigest()[:16])
+
+
+def instance():
+    try:
+        with open(instance_file()) as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def bump_instance():
+    number = instance() + 1  # read before open(): "w" truncates the file
+    with open(instance_file(), "w") as handle:
+        handle.write(str(number))
+
+
+def target_version():
+    """HERMES_VERSION from the VERSIONS.txt above the stub (found the way the stub finds its own pin)."""
+    src = STUB
+    while os.path.islink(src):
+        link = os.readlink(src)
+        src = link if os.path.isabs(link) else os.path.join(os.path.dirname(src), link)
+    directory = os.path.dirname(os.path.abspath(src))
+    for _ in range(8):
+        candidate = os.path.join(directory, "VERSIONS.txt")
+        if os.path.isfile(candidate):
+            with open(candidate) as handle:
+                for line in handle:
+                    if line.startswith("HERMES_VERSION="):
+                        return line.split("=", 1)[1].strip()
+        directory = os.path.dirname(directory)
+    return None
+
+
+def cmd_version(args):
+    if args != ["--version"]:
+        return 99
+    rc = stub("--version")  # logs the call and honours the stub's failure knob
+    if rc != 0:
+        return rc
+    version = target_version()
+    if not version:
+        return 98
+    sys.stdout.write(
+        "Hermes Agent v%s (2026.9.24) · upstream bf0203a7\nInstall directory: /home/operator/.hermes/hermes-agent\n"
+        "Install method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0\n" % version)
+    return 0
+
+
+def cmd_config(args):
+    if args[:1] and args[0] in ("show", "edit", "get", "path", "env-path", "check", "migrate"):
+        return 99  # real subcommands this double does not model
+    p = parser("config")
+    sub = p.add_subparsers(dest="config_command")
+    p_set = sub.add_parser("set", add_help=False)
+    p_set.add_argument("key", nargs="?")
+    p_set.add_argument("value", nargs="?")
+    flag(p_set, "--force")
+    p_unset = sub.add_parser("unset", add_help=False)
+    p_unset.add_argument("key", nargs="?")
+    options = p.parse_args(args)
+    if options.config_command == "set":
+        if options.key is None or options.value is None or options.force:
+            return 2 if options.key is None or options.value is None else 99
+        return stub("config", "set", options.key, options.value)
+    if options.config_command == "unset":
+        if options.key is None:
+            return 2
+        log(["config", "unset", options.key])
+        return config_unset(options.key)
+    return 99
+
+
+def config_unset(key):
+    upper = re.fullmatch(r"[A-Z][A-Z0-9_]*", key) is not None
+    path = os.path.join(STATE, ".env" if upper else "config.yaml")
+    if not os.path.isfile(path):
+        return 0
+    prefix = key + ("=" if upper else ":")
+    with open(path) as handle:
+        lines = handle.readlines()
+    kept = [line for line in lines if not line.startswith(prefix)]
+    if kept != lines:
+        with open(path, "w") as handle:
+            handle.writelines(kept)
+    return 0
+
+
+def cmd_gateway(args):
+    p = parser("gateway")
+    sub = p.add_subparsers(dest="gateway_command")
+    status = sub.add_parser("status", add_help=False)
+    flag(status, "--deep")
+    flag(status, "-l", "--full")
+    flag(status, "--system")
+    start = sub.add_parser("start", add_help=False)
+    flag(start, "--system"); flag(start, "--all"); flag(start, "--force")
+    stop = sub.add_parser("stop", add_help=False)
+    flag(stop, "--system"); flag(stop, "--all")
+    stop.add_argument("-y", "--yes", "--interrupt", dest="interrupt", action="store_true")
+    restart = sub.add_parser("restart", add_help=False)
+    flag(restart, "--system"); flag(restart, "--all"); flag(restart, "--force"); flag(restart, "--detach")
+    restart.add_argument("-y", "--yes", "--interrupt", dest="interrupt", action="store_true")
+    ensure = sub.add_parser("ensure", add_help=False)
+    flag(ensure, "--json")
+    ensure.add_argument("--timeout", default="60")
+    run = sub.add_parser("run", add_help=False)
+    for name in ("-v", "-q", "--replace", "--force", "--no-supervise", "--external-supervisor", "--accept-hooks"):
+        flag(run, name)
+    options = p.parse_args(args)
+    command = options.gateway_command
+    if command == "status":
+        log(["gateway", "status"] + args[1:])
+        if gateway_running():
+            sys.stdout.write("✓ Gateway is running (PID: 1)\n  (Running manually, not as a system service)\n")
+        else:
+            sys.stdout.write("✗ Gateway is not running\n")
+        return 0
+    if command == "restart":
+        if os.environ.get("HSTACK_SHIM_LIVE_SESSIONS") == "1" and not options.interrupt:
+            log(["gateway", "restart"] + args[1:])
+            sys.stdout.write("Refusing to restart the gateway: 2 live session(s) would be interrupted.\n")
+            return 1
+        rc = stub("gateway", "restart")
+        if rc == 0 and os.environ.get("HSTACK_SHIM_RESTART_NOOP") != "1":
+            bump_instance()
+        return rc
+    if command == "start":
+        rc = stub("gateway", "restart")
+        if rc == 0:
+            bump_instance()
+        return rc
+    if command == "stop":
+        return stub("gateway", "stop")
+    if command == "ensure":
+        try:
+            seconds = float(options.timeout)
+        except ValueError:
+            return 2
+        if not gateway_running():
+            rc = stub("gateway", "restart")
+            if rc != 0:
+                return rc
+            bump_instance()
+        else:
+            log(["gateway", "ensure"] + args[1:])
+        number = max(instance(), 1)
+        sys.stdout.write(json.dumps({
+            "state": "ready", "evidence": "test-double", "client_code_sha": "test-double",
+            "endpoint": {"instance_id": "shim-instance-%d" % number, "profile_id": STATE, "supervisor": "test-double"},
+        }, separators=(",", ":"), sort_keys=True) + "\n")
+        return 0 if seconds >= 0 else 2
+    return 99  # `gateway run` is the foreground gateway; not modelled
+
+
+def cmd_logs(args):
+    p = parser("logs")
+    p.add_argument("log_name", nargs="?", default="agent")
+    p.add_argument("-n", "--lines", type=int, default=50)
+    flag(p, "-f", "--follow")
+    p.add_argument("--level"); p.add_argument("--session"); p.add_argument("--since"); p.add_argument("--component")
+    options = p.parse_args(args)
+    if options.since is not None and not re.fullmatch(r"[0-9]+[smhd]", options.since):
+        sys.stderr.write("hermes logs: invalid --since value\n")
+        return 2
+    if options.log_name != "gateway" or options.follow:
+        return 99
+    log(["logs"] + args)
+    if gateway_running():
+        sys.stdout.write("[gateway] telegram connected (long-poll)\n")
+    else:
+        sys.stdout.write("[gateway] not started\n")
+    return 0
+
+
+def cmd_send(args):
+    p = parser("send")
+    p.add_argument("-t", "--to", default=None)
+    p.add_argument("message", nargs="?", default=None)
+    p.add_argument("-f", "--file", default=None)
+    p.add_argument("-s", "--subject", default=None)
+    p.add_argument("--mention", dest="mentions", action="append", default=None)
+    flag(p, "-l", "--list"); flag(p, "-q", "--quiet"); flag(p, "--json")
+    options = p.parse_args(args)
+    if options.to is None and not options.list:
+        sys.stderr.write("hermes send: --to is required\n")
+        return 2
+    log(["send"] + args)
+    if not options.quiet:
+        sys.stdout.write("sent (test double)\n")
+    return 0
+
+
+def cmd_pairing(args):
+    p = parser("pairing")
+    sub = p.add_subparsers(dest="pairing_action")
+    sub.add_parser("list", add_help=False)
+    approve = sub.add_parser("approve", add_help=False)
+    approve.add_argument("platform"); approve.add_argument("code")
+    revoke = sub.add_parser("revoke", add_help=False)
+    revoke.add_argument("platform"); revoke.add_argument("user_id")
+    sub.add_parser("clear-pending", add_help=False)
+    options = p.parse_args(args)
+    if options.pairing_action is None:
+        return 2
+    log(["pairing"] + args)
+    if options.pairing_action == "list":
+        sys.stdout.write("No pending or approved pairing requests.\n")
+    return 0
+
+
+COMMANDS = {"--version": cmd_version, "config": cmd_config, "gateway": cmd_gateway, "logs": cmd_logs,
+            "send": cmd_send, "pairing": cmd_pairing}
+
+
+def main(argv):
+    if argv[:1] in (["-p"], ["--profile"]):
+        if len(argv) < 3 or argv[1] != "default":
+            return 99
+        argv = argv[2:]
+    elif argv[:1] == ["--profile=default"]:
+        argv = argv[1:]
+    elif argv[:1] and argv[0].startswith("--profile="):
+        return 99
+    if not argv:
+        return 99
+    handler = COMMANDS.get(argv[0])
+    if handler is None:
+        return 99
+    return handler(argv if argv[0] == "--version" else argv[1:])
+
+
+if __name__ == "__main__":
+    try:
+        code = main(sys.argv[1:])
+    except SystemExit as error:  # argparse usage errors
+        code = error.code if isinstance(error.code, int) else 2
+    sys.stdout.flush()
+    sys.exit(code)

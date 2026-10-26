@@ -30,6 +30,7 @@ import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 API_ORIGIN = "https://api.github.com"
 API_VERSION = "2026-03-10"
@@ -84,7 +85,7 @@ def iso(value):
     return value.astimezone(timezone.utc).isoformat(timespec="microseconds" if value.microsecond else "seconds").replace("+00:00", "Z")
 
 
-def validate_config(value, now=None):
+def validate_config(value, now=None, *, calendar_timezone=None):
     if not isinstance(value, dict) or set(value) - {"schema_version", "repositories", "window_hours", "start", "end", "workflow"}:
         raise BriefError("invalid_config_fields")
     if "workflow" in value and (not isinstance(value["workflow"], str) or value["workflow"] not in WORKFLOWS):
@@ -111,7 +112,19 @@ def validate_config(value, now=None):
     else:
         end = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).replace(microsecond=0)
         start = end - timedelta(hours=hours)
-    if not timedelta(0) < end - start <= timedelta(days=7):
+    interval = end - start
+    if calendar_timezone is not None and interval > timedelta(days=7):
+        # Internal scheduled-workflow seam, never a user-supplied collector field.
+        # Seven local days can span 169 elapsed hours at autumn DST. Preserve the
+        # calendar bound as well as an absolute bound for offset transitions.
+        try:
+            zone = ZoneInfo(calendar_timezone)
+        except (ValueError, TypeError, ZoneInfoNotFoundError):
+            raise BriefError("invalid_window_range") from None
+        interval = end.astimezone(zone).replace(tzinfo=None) - start.astimezone(zone).replace(tzinfo=None)
+        if not timedelta(0) < end - start <= timedelta(days=8):
+            raise BriefError("invalid_window_range")
+    if not timedelta(0) < interval <= timedelta(days=7):
         raise BriefError("invalid_window_range")
     result = {"schema_version": 1, "repositories": repositories, "start": iso(start), "end": iso(end)}
     # Do not change legacy normalized bytes/config hashes merely by upgrading.
@@ -157,6 +170,25 @@ class GitHubClient:
         client.origin = origin
         return client
 
+    def _read_body(self, response):
+        """Read at most MAX_RESPONSE_BYTES, checking the total deadline between reads.
+
+        The socket timeout is per operation, so a server that trickles one byte at a time never trips it; read1
+        returns after one underlying read, which lets the clock be checked between chunks. A single stalled read
+        can still overrun by at most the socket timeout (10 s).
+        """
+        chunks, size = [], 0
+        while True:
+            if self.deadline - self.clock() <= 0:
+                raise BriefError("collection_deadline")
+            chunk = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - size))
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > MAX_RESPONSE_BYTES:
+                raise BriefError("response_too_large")
+
     def get(self, endpoint, params):
         if not re.fullmatch(r"/repos/" + REPOSITORY.pattern[:-2] + r"/(?:commits|issues|pulls|releases)", endpoint):
             raise BriefError("invalid_endpoint")
@@ -171,9 +203,7 @@ class GitHubClient:
                 headers["Authorization"] = "Bearer " + self.token
             try:
                 with self.opener.open(Request(url, headers=headers, method="GET"), timeout=min(10, remaining)) as response:
-                    raw = response.read(MAX_RESPONSE_BYTES + 1)
-                    if len(raw) > MAX_RESPONSE_BYTES:
-                        raise BriefError("response_too_large")
+                    raw = self._read_body(response)
                     if response.status != 200:
                         raise BriefError("unexpected_http_status")
                     result = parse_json(raw)
@@ -219,6 +249,10 @@ def fact(repository, kind, item, secrets=()):
         if not isinstance(committer, dict):
             raise BriefError("malformed_response")
         date, title = committer.get("date"), commit.get("message")
+        if isinstance(title, str):
+            # A commit's title is its subject line; the body and trailers (Signed-off-by, ...) are not report text.
+            lines = title.lstrip().splitlines()
+            title = lines[0] if lines else ""
         identity, url, state = sha, "https://github.com/{}/commit/{}".format(repository, sha), None
     else:
         number, state = item.get("number"), item.get("state")

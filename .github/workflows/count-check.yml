@@ -18,9 +18,9 @@ jobs:
       - name: Badge counts match the skills/ directory
         run: |
           set -euo pipefail
-          actual_skills=$(ls -d skills/*/SKILL.md | wc -l)
-          actual_integrations=$(ls -d skills/integration-*/SKILL.md | wc -l)
-          actual_platforms=$(ls -d skills/platform-*/SKILL.md | wc -l)
+          actual_skills=$(ls -d skills/*/SKILL.md | wc -l | tr -d '[:space:]')
+          actual_integrations=$(ls -d skills/integration-*/SKILL.md | wc -l | tr -d '[:space:]')
+          actual_platforms=$(ls -d skills/platform-*/SKILL.md | wc -l | tr -d '[:space:]')
 
           # README badge label is "superpowers-N" (renamed from "skills-N"). The
           # alternation keeps this guard working if either label is in use.

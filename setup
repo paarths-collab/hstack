@@ -285,7 +285,8 @@ hs_gen_mdc() {
   echo "---"
   if [ -n "$sig" ]; then echo "<!-- hstack-managed sig=$sig -->"; fi
   echo
-  awk 'BEGIN{n=0} /^---$/{n++; next} n>=2{print}' "$src"
+  # drop only the frontmatter block (first two fence lines); later "---" lines are body
+  awk 'n < 2 && /^---[[:space:]]*$/ { n++; next } n >= 2 { print }' "$src"
 }
 
 # Cursor .mdc rule. Written through a temp file onto a fresh path, never through an
@@ -356,9 +357,13 @@ One command to deploy and operate a self-hosted Hermes Agent. Run /hermes-deploy
 end-to-end setup. Other commands:
 - Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /hermes-soul /hermes-home /hermes-cron
 - Platforms: /platform-telegram /platform-discord /platform-whatsapp /platform-slack /platform-mattermost
+  /platform-teams /platform-google-chat /platform-signal
 - Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup
-Always prefer the absolute hermes path (~/.local/bin/hermes); pin Hermes v0.15.2; enforce
-allowlists and keep secrets in .env with chmod 600.
+Always prefer the absolute hermes path (~/.local/bin/hermes); enforce allowlists and keep
+secrets in .env with chmod 600.
+Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Use the native catalog/MCP or installed skill route documented for each integration. Reload with
+/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"
 
 # >>> hstack-instruction-block (identical in setup, setup-codex, setup-gemini, setup-openclaw;

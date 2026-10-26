@@ -29,3 +29,12 @@ id = "generic-api-key"
   regexTarget = "secret"
   paths = ['''(^|/)tests/installer/fixtures/tiers\.expected$''']
   regexes = ['''^--tier=observability$''']
+
+[[rules]]
+id = "discord-client-id"
+  [[rules.allowlists]]
+  description = "Synthetic Discord application ID in isolated skill fixtures"
+  condition = "AND"
+  regexTarget = "secret"
+  paths = ['''(^|/)tests/skills/(hermes-home|platform-chat)\.test\.mjs$''']
+  regexes = ['''^123456789012345678$''']

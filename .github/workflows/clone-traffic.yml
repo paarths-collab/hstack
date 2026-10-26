@@ -25,20 +25,30 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      # Metrics commits live on the metrics-data branch, NOT main — a daily
+      # Metrics commits live on the metrics-data branch, NOT main - a daily
       # bot commit on main buries human work and makes the repo look
-      # machine-run. The branch is created from main on first run.
-      - name: Switch to metrics-data branch
+      # machine-run. This job stays on the main checkout, so the script that runs is
+      # always main's current one (a long-lived metrics-data branch never pins an old
+      # copy of it); the history file is read from and written to a separate worktree
+      # of metrics-data. The branch is created from main on the first run.
+      - name: Prepare metrics-data worktree
         run: |
           git config user.name "hstack-metrics[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git checkout metrics-data 2>/dev/null || git checkout -b metrics-data
+          if git rev-parse --verify --quiet refs/remotes/origin/metrics-data >/dev/null; then
+            git worktree add -B metrics-data "$RUNNER_TEMP/metrics-data" origin/metrics-data
+          else
+            git worktree add -b metrics-data "$RUNNER_TEMP/metrics-data" HEAD
+          fi
       - name: Fetch + append clone traffic
         env:
           TRAFFIC_TOKEN: ${{ secrets.TRAFFIC_TOKEN }}
           REPO: ${{ github.repository }}
+          METRICS_DIR: ${{ runner.temp }}/metrics-data/metrics
+        # exits 1 without TRAFFIC_TOKEN: a missing secret must show up as a failed run
         run: node metrics/update-clone-traffic.mjs
       - name: Commit if changed
+        working-directory: ${{ runner.temp }}/metrics-data
         run: |
           git add metrics/clone-traffic.json metrics/clone-traffic.svg
           git diff --staged --quiet || git commit -m "chore(metrics): update clone traffic [skip ci]"

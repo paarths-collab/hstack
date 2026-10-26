@@ -47,6 +47,41 @@ ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
 SKILL_NAME=<skill-name>
 # Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
 remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
 # snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
 # The snapshot dir doubles as the "run in progress" marker that rollback looks for.
@@ -93,14 +128,15 @@ t=""
 REMOTE
 }
 # rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
-# fails puts the previous working value back), then reload the gateway.
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
 set -e
 trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
 d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
 [ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
-[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 0; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
 # Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
 [ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
   || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
@@ -131,23 +167,14 @@ for f in .env config.yaml; do
   fi
 done
 [ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
-hermes -p default gateway stop
-sleep 2
-hermes -p default gateway ensure --json --timeout 60 >/dev/null
-sleep 3
-status_rc=0
-st=$(hermes -p default gateway status 2>&1) || status_rc=$?
-if [ "$status_rc" != 0 ] || printf '%s' "$st" | grep -qiE 'not running|not active|inactive|stopped|dead|failed' \
-   || ! printf '%s' "$st" | grep -qiE 'running|active|started|online'; then
-  echo "rollback: files restored, but the gateway did NOT come back — active snapshot retained; inspect the gateway and retry rollback after resolving the fault"
-  exit 1
-fi
-rm -rf "$d.prev"
-[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
-mv "$d" "$d.prev"
-[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
-echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+exit 0
 REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
 }
 
 # finish: mark the run successful; keep the snapshot as .prev for a manual undo.
@@ -179,31 +206,44 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-This candidate lifecycle recipe assumes the exclusive default profile and its one host gateway. Inspect other profiles and live work first: the current gateway can serve multiple profiles, so stop/start is not isolated to one bot. Do not use `--force`, `--all` or `--yes` to evade a refusal. Named-profile and shared-host deployment remain outside this recipe.
+**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
+(source-verified, not live-verified):
 
-
-**Tagged native gateway lifecycle.** v0.22.5 supports `gateway stop` and
-`gateway ensure --json --timeout 60`; `gateway run` is foreground and has no
-`--daemon` flag. Parser checks do not prove target runtime readiness. Connector registration syntax in this legacy recipe remains separately unverified; prefer native connector/MCP setup when supported.
+- `gateway restart` restarts the installed systemd/launchd service, or, with no service, stops the profile's gateway and runs the
+  replacement **in the calling shell**; `--detach` starts it in the background the way `ensure` does, so an ssh call cannot hang
+  (`hermes_cli/gateway.py:5454-5536`, `hermes_cli/gateway_supervised_restart.py:140-151`, `hermes_cli/gateway_runtime_start.py:86-97`).
+- With live sessions it asks y/N on a TTY and **refuses with exit 1 without one**; `-y`/`--yes` interrupts them
+  (`hermes_cli/gateway_lifecycle_guards.py:97-129`, `hermes_cli/subcommands/gateway.py:146-155`). The helper never adds `-y`
+  on its own: set `GW_INTERRUPT=1` only when interrupting live chats is acceptable. Do not use `--force` or `--all` to evade a refusal.
+- `gateway ensure` never installs a service; it starts an installed one or spawns an unmanaged daemon, and exits 0 only when the
+  gateway is ready (5 deadline/starting, 6 draining, 3 incompatible, 4 authorization, 7 conflict)
+  (`hermes_cli/gateway_runtime.py:390-495`, `hermes_cli/gateway_runtime_cli.py:8-37`). `instance_id` is a fresh uuid per gateway process
+  (`gateway/run_runtime.py:144`), which is how `gw_reload` notices a restart that silently did nothing.
+- `gateway status` prints `✗ Gateway is not running` when stopped (exit 0), so its text is never used as a health check.
+- A restarted gateway process loads `~/.hermes/.env` at start (`gateway/run.py:1583-1585`; it is also reloaded per turn outside
+  multiplex mode, `:1588-1600`), so `restart` does re-read `.env`; config.yaml and MCP changes need the reload too.
+- The recipe assumes the exclusive default profile and its one host gateway; named-profile and shared-host deployments are out of scope.
+  The foreground command is `gateway run`; no daemon flag exists on any gateway subcommand.
 
 ---
 
-## Step 1 — verify Hermes is reachable on the VPS
+## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
 
 ```bash
-remote '
+HERMES_BANNER=$(remote '
   set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes -p default --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    docker exec "$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)" hermes -p default --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first. Nothing was written."; exit 1; }
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
 ```
 
-Expected: a version string like `0.15.x` or `0.17.x`.
+Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+source; it has not been run against a live host.
 
 ---
 
@@ -272,9 +312,9 @@ DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
   0. (already passed) credential format + live <vendor> preflight, nothing written yet
   1. Snapshot ~/.hermes/.env and config.yaml to ~/.hermes/.hstack-backup/$SKILL_NAME
   2. Write <SECRET_NAME> (length: ${#<SECRET>}) to ~/.hermes/.env via 'hermes -p default config set', chmod 600
-  3. Register MCP: hermes -p default mcp add <skill-name> --url <URL> --auth ...
-  4. Reload gateway: hermes -p default gateway stop && hermes -p default gateway ensure --json --timeout 60
-  5. Verify in logs: grep "registered.*<skill-name>"
+  3. Register MCP: hermes -p default mcp add <skill-name> --url <URL> --auth header (token reference only)
+  4. Reload gateway: hermes -p default gateway restart --detach, then gateway ensure --json --timeout 60 until ready
+  5. Verify: hermes -p default mcp test <skill-name> (exit 0 = connected)
   6. Smoke test with the value read back from ~/.hermes/.env on the VPS
   Any failure after step 1 restores the snapshot.
 
@@ -296,6 +336,10 @@ printf '%s\n' "$<SECRET>" \
   || { echo "FAIL: could not write <SECRET_NAME>."; rollback; exit 1; }
 ```
 
+For an HTTP MCP server with header auth, `<SECRET_NAME>` is `MCP_<SERVER_NAME>_API_KEY` (name upper-cased, non-alphanumerics to `_`): that is the
+variable Hermes itself reads for the server's `Authorization: Bearer ${…}` header (`hermes_cli/mcp_config.py:305-336`). `config set` routes an
+UPPER_SNAKE name to `.env` and never echoes the value (`hermes_cli/config.py:3417-3440`).
+
 Verify the write (prints a count, never the value):
 
 ```bash
@@ -303,31 +347,26 @@ WROTE=$(remote "grep -c '^<SECRET_NAME>=' ~/.hermes/.env || true")
 [ "$WROTE" = "1" ] || { echo "FAIL: <SECRET_NAME> not written exactly once (found ${WROTE:-0})."; rollback; exit 1; }
 ```
 
-> If your Hermes build has no `config set` subcommand, replace the write above with this
-> (drops any old line, appends the new one with a guaranteed newline, chmod 600):
-> ```bash
-> printf '%s\n' "$<SECRET>" | remote 'IFS= read -r v; umask 077
->   { grep -v "^<SECRET_NAME>=" ~/.hermes/.env 2>/dev/null; printf "<SECRET_NAME>=%s\n" "$v"; } > ~/.hermes/.env.new \
->     && mv ~/.hermes/.env.new ~/.hermes/.env && chmod 600 ~/.hermes/.env' \
->   || { echo "FAIL: could not write <SECRET_NAME>."; rollback; exit 1; }
-> ```
-
 ---
 
 ## Step 6 — register the MCP server (or REST endpoint if no MCP exists)
 
+`hermes mcp add` is interactive: it asks whether the server needs authentication and whether to enable all discovered tools, and
+a closed stdin answers "cancel" to the second question, so the server is silently NOT saved. Answer both on stdin. Because
+`MCP_<SERVER_NAME>_API_KEY` is already in `.env` (Step 5), Hermes skips the token prompt and stores only the
+`Authorization: Bearer ${MCP_<SERVER_NAME>_API_KEY}` reference in `config.yaml` (`hermes_cli/mcp_config.py:545-584,618-722`).
+`mcp add` exits 0 even when it saved nothing, so the result is verified, not assumed.
+
 ```bash
 if [ "${FORCE:-0}" = "1" ]; then remote "hermes -p default mcp remove <skill-name> >/dev/null 2>&1 || true"; fi
-remote "hermes -p default mcp add <skill-name> --url '<MCP_URL>' --auth-header 'Authorization' --auth-scheme 'Bearer' --placeholder-token 'placeholder'" \
+printf 'y\ny\n' | remote "hermes -p default mcp add <skill-name> --url '<MCP_URL>' --auth header" >/dev/null \
   || { echo "FAIL: hermes -p default mcp add."; rollback; exit 1; }
-# Swap the placeholder for the ${VAR} indirection. \$ keeps the braces literal on the
-# remote side — config.yaml must hold the text ${<SECRET_NAME>}, never the secret, and
-# never an unset remote variable expanded to an empty string.
-remote "sed -i 's|placeholder|\${<SECRET_NAME>}|g' ~/.hermes/config.yaml" \
-  || { echo "FAIL: could not set the \${<SECRET_NAME>} indirection."; rollback; exit 1; }
+remote "hermes -p default mcp list | grep -E '^ *<skill-name> .*enabled'" >/dev/null \
+  || { echo "FAIL: <skill-name> is not listed as enabled (add was cancelled or the connection failed)."; rollback; exit 1; }
 ```
 
-Check that the plaintext secret did not land in `config.yaml` (and is still in `.env`):
+Stdio servers use `hermes -p default mcp add <skill-name> --env KEY='${VAR}' --command npx --args -y <package>`; `--args` swallows
+everything after it, so it must be the last option. Check the secret did not land in `config.yaml` (and is still in `.env`):
 
 ```bash
 remote 'v=$(sed -n "s/^<SECRET_NAME>=//p" ~/.hermes/.env | tail -n1); v=${v#\"}; v=${v%\"}
@@ -339,29 +378,28 @@ remote 'v=$(sed -n "s/^<SECRET_NAME>=//p" ~/.hermes/.env | tail -n1); v=${v#\"};
 
 ## Step 7 — reload through the native gateway lifecycle
 
-`gateway restart` does NOT re-read `.env` reliably. Use stop + run.
+`gw_reload` (Step 0) restarts the default-profile gateway and returns only when `gateway ensure` reports a ready gateway with a new
+`instance_id`. A refusal because of live sessions is reported, not overridden; see the lifecycle note in Step 0.
 
 ```bash
-remote "hermes -p default gateway stop" || { echo "FAIL: gateway stop refused; preserving recovery point."; rollback; exit 1; }
-sleep 2
-remote "hermes -p default gateway ensure --json --timeout 60 >/dev/null" || { echo "FAIL: gateway did not start."; rollback; exit 1; }
-sleep 5
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready. Rolling back."; rollback; exit 1; }
 ```
 
 ---
 
-## Step 8 — verify registration in logs (within 30s)
+## Step 8 — verify the connection natively (`mcp test`, within 30s)
+
+`hermes mcp test` connects to the server and lists its tools; its exit code is 0 connected, 1 connection failed, 3 server not in the
+config (`hermes_cli/mcp_config.py:836-880`). Start a new session (or `/reload-mcp`) for running chats to see the tools; the
+gateway reload in Step 7 already gives new sessions a fresh load.
 
 ```bash
-REGISTERED=0
-for i in 1 2 3 4 5 6; do
-  if remote "hermes -p default logs 2>&1 | tail -200" \
-       | grep -qiE "registered .* '<skill-name>'|MCP server.*<skill-name>.*ok"; then
-    REGISTERED=1; echo "OK: <skill-name> registered."; break
-  fi
+CONNECTED=0
+for i in 1 2 3; do
+  if remote "hermes -p default mcp test <skill-name>" >/dev/null 2>&1; then CONNECTED=1; echo "OK: <skill-name> connected."; break; fi
   sleep 5
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: <skill-name> not in logs after 30s."; rollback; exit 1; }
+[ "$CONNECTED" = "1" ] || { echo "FAIL: <skill-name> did not connect within 30s."; rollback; exit 1; }
 ```
 
 ---
@@ -400,10 +438,11 @@ Defined once, in Step 0. It runs automatically (`rollback; exit 1`) on every fai
   so a first-time run leaves nothing behind; a `FORCE=1` re-run gets its previous working
   value back);
 - `.env` is set to `chmod 600`;
-- the snapshot moves to `<skill-name>.prev` and the gateway is reloaded with stop + run, then
-  `hermes -p default gateway status` is checked. If the gateway is not reported running, `rollback` prints
-  `files restored, but the gateway did NOT come back` and exits non-zero: start it by hand
-  (`hermes -p default gateway start`) and check `hermes -p default logs`.
+- the gateway is reloaded with `gw_reload` (restart, then `gateway ensure --json` must report `ready` with a new instance), and only
+  then does the snapshot move to `<skill-name>.prev`. If the gateway does not come back ready, `rollback` prints
+  `files restored, but the gateway did NOT come back`, keeps the snapshot and exits non-zero: look at
+  `hermes -p default gateway status` and `hermes -p default logs gateway`, fix the fault, and run `rollback` again. A restart refused
+  because of live sessions is the same case: retry with `GW_INTERRUPT=1` only if interrupting them is acceptable.
 
 Failures before `snapshot` (format check, live preflight, declined dry run) wrote nothing,
 so there is nothing to roll back.
@@ -431,12 +470,12 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Use `stop` + `run` |
+| 1 | Treating a substring `running` in `gateway status` as healthy, or inventing a daemon flag for the foreground `gateway run` | `✗ Gateway is not running` contains `running`; `gateway run` blocks in the foreground and no daemon flag exists (argparse exit 2) | `gw_reload`/`gw_ready` only (`gateway restart --detach`, then `gateway ensure --json` must exit 0 with `"state":"ready"`) |
 | 2 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes -p default config set` (or the documented `grep -v` + `printf` fallback) |
 | 3 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`; `config.yaml` holds `${VAR}` only |
 | 4 | Injecting the secret with `sed 's/.../'"$VAR"'/'` | Tokens contain `/+=`; and `'\"\$VAR\"'` expands an unset REMOTE variable to an empty string | Never inject the value. Use the remote-literal `\${VAR}` with the `\|` delimiter |
 | 5 | Container vs host confusion | Skill assumed wrong layer | Always check `whoami; hostname` first |
-| 6 | Skipping the verify step | "Silent success" — config written, never picked up | Always wait + grep logs |
+| 6 | Skipping the verify step | "Silent success" — config written, never picked up | `mcp list` must show the server enabled and `mcp test` must exit 0 |
 | 7 | Writing before the live preflight passes | A typo'd or revoked token replaces a working one | Step 3 runs before `snapshot`; failures there write nothing |
 | 8 | Smoke test uses `\$TOKEN` over ssh | The ssh shell never loaded `.env`: empty header, false `401`, rollback of a good token | Read the value from `~/.hermes/.env` on the VPS (Step 9) |
 | 9 | Secret in ssh argv, a URL, or a single-quoted remote string | Leaks into `ps`; breaks on tokens containing `'` | Send it over STDIN (`printf ... \| remote ...`, curl `--config -`) |
@@ -460,7 +499,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 - [ ] Snapshot taken before the first write; no write happened before the live preflight passed
 - [ ] Secret written to `~/.hermes/.env` over stdin, file is `chmod 600`
 - [ ] `config.yaml` holds only `${<SECRET_NAME>}`; secret NOT in `config.yaml` and NOT echoed in chat
-- [ ] MCP registered via `hermes -p default mcp add`; gateway reloaded with stop+run
+- [ ] MCP registered via `hermes -p default mcp add` (listed as enabled); gateway reloaded with `gw_reload` (ready, new instance); `mcp test` exits 0
 - [ ] Logs show `registered N tool(s) for '<skill-name>'` within 30s
 - [ ] Live smoke test (value read back from `~/.hermes/.env`) returned `200`
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml` (a failed `FORCE=1` re-run keeps the old working value)

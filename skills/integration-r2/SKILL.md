@@ -1,54 +1,11 @@
 ---
 name: integration-r2
-description: Connect Cloudflare R2 (S3-compatible object storage, zero egress fees, native to Cloudflare Workers) to a self-hosted Hermes Agent over SSH. Uses S3 API credentials (Access Key ID + Secret) with the R2 endpoint. Stores generated media (DALL-E images, ElevenLabs audio, Firecrawl scrapes), file uploads/downloads from messaging platforms. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, Gemini CLI, and OpenClaw.
+description: Set up r2 on a host-installed Hermes 0.22.5 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
 ---
 
-# /integration-r2 — connect Cloudflare R2 to a remote Hermes (SSH-first)
+# /integration-r2 — connect r2 to Hermes over SSH
 
-You are the engineer connecting Cloudflare R2 (S3-compatible object storage with **zero
-egress fees** — a huge cost win vs S3) to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, OpenClaw, any of them)
-work over SSH as root against the VPS. The user does two things a machine cannot:
-
-1. Create the R2 bucket in Cloudflare Dashboard → R2 → Create bucket.
-2. Mint the R2 API token in Cloudflare Dashboard → R2 → Manage API Tokens → Create
-   token — pick scope (single bucket / all buckets) and permissions (read / write / admin).
-
-Everything else — credential storage, live S3-API verification via bucket-list or head-
-object, gateway reload, live upload smoke test — runs on the VPS via SSH, idempotently
-with a rollback path.
-
-**Honest auth picture (verified 2026-06):** R2 has **no first-party MCP server**. The
-standard integration is the **S3-compatible API** with Access Key ID + Secret Access Key
-using AWS Signature V4. Any S3 tool (aws-cli, boto3, minio-mc, rclone) works with R2 by
-setting the custom endpoint.
-
-Sources:
-- https://developers.cloudflare.com/r2/api/s3/api/
-- https://developers.cloudflare.com/r2/api/s3/tokens/
-
-**Two paths:**
-
-- **Path A (default) — community stdio MCP for S3-compatible storage.** `s3-mcp-server`
-  or `mcp-server-s3` (community) can be pointed at R2 with the custom endpoint. Vet
-  before trusting with write access.
-- **Path B (fallback) — generic HTTPS tool** with the S3 SigV4 dance. If the agent has
-  a generic AWS-signed HTTP tool, point it at the R2 endpoint.
-
-**Why R2 vs S3:** Cloudflare charges **$0 egress**. If your agent generates images/audio
-that users download hundreds of times, S3 egress can dominate the bill. R2 is essentially
-free after the tiny storage fee ($0.015/GB/mo).
-
-**Endpoint format:** R2's S3 endpoint is
-`https://<ACCOUNT_ID>.r2.cloudflarestorage.com` (no region — R2 is single-region-ish per
-bucket location hint). The Account ID is in Cloudflare Dashboard → right sidebar or the
-URL.
-
-**Least-privilege recommendation:** create the API token scoped to **one bucket, one
-permission** (read OR write, not admin). Never grant "admin" or "all buckets" to an
-agent unless you're building a bucket-management agent specifically.
-
----
+> **Compatibility:** source-verified for Hermes **0.22.5**, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
 
 ## Before you start — gather (ask once, in one batch)
 
@@ -61,330 +18,428 @@ agent unless you're building a bucket-management agent specifically.
 | `$R2_SECRET_ACCESS_KEY` | R2 API token Secret Access Key | Same place — shown ONCE on creation |
 | `$R2_BUCKET_NAME` | Bucket name (lowercase alphanumeric + `-`) | R2 → Overview → your bucket |
 | `$R2_ALLOW_WRITES` *(optional)* | `1` if agent needs write access | Defaults to read-only smoke test path |
-| `$WIRE_PATH` *(optional)* | `A` (community stdio MCP) or `B` (generic HTTP tool, default) | B is safer — no third-party MCP in trust path |
 
-Confirm SSH access:
 
-```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+Use one shell session. `DRY_RUN=1` runs the read-only gates and prints the plan, then exits before snapshot or configuration writes. `FORCE=1` permits replacing existing MCP configuration after snapshot; existing native skill directories are always preserved.
 
----
 
-## Step 1 — verify Hermes + aws-cli on the VPS (for pre-flight)
+## Step 0 — shared remote, lifecycle and recovery helpers
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    HERMES="$(command -v hermes)"
-  elif [ -x "$HOME/.local/bin/hermes" ]; then
-    HERMES="$HOME/.local/bin/hermes"
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    HERMES="docker exec $AGENT hermes"
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-r2
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
+
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
   else
-    echo "FAIL: hermes not found on host or in container"; exit 1
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-  echo "Using: $HERMES"
-  $HERMES --version
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+done
 
-# aws-cli is highly recommended for pre-flight + smoke testing
-ssh "$VPS_USER@$VPS_IP" "command -v aws >/dev/null 2>&1" \
-  || echo "WARN: aws-cli not on VPS PATH. Install: pip install awscli. Some smoke tests will fall back to Python."
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^R2_(ACCOUNT_ID|ACCESS_KEY_ID|SECRET_ACCESS_KEY|BUCKET_NAME)=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if [ "$COUNT" = "4" ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "R2 already wired (all 4 vars present). Set FORCE=1 to rewire."; exit 0
-fi
-```
-
----
-
-## Step 3 — HARD GATE (formats + live head-bucket verify)
-
-```bash
-# Account ID: 32-char hex
-printf '%s' "$R2_ACCOUNT_ID" | grep -qE '^[a-f0-9]{32}$' \
-  || { echo "ABORT: R2_ACCOUNT_ID must be 32-char lowercase hex (Cloudflare Account ID)."; exit 1; }
-
-# Access Key ID: typically 32 hex chars
-printf '%s' "$R2_ACCESS_KEY_ID" | grep -qE '^[a-f0-9]{32}$' \
-  || { echo "ABORT: R2_ACCESS_KEY_ID must be 32-char lowercase hex."; exit 1; }
-
-# Secret Access Key: base64-like, longer
-[ "${#R2_SECRET_ACCESS_KEY}" -ge 40 ] \
-  || { echo "ABORT: R2_SECRET_ACCESS_KEY looks too short (<40 chars)."; exit 1; }
-
-# Bucket name: lowercase alphanumeric + dashes, 3-63 chars
-printf '%s' "$R2_BUCKET_NAME" | grep -qE '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$' \
-  || { echo "ABORT: R2_BUCKET_NAME must be lowercase alphanumeric + dashes, 3-63 chars."; exit 1; }
-
-# Live head-bucket via aws-cli against R2 endpoint
-ENDPOINT="https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com"
-
-if ssh "$VPS_USER@$VPS_IP" "command -v aws >/dev/null 2>&1"; then
-  LIVE=$(ssh "$VPS_USER@$VPS_IP" "
-    AWS_ACCESS_KEY_ID='$R2_ACCESS_KEY_ID' \
-    AWS_SECRET_ACCESS_KEY='$R2_SECRET_ACCESS_KEY' \
-    aws s3api head-bucket --bucket '$R2_BUCKET_NAME' --endpoint-url '$ENDPOINT' 2>&1
-  " | head -3)
-  case "$LIVE" in
-    "") echo "R2 bucket '$R2_BUCKET_NAME' reachable at $ENDPOINT." ;;
-    *"403"*|*"AccessDenied"*|*"Forbidden"*) echo "ABORT: 403 — credentials rejected or wrong scope."; exit 1 ;;
-    *"404"*|*"NoSuchBucket"*|*"Not Found"*) echo "ABORT: 404 — bucket '$R2_BUCKET_NAME' not found."; exit 1 ;;
-    *) echo "ABORT: head-bucket failed: $LIVE"; exit 1 ;;
-  esac
-else
-  # Python fallback using boto3
-  LIVE=$(ssh "$VPS_USER@$VPS_IP" "python3 -c \"
-import sys
-try:
-  import boto3
-except ImportError:
-  print('NO_BOTO3'); sys.exit(0)
-try:
-  s3 = boto3.client('s3',
-    endpoint_url='$ENDPOINT',
-    aws_access_key_id='$R2_ACCESS_KEY_ID',
-    aws_secret_access_key='$R2_SECRET_ACCESS_KEY',
-    region_name='auto')
-  s3.head_bucket(Bucket='$R2_BUCKET_NAME')
-  print('OK')
-except Exception as e:
-  print(f'ERROR: {e}'); sys.exit(1)
-\" 2>&1")
-  case "$LIVE" in
-    OK) echo "R2 bucket reachable (via boto3)." ;;
-    NO_BOTO3) echo "WARN: no aws-cli AND no boto3 — cannot pre-verify. Proceeding without live check." ;;
-    *) echo "ABORT: $LIVE"; exit 1 ;;
-  esac
-fi
-```
-
----
-
-## Step 4 — DRY RUN preview (always show before writing)
-
-```bash
-PATH_CHOSEN=${WIRE_PATH:-B}
-WRITE_MODE=$([ "${R2_ALLOW_WRITES:-0}" = "1" ] && echo "READ-WRITE (agent can PUT/DELETE)" || echo "READ-ONLY (default)")
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  Path: $PATH_CHOSEN
-  Access mode: $WRITE_MODE
-
-  Always:
-    1. Write R2_ACCOUNT_ID ($R2_ACCOUNT_ID) via 'hermes config set'
-    2. Write R2_ACCESS_KEY_ID ($R2_ACCESS_KEY_ID)
-    3. Write R2_SECRET_ACCESS_KEY (length ${#R2_SECRET_ACCESS_KEY}) — NEVER plaintext-logged
-    4. Write R2_BUCKET_NAME ($R2_BUCKET_NAME)
-    5. Write R2_ENDPOINT_URL (https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com) for tool convenience
-    6. chmod 600 ~/.hermes/.env
-
-  Path A (community stdio MCP — opt-in):
-    7. Register MCP (community — vet before trusting write scope)
-    8. Reload gateway: stop + run
-
-  Path B (generic HTTP/S3 tool — default):
-    7. No MCP registered. Generic tool uses R2_* env vars with SigV4 signing
-    8. Reload gateway: stop + run
-
-  Smoke test: HEAD bucket via aws-cli or boto3 — expect success
-  Optional smoke (writes only): PUT + DELETE a test object
-
-Secrets NEVER printed in plaintext beyond a length.
-EOF
-```
-
-Wait for confirmation (or `AUTO_APPROVE=1`).
-
----
-
-## Step 5 — write secrets (chmod 600)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes config set R2_ACCOUNT_ID '$R2_ACCOUNT_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set R2_ACCESS_KEY_ID '$R2_ACCESS_KEY_ID'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set R2_SECRET_ACCESS_KEY '$R2_SECRET_ACCESS_KEY'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set R2_BUCKET_NAME '$R2_BUCKET_NAME'"
-ssh "$VPS_USER@$VPS_IP" "hermes config set R2_ENDPOINT_URL 'https://$R2_ACCOUNT_ID.r2.cloudflarestorage.com'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-
-COUNT=$(ssh "$VPS_USER@$VPS_IP" "grep -cE '^R2_(ACCOUNT_ID|ACCESS_KEY_ID|SECRET_ACCESS_KEY|BUCKET_NAME|ENDPOINT_URL)=' ~/.hermes/.env" || echo 0)
-[ "$COUNT" = "5" ] || { echo "FAIL: env did not all land (got $COUNT, need 5). Rolling back."; rollback; exit 1; }
-```
-
-Never `echo >>`. Never put credentials in `config.yaml`.
-
----
-
-## Step 6 — wire path
-
-### Path B (generic S3 tool — default, no third-party MCP)
-
-Generic HTTP/S3 tool reads env and uses:
-
-- **Endpoint URL:** `${R2_ENDPOINT_URL}` (or `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`)
-- **Region:** `auto` (R2 requires SigV4 with region `auto`)
-- **Auth:** SigV4 with `${R2_ACCESS_KEY_ID}` + `${R2_SECRET_ACCESS_KEY}`
-- **Bucket:** `${R2_BUCKET_NAME}`
-
-Common S3 operations (via aws-cli):
-```
-aws s3 ls s3://${R2_BUCKET_NAME}/ --endpoint-url ${R2_ENDPOINT_URL}
-aws s3 cp file.png s3://${R2_BUCKET_NAME}/file.png --endpoint-url ${R2_ENDPOINT_URL}
-aws s3 rm s3://${R2_BUCKET_NAME}/file.png --endpoint-url ${R2_ENDPOINT_URL}
-```
-
-Or via boto3:
-```
-s3 = boto3.client('s3', endpoint_url=R2_ENDPOINT_URL,
-                  aws_access_key_id=R2_ACCESS_KEY_ID,
-                  aws_secret_access_key=R2_SECRET_ACCESS_KEY,
-                  region_name='auto')
-s3.list_objects_v2(Bucket=R2_BUCKET_NAME)
-```
-
-### Path A — community stdio MCP (opt-in)
-
-Community MCPs for S3-compatible storage exist (search `mcp-server-s3` on npm/GitHub).
-Vet source before use. Register with the R2 endpoint override in env:
-
-```bash
-if [ "${WIRE_PATH:-B}" = "A" ]; then
-  ssh "$VPS_USER@$VPS_IP" "command -v uvx >/dev/null 2>&1 || command -v npx >/dev/null 2>&1" \
-    || { echo "ABORT: Path A requires uvx or npx."; exit 1; }
-  echo "Path A note: pin a specific community MCP SHA before running. This skill does NOT auto-register community MCPs to avoid supply-chain risk."
-  echo "If you have a vetted MCP in mind, register it manually with:"
-  echo "  hermes mcp add r2 --command <cmd> --args <args> --env S3_ENDPOINT_URL=\${R2_ENDPOINT_URL},AWS_ACCESS_KEY_ID=\${R2_ACCESS_KEY_ID},AWS_SECRET_ACCESS_KEY=\${R2_SECRET_ACCESS_KEY}"
-fi
-```
-
----
-
-## Step 7 — reload the gateway (stop + run, NOT restart)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 3
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 8 — live smoke test (head-bucket + optional PUT/DELETE round-trip)
-
-```bash
-# Read smoke — always
-SMOKE=$(ssh "$VPS_USER@$VPS_IP" "
-  if command -v aws >/dev/null 2>&1; then
-    AWS_ACCESS_KEY_ID=\"\$R2_ACCESS_KEY_ID\" \
-    AWS_SECRET_ACCESS_KEY=\"\$R2_SECRET_ACCESS_KEY\" \
-    aws s3api head-bucket --bucket \"\$R2_BUCKET_NAME\" --endpoint-url \"\$R2_ENDPOINT_URL\" 2>&1 | head -1
-  else
-    python3 -c 'import boto3,os; s=boto3.client(\"s3\",endpoint_url=os.environ[\"R2_ENDPOINT_URL\"],aws_access_key_id=os.environ[\"R2_ACCESS_KEY_ID\"],aws_secret_access_key=os.environ[\"R2_SECRET_ACCESS_KEY\"],region_name=\"auto\"); s.head_bucket(Bucket=os.environ[\"R2_BUCKET_NAME\"]); print(\"OK\")' 2>&1 | head -1
-  fi
-")
-case "$SMOKE" in
-  ""|OK) echo "OK: R2 bucket reachable from VPS." ;;
-  *) echo "WARN: unexpected smoke response: $SMOKE" ;;
-esac
-
-# Write smoke — only if ALLOW_WRITES=1
-if [ "${R2_ALLOW_WRITES:-0}" = "1" ]; then
-  KEY="hstack-smoke-$(date +%s).txt"
-  WRITE_SMOKE=$(ssh "$VPS_USER@$VPS_IP" "
-    if command -v aws >/dev/null 2>&1; then
-      echo 'hstack smoke' | AWS_ACCESS_KEY_ID=\"\$R2_ACCESS_KEY_ID\" \
-        AWS_SECRET_ACCESS_KEY=\"\$R2_SECRET_ACCESS_KEY\" \
-        aws s3 cp - s3://\"\$R2_BUCKET_NAME\"/'$KEY' --endpoint-url \"\$R2_ENDPOINT_URL\" 2>&1 | head -1
-      AWS_ACCESS_KEY_ID=\"\$R2_ACCESS_KEY_ID\" \
-      AWS_SECRET_ACCESS_KEY=\"\$R2_SECRET_ACCESS_KEY\" \
-      aws s3 rm s3://\"\$R2_BUCKET_NAME\"/'$KEY' --endpoint-url \"\$R2_ENDPOINT_URL\" 2>&1 | head -1
-      echo OK
-    fi
-  ")
-  case "$WRITE_SMOKE" in
-    *OK) echo "OK: R2 PUT + DELETE round-trip succeeded." ;;
-    *) echo "WARN: write smoke: $WRITE_SMOKE" ;;
-  esac
-fi
-```
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove r2 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "
-    sed -i '/^R2_ACCOUNT_ID=/d;
-            /^R2_ACCESS_KEY_ID=/d;
-            /^R2_SECRET_ACCESS_KEY=/d;
-            /^R2_BUCKET_NAME=/d;
-            /^R2_ENDPOINT_URL=/d' ~/.hermes/.env
-    chmod 600 ~/.hermes/.env
-  "
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. Revoke the R2 API token at Cloudflare Dashboard → R2 → Manage API Tokens if compromised."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
+}
+# Reject line breaks, quote/backslash characters and controls: values also become curl config lines.
+secret_line_ok() {
+  [ -n "$1" ] && printf '%s' "$1" | LC_ALL=C grep -Eq '^[!-~]+$' || return 1
+  case "$1" in *'"'*|*"'"*|*'\'*) return 1 ;; esac
+}
+# No response body or credential is logged. JSON errors on HTTP 200 are failures too.
+api_check() {
+  local reply
+  reply=$(remote 'curl -q -fsS --connect-timeout 10 --max-time 25 --config -' 2>/dev/null) || return 1
+  printf '%s' "$reply" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert not (isinstance(d,dict) and (d.get("errors") or d.get("error") or d.get("success") is False))' 2>/dev/null
+}
+# Extra native-skill artifacts are owned separately; canonical rollback still restores env/config bytes.
+restore_native_skill() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+p="$HOME/.hermes/skills/$SKILL_NAME-runtime"
+[ -f "$d/native-created" ] || exit 0
+[ "$(cat "$d/native-created")" = "$SKILL_NAME-runtime" ] || exit 1
+if [ -e "$p/SKILL.md" ] || [ -L "$p/SKILL.md" ]; then
+  [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ] && [ -f "$d/native.cksum" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ] || { echo "native skill changed; keep the active snapshot and inspect it" >&2; exit 1; }
+  # Never recursively delete this directory: a concurrent user file remains intact.
+  rm "$p/SKILL.md"
+fi
+[ ! -d "$p" ] || rmdir "$p"
+rm "$d/native-created" "$d/native.cksum"
+REMOTE
+}
+fail_change() {
+  echo "FAIL: $1. Restoring the previous configuration."
+  restore_native_skill || { echo "Native skill restoration failed; active recovery point retained." >&2; exit 1; }
+  rollback || { echo "Rollback incomplete; active recovery point retained." >&2; exit 1; }
+  exit 1
+}
+
+```
+
+## Step 1 — verify SSH, Hermes version and host prerequisites
+
+```bash
+remote 'whoami; hostname' || { echo "ABORT: SSH failed. Nothing was written."; exit 1; }
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 || exit 1
+  hermes -p default --version
+') || { echo "ABORT: install Hermes on the VPS host first; container-only installations are unsupported. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure supports Hermes 0.22.5 only. Nothing was written."; exit 1;
+}
+remote 'command -v curl >/dev/null && command -v python3 >/dev/null' || {
+  echo "ABORT: install curl and python3 on the host first. Nothing was written."; exit 1;
+}
+
+```
+
+## Step 2 — check ownership and an existing healthy integration
+
+```bash
+# An unchanged runtime file from the previous successful run is safe to reuse.
+if [ "${FORCE:-0}" != 1 ] && remote 'bash -s' <<'REMOTE'
+set -e
+p="$HOME/.hermes/skills/integration-r2-runtime"
+d="$HOME/.hermes/.hstack-backup/integration-r2.prev"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] && [ ! -L "$p/SKILL.md" ]
+[ -f "$d/.complete" ] && [ -f "$d/native.cksum" ] && [ -f "$p/SKILL.md" ] || exit 1
+[ "$(cksum < "$p/SKILL.md")" = "$(cat "$d/native.cksum")" ]
+hermes -p default skills list --source local --enabled | grep -F -- 'integration-r2-runtime' >/dev/null
+REMOTE
+then
+  echo "Managed native skill is unchanged and discoverable. Nothing was written."
+  exit 0
+fi
+remote 'test ! -L "$HOME/.hermes/skills"' || { echo "ABORT: skills directory is a symlink; preserved. Nothing was written."; exit 1; }
+remote 'test ! -e "$HOME/.hermes/skills/integration-r2-runtime" && test ! -L "$HOME/.hermes/skills/integration-r2-runtime"' || {
+  echo "ABORT: existing native skill preserved; inspect it rather than replacing it. Nothing was written."; exit 1;
 }
 ```
 
+## Step 3 — HARD GATE: read-only credential and consent checks
+
+All vendor calls in this step run from the VPS. Secrets travel over SSH stdin, not SSH
+arguments. A failed gate stops before `snapshot` and before any configuration write.
+The calls authenticate or read data; none sends a message, changes vendor state or
+performs a paid model request.
+
+```bash
+secret_line_ok "${R2_SECRET_ACCESS_KEY:-}" || { echo "ABORT: missing or unsafe R2_SECRET_ACCESS_KEY. Nothing was written."; exit 1; }
+secret_line_ok "${R2_ACCOUNT_ID:-}" || { echo "ABORT: missing or unsafe R2_ACCOUNT_ID. Nothing was written."; exit 1; }
+secret_line_ok "${R2_ACCESS_KEY_ID:-}" || { echo "ABORT: missing or unsafe R2_ACCESS_KEY_ID. Nothing was written."; exit 1; }
+secret_line_ok "${R2_BUCKET_NAME:-}" || { echo "ABORT: missing or unsafe R2_BUCKET_NAME. Nothing was written."; exit 1; }
+printf '%s' "$R2_ACCOUNT_ID" | grep -Eq '^[a-fA-F0-9]{32}$' && printf '%s' "$R2_BUCKET_NAME" | grep -Eq '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$' || { echo "ABORT: invalid account or bucket. Nothing was written."; exit 1; }
+remote 'command -v aws >/dev/null' || { echo "ABORT: install AWS CLI on the VPS first. Nothing was written."; exit 1; }
+printf '%s\n' "$R2_ACCESS_KEY_ID" "$R2_SECRET_ACCESS_KEY" "$R2_ACCOUNT_ID" "$R2_BUCKET_NAME" | remote '
+  IFS= read -r AWS_ACCESS_KEY_ID && IFS= read -r AWS_SECRET_ACCESS_KEY && IFS= read -r account && IFS= read -r bucket || exit 1
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  AWS_EC2_METADATA_DISABLED=true aws --cli-connect-timeout 10 --cli-read-timeout 20 s3api head-bucket --bucket "$bucket" --endpoint-url "https://$account.r2.cloudflarestorage.com" --region auto >/dev/null 2>&1
+' || { echo "ABORT: read-only R2 head-bucket failed. Nothing was written."; exit 1; }
+```
+
+## Step 4 — review the dry run before the first write
+
+```bash
+printf 'DRY RUN: configure %s on %s@%s; credential length=%s (value hidden).\n' "$SKILL_NAME" "$VPS_USER" "$VPS_IP" "${#R2_SECRET_ACCESS_KEY}"
+printf '%s\n' 'Snapshot env/config; write private values through stdin; register native MCP or publish a native skill; verify discovery; restart and require a new ready gateway instance; retire snapshot.'
+[ "${DRY_RUN:-0}" != 1 ] || exit 0
+```
+
+Review the concrete plan. Continue under the user's existing setup authorization. Native
+OAuth may require the user to approve the vendor login in a browser; never fabricate
+that approval. Catalog tool exclusions remain those supplied by the pinned Hermes
+manifest. Do not replace OAuth with a short-lived bearer or invent a refresh cron.
+
+## Step 5 — snapshot and write private configuration
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+printf '%s\n' "$R2_ACCOUNT_ID" | remote 'IFS= read -r v && hermes -p default config set R2_ACCOUNT_ID "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing R2_ACCOUNT_ID failed"
+printf '%s\n' "$R2_ACCESS_KEY_ID" | remote 'IFS= read -r v && hermes -p default config set R2_ACCESS_KEY_ID "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing R2_ACCESS_KEY_ID failed"
+printf '%s\n' "$R2_SECRET_ACCESS_KEY" | remote 'IFS= read -r v && hermes -p default config set R2_SECRET_ACCESS_KEY "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing R2_SECRET_ACCESS_KEY failed"
+printf '%s\n' "$R2_BUCKET_NAME" | remote 'IFS= read -r v && hermes -p default config set R2_BUCKET_NAME "$v" >/dev/null 2>&1 && chmod 600 "$HOME/.hermes/.env"' || fail_change "writing R2_BUCKET_NAME failed"
+```
+
+Secrets remain in `.env`, mode 600. Any references in `config.yaml` use `${VAR}`
+indirection. Never print a configured secret or use `sed` to inline it into YAML.
+
+## Step 6 — install and verify the integration
+
+```bash
+remote 'bash -s' <<'REMOTE' || fail_change "native skill publication failed"
+set -e
+umask 077
+name=integration-r2
+d="$HOME/.hermes/.hstack-backup/$name"
+p="$HOME/.hermes/skills/$name-runtime"
+[ -f "$d/.complete" ] || exit 1
+[ ! -e "$p" ] && [ ! -L "$p" ] || { echo "Refusing to replace an existing native skill" >&2; exit 1; }
+mkdir -p "$HOME/.hermes/skills"
+t=$(mktemp "$d/native.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'NATIVE_SKILL'
 ---
+name: integration-r2-runtime
+description: Read r2 data using the configured private credentials. Use for r2 requests; require explicit approval before any write or paid action.
+---
+
+# r2 from Hermes
+
+Use the terminal tool on this host. Read credentials privately from ~/.hermes/.env.
+Never paste them into a chat, URL, process arguments or logs. The following code performs
+only a read-only check. Adapt it to the user's requested read using the same vendor host
+and authentication; request approval before POST/PUT/PATCH/DELETE that changes state.
+List existing objects only. Credentials must be bucket-scoped. Uploading or deleting objects requires explicit permission.
+
+~~~bash
+python3 - <<'PYTHON'
+from pathlib import Path
+import os,json,shlex,stat,urllib.request,urllib.parse,base64,subprocess
+p=Path.home()/".hermes"/".env"
+assert p.is_file() and not p.is_symlink() and stat.S_IMODE(p.stat().st_mode)==0o600, "Credentials must be a private regular file (600)"
+e={}
+wanted=['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET_NAME']
+for line in p.read_text().splitlines():
+ if "=" not in line or line.lstrip().startswith("#"): continue
+ key,value=line.split("=",1)
+ if key.startswith("export "): key=key[7:]
+ key=key.strip()
+ if key not in wanted: continue
+ parts=shlex.split(value,comments=False)
+ e[key]=" ".join(parts)
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self,req,fp,code,msg,headers,newurl): return None
+opener=urllib.request.build_opener(NoRedirect())
+def request_json(req):
+ u=urllib.parse.urlsplit(req.full_url)
+ assert not u.username and not u.password and not u.fragment
+ assert u.scheme=="https" or (u.scheme=="http" and u.hostname in ("127.0.0.1","localhost")), "Use HTTPS or loopback HTTP"
+ with opener.open(req,timeout=25) as r:
+  assert r.status==200, "Unexpected vendor status"
+  data=r.read(1048577)
+  assert len(data)<=1048576, "Vendor response exceeds 1 MiB; narrow the read"
+  return json.loads(data)
+for k in ("R2_ACCESS_KEY_ID","R2_SECRET_ACCESS_KEY"): assert e.get(k)
+env={**os.environ,"AWS_ACCESS_KEY_ID":e["R2_ACCESS_KEY_ID"],"AWS_SECRET_ACCESS_KEY":e["R2_SECRET_ACCESS_KEY"],"AWS_EC2_METADATA_DISABLED":"true","AWS_PAGER":""}
+subprocess.run(["aws","--cli-connect-timeout","10","--cli-read-timeout","20","s3api","list-objects-v2","--bucket",e["R2_BUCKET_NAME"],"--max-keys","10","--endpoint-url","https://"+e["R2_ACCOUNT_ID"]+".r2.cloudflarestorage.com","--region","auto"],env=env,check=True)
+PYTHON
+~~~
+
+Do not print access tokens or private configuration when troubleshooting. A live read from the intended account is required before claiming vendor compatibility.
+NATIVE_SKILL
+chmod 600 "$t"
+cksum < "$t" > "$d/native.cksum"
+# Record intent before publication; rollback removes only the matching new file.
+printf '%s\n' "$name-runtime" > "$d/native-created"
+mkdir "$p"
+# Atomic no-clobber publication; a concurrent existing file cannot be overwritten.
+ln "$t" "$p/SKILL.md"
+cmp -s "$t" "$p/SKILL.md"
+chmod 600 "$p/SKILL.md"
+REMOTE
+remote "hermes -p default skills list --source local --enabled | grep -F -- 'integration-r2-runtime'" >/dev/null || fail_change "native skill not discoverable"
+```
+
+Catalog MCPs use Hermes's own OAuth flow, endpoint and curated tool filters. Any custom
+stdio package is executed on the host with the user's permissions; review its published
+package/version before installation. Hermes parser verification establishes argument
+syntax, not third-party package behavior. A native REST skill is installed into Hermes's
+actual `skills/` directory and checked with `skills list`, rather than saved as inert
+API notes. Existing native skill files are preserved. On failure, only the checksummed
+file created by this run is removed; an edited or foreign file stops automatic cleanup.
+
+## Step 7 — restart and require native readiness
+
+```bash
+gw_reload >/dev/null || fail_change "gateway did not restart into a new ready instance"
+```
+
+`gateway ensure --json` must exit 0 and report `"state":"ready"`; pending/draining
+states are retried. The helper captures the old instance even during draining and
+refuses to call the same process a successful reload. With live sessions, restart may
+refuse. Set `GW_INTERRUPT=1` only under the user's explicit permission to interrupt.
+
+## Step 8 — finish and keep recovery evidence
+
+```bash
+finish || fail_change "snapshot retirement failed"
+echo "Setup complete: native discovery and gateway readiness verified; vendor live proof exists only if these checks actually ran on the user's host."
+```
+
+The procedure runs the read-only vendor gate before writing. For an end-to-end user
+acceptance check, ask Hermes to use the newly configured integration to read one visible
+record. Confirm the account/tenant/region is correct. That live result is separate from
+this repository's source/parser and sandbox evidence; do not claim it while authoring.
+
+## Recovery
+
+Before `finish`, call `restore_native_skill` then `rollback` in this same shell to restore
+previous env/config bytes and remove only this run's native skill. A failed restoration
+keeps the active recovery point; repair the fault and retry. After successful `finish`,
+the previous snapshot is private at `.hstack-backup/$SKILL_NAME.prev`. Inspect it before
+manual undo; do not replace a newer active snapshot or remove an edited runtime skill.
+No vendor records are created by setup, so there is no vendor-side smoke-test data to
+clean up. Native OAuth caches are managed by Hermes and are outside the env/config
+snapshot: rollback does not revoke tokens or overwrite an existing OAuth authorization.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Using AWS-region format like `us-east-1` | R2 requires `region=auto`; other values fail SigV4 | Always use `region_name='auto'` in boto3, `AWS_REGION=auto` in env |
-| 2 | Admin-scoped API token | Agent can DELETE ANY bucket, ANY object across ALL buckets | Scope token to ONE bucket, ONE permission (read or write) at mint time |
-| 3 | Confusing R2 API token with Cloudflare Global API Key | Global API Key auths Cloudflare Dashboard; R2 API Token auths S3 | Only use R2-specific tokens; never inline the Global Key |
-| 4 | Bucket name doesn't follow DNS rules | R2 rejects uppercase, underscores, dots in some contexts | Step 3 enforces lowercase alphanumeric + dashes only |
-| 5 | Secret in `config.yaml` | Often checked into git | Only `~/.hermes/.env`, `chmod 600` |
-| 6 | Public bucket exposure | R2 buckets can be exposed publicly; enabled inadvertently | Check bucket → Settings → Public Access; keep private unless explicitly needed |
-| 7 | Custom domain SSL confusion | If you serve R2 via custom domain, SSL is Cloudflare's cert, not the bucket's | Custom domains handled by Cloudflare CDN; don't add cert config here |
-| 8 | Region-locality expectation | R2 has "location hints" (WNAM, ENAM, EEUR, WEUR, APAC) but is otherwise global | Set location hint at bucket creation for latency; can't change later |
-| 9 | Zero egress means unlimited download | True — but PUT operations cost per 1000 (class-A), GET per 1000 (class-B) | Batch small PUTs; use presigned URLs for user downloads |
-| 10 | `gateway restart` instead of `stop`+`run` | Restart doesn't reliably re-read env | Always `stop` + `run` (Step 7) |
-| 11 | `echo >> .env` | Merge risk | Always `hermes config set` (Step 5), or the sed pattern |
-| 12 | sed with `/` delimiter | Secret may contain `/+=` | Always `\|` delimiter |
-| 13 | Container vs host confusion | `hermes` inside container invisible to host SSH | Step 1 detects both |
-| 14 | Community MCP with hardcoded AWS endpoints | Some S3 MCPs assume AWS URL; can't override | Vet by grep for `s3.amazonaws.com` in source; test with R2 endpoint first |
-| 15 | Assuming S3 API 100% compatible | R2 lacks some S3 features (Requester Pays, ACLs) | https://developers.cloudflare.com/r2/api/s3/api/ for the compat matrix |
-
----
+| # | Pitfall | Correct behavior |
+|---|---------|------------------|
+| 1 | Wrong Hermes release or profile | Exact 0.22.5 host/default gate before writes; other installations need a separately reviewed procedure. |
+| 2 | Treating exit 0 from `mcp add`/login as connection proof | Require an enabled entry plus `mcp test`; cancellation and a saved disabled entry do not count. |
+| 3 | Putting secrets into SSH arguments or YAML | Send values as stdin, keep `.env` private and use variable references. |
+| 4 | Using a missing background flag or log substring as health | Use the shared restart/ensure helpers and require a changed instance ID. |
+| 5 | Replacing the previous secret on a failed reconfiguration | Snapshot exact bytes first, then restore both files; never just delete the key. |
+| 6 | Skipping the read-only preflight on a missing dependency | Abort before snapshot; install the documented host prerequisite and rerun. |
+| 7 | Overwriting a hand-authored Hermes skill | Refuse the existing path, preserve it, and remove only a new file with its recorded checksum. |
+| 8 | Confusing source tests with real service evidence | Record actual host/vendor acceptance separately; credentials, browser consent and a server are still required. |
+| 9 | Running write or paid smoke tests | Use only the read-only check; a write or paid request requires explicit task authorization. |
+| 10 | Confusing read-only-looking usernames with access enforcement | Verify server grants/ACLs; scoped accounts remain the real permission boundary. |
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (`0.15.x` / `0.17.x`)
-- [ ] Idempotency check ran (skipped if all 4 vars present, unless `FORCE=1`)
-- [ ] HARD GATE passed: account ID + access key ID are 32-char hex; secret ≥40 chars; bucket name matches DNS rules; live head-bucket returned success
-- [ ] Dry-run shown to user; access mode (read-only vs read-write) called out; user approved (or `AUTO_APPROVE=1`)
-- [ ] All 5 env vars written to `~/.hermes/.env`, `chmod 600`, verified by grep
-- [ ] Path B (default): generic S3 tool documented with `region=auto` + endpoint URL
-- [ ] Path A (opt-in): community MCP registered manually (not auto — supply-chain safety)
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Smoke test: head-bucket from VPS returned success
-- [ ] Write smoke (if `R2_ALLOW_WRITES=1`): PUT + DELETE round-trip succeeded
-- [ ] User confirmed token is bucket-scoped, permission-scoped (not admin/all-buckets)
-- [ ] User informed of zero-egress cost model + class-A vs class-B operation pricing
-- [ ] Public-access setting confirmed by user (kept private unless explicitly needed)
-- [ ] Rollback function defined; token revocation instructions included
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, S3
-SigV4, and R2 endpoint failure modes.
+- [ ] Hermes 0.22.5 host/default release verified before configuration changes.
+- [ ] Read-only vendor credential and consent gates passed from the target host.
+- [ ] Private credentials written over stdin with mode 600; config uses references.
+- [ ] Native catalog/custom MCP is enabled and passes `mcp test`, or the real runtime skill is discoverable.
+- [ ] Gateway restart produced a new ready instance through native JSON readiness.
+- [ ] Previous env/config bytes remain in a verified private snapshot.
+- [ ] User-visible integration read performed on the real host before claiming live success.

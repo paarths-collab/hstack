@@ -13,7 +13,10 @@ You can see it live at **Repo → Insights → Traffic → "Git clones"**. The c
 [`.github/workflows/clone-traffic.yml`](../.github/workflows/clone-traffic.yml) runs once a day,
 calls `GET /repos/paarths-collab/hstack/traffic/clones`, and merges the result into
 [`clone-traffic.json`](clone-traffic.json) (days are keyed by date, so the 14-day overlap dedupes).
-It commits the file back to the repo, so history accrues forever.
+It commits the file to the `metrics-data` branch (not `main`), so history accrues forever. The job runs the
+script from the `main` checkout and points `METRICS_DIR` at a worktree of `metrics-data`, so fixes to the script
+on `main` are always the ones that run. Without the `TRAFFIC_TOKEN` secret the script exits 1 and writes nothing,
+so a missing secret shows up as a failed run instead of a green one.
 
 `clone-traffic.json` ends up looking like:
 
@@ -45,7 +48,11 @@ No Actions needed — run the same script by hand or from your own cron/Task Sch
 
 ```bash
 TRAFFIC_TOKEN=ghp_xxx REPO=paarths-collab/hstack node metrics/update-clone-traffic.mjs
+# no token? re-render only the SVG from the existing JSON (the JSON is left untouched):
+node metrics/update-clone-traffic.mjs --no-fetch
 ```
+
+`METRICS_DIR=<dir>` reads and writes the JSON/SVG in another directory (that is how the workflow uses it).
 
 ## What this is *not*
 

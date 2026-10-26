@@ -1,366 +1,454 @@
 ---
 name: integration-gcp
-description: Connect Google Cloud (BigQuery, Cloud SQL, Cloud Storage, Cloud Run, Logging, Compute, etc.) to a self-hosted Hermes Agent over SSH. Wires Google's first-party managed remote MCP servers with a short-lived OAuth2 bearer token + auto-refresh cron. Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Connect gcp to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-gcp — connect Google Cloud to a remote Hermes (SSH-first)
+# /integration-gcp — connect gcp over SSH
 
-You are the engineer connecting Google Cloud to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. The user only does the two things a machine cannot:
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-1. Complete the interactive `gcloud auth login` (one-time).
-2. Decide which IAM roles the agent should have.
+## Before you start — gather (ask once)
 
-Everything else — service-account creation, token minting, MCP registration, gateway reload,
-refresh cron, verification — runs on the VPS via SSH, idempotently.
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. GCP_PROJECT and existing authenticated gcloud CLI on the VPS, with project read permissions. No IAM principals, keys, role grants, API enablement or refresh cron are created. gcloud obtains/refreshes its own credentials for every call.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-**Honest auth picture (verified 2026-06):** Google ships first-party **managed remote MCP
-servers** (one HTTPS endpoint per product), so the happy path is the standard `/hermes-mcp-add`
-flow. The twist that defines this skill: Google Cloud MCP auth is an **OAuth2 / IAM short-lived
-bearer token**, not a static API key. The token expires every hour. Plan for refresh from step
-one — do not pretend a key injected once stays valid. Google's own docs state: "if you use an
-ADC generated bearer token for authentication, then you need to re-authenticate every hour to
-refresh your access token." API keys exist only for a few keyless services (e.g. Maps), not for
-the Cloud data/infra MCP servers.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$GCP_PROJECT` | GCP project ID, e.g. `my-project-123456` | <https://console.cloud.google.com> project picker, or `gcloud config get-value project` |
-| `$GCP_PRODUCT` | Which product MCP to wire (one of the URLs below) | See list below |
-| `$GCP_ROLE` | IAM role(s) to grant the SA, e.g. `roles/bigquery.dataViewer` | User decides; machine cannot |
-
-Verified product MCP base URLs:
-
-- BigQuery — `https://bigquery.googleapis.com/mcp`
-- Cloud SQL — `https://sqladmin.googleapis.com/mcp`
-- Cloud Storage — `https://storage.googleapis.com/storage/mcp`
-- Cloud Run — `https://run.googleapis.com/mcp`
-- Cloud Logging — `https://logging.googleapis.com/mcp`
-- Cloud Monitoring — `https://monitoring.googleapis.com/mcp`
-- Compute Engine — `https://compute.googleapis.com/mcp`
-- GKE — `https://container.googleapis.com/mcp`
-- Firestore — `https://firestore.googleapis.com/mcp`
-- Spanner — `https://spanner.googleapis.com/mcp`
-- AlloyDB — `https://alloydb.googleapis.com/mcp`
-- Pub/Sub — `https://pubsub.googleapis.com/mcp`
-
-Full list: <https://docs.cloud.google.com/mcp/supported-products>
-
-Derived names (set locally for the rest of the skill):
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-NAME="gcp-$(echo "$GCP_PRODUCT" | sed 's|https://||;s|\.googleapis\.com.*||;s|/.*||')"
-# e.g. NAME=gcp-bigquery
-ENV_VAR="MCP_$(echo "$NAME" | tr '[:lower:]-' '[:upper:]_')_API_KEY"
-SA_EMAIL="hermes-mcp@${GCP_PROJECT}.iam.gserviceaccount.com"
-```
-
-Confirm SSH access before doing anything:
-
-```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
-
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
-  else
-    echo "FAIL: hermes not found on host or in container"; exit 1
-  fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
-```
-
-Expected: `0.15.x` or `0.17.x`.
-
-Also confirm we are operating on the **VPS host**, not a nested container — gcloud auth added
-inside a container is invisible to the host (see CLAUDE.md SSH section):
-
-```bash
-ssh "$VPS_USER@$VPS_IP" 'whoami; hostname'
-# Expect: root@<readable-name>, NOT root@<hex-string>
-```
-
----
-
-## Step 2 — idempotency check (skip if already wired)
-
-```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "hermes mcp list 2>/dev/null | grep -ci '$NAME'" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "$NAME is already wired. Set FORCE=1 to rewire."
-  exit 0
-fi
-```
-
----
-
-## Step 3 — DRY RUN preview (always show before writing)
-
-```bash
-cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Create service account $SA_EMAIL (idempotent) and grant $GCP_ROLE
-  2. Enable the product API on project $GCP_PROJECT
-  3. Mint SA key → /opt/data/gcp-sa.json (chmod 600); delete host copy
-  4. Mint short-lived access token; write \$$ENV_VAR (length only) via 'hermes config set'
-  5. chmod 600 ~/.hermes/.env
-  6. Register MCP: hermes mcp add $NAME --url $GCP_PRODUCT (header Authorization: Bearer)
-  7. Reload gateway: hermes gateway stop && hermes gateway run
-  8. Verify in logs: grep "registered.*$NAME"
-  9. Smoke test: POST $GCP_PRODUCT initialize → expect 200
- 10. Install /usr/local/bin/hermes-gcp-token-refresh.sh + cron every 45 min
-
-The bearer token is NEVER printed in plaintext.
-EOF
-```
-
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
-
----
-
-## Step 4 — write the secret (chmod 600, no echo, no logging)
-
-First, mint the SA + token on the VPS host. The `gcloud auth login` is the one interactive
-step — if creds are not already present, the user must complete it.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  gcloud config set project '$GCP_PROJECT'
-  gcloud iam service-accounts create hermes-mcp --display-name='Hermes agent MCP' 2>/dev/null || true
-  gcloud projects add-iam-policy-binding '$GCP_PROJECT' \
-    --member='serviceAccount:$SA_EMAIL' \
-    --role='$GCP_ROLE' >/dev/null
-  API=\$(echo '$GCP_PRODUCT' | sed 's|https://||;s|/.*||')
-  gcloud services enable \"\$API\" --project '$GCP_PROJECT' >/dev/null
-"
-```
-
-Stage the SA key inside the agent's data dir, never on host disk:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  set -e
-  AGENT=\$(docker ps --filter name=hermes --format '{{.Names}}' | head -1)
-  gcloud iam service-accounts keys create /tmp/hermes-sa.json --iam-account='$SA_EMAIL'
-  docker cp /tmp/hermes-sa.json \"\$AGENT\":/opt/data/gcp-sa.json
-  docker exec \"\$AGENT\" sh -c 'chmod 600 /opt/data/gcp-sa.json'
-  rm -f /tmp/hermes-sa.json
-"
-```
-
-Mint the short-lived token and write it via `hermes config set` (never `echo >>`):
-
-```bash
-TOKEN=$(ssh "$VPS_USER@$VPS_IP" "gcloud auth print-access-token --impersonate-service-account='$SA_EMAIL'")
-ssh "$VPS_USER@$VPS_IP" "hermes config set $ENV_VAR '$TOKEN'"
-ssh "$VPS_USER@$VPS_IP" "chmod 600 ~/.hermes/.env"
-```
-
-Verify (returns `1`, NEVER the value):
-
-```bash
-WROTE=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^$ENV_VAR=' ~/.hermes/.env" || echo 0)
-[ "$WROTE" = "1" ] || { echo "FAIL: $ENV_VAR not written. Rolling back."; rollback; exit 1; }
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern
-> (pipe delimiter; OAuth tokens contain `/+=`):
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   grep -q '^$ENV_VAR=' ~/.hermes/.env || printf '$ENV_VAR=\n' >> ~/.hermes/.env
->   sed -i 's|^$ENV_VAR=.*|$ENV_VAR=$TOKEN|' ~/.hermes/.env
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 5 — register the MCP server
-
-Pick the path that matches your Hermes build. Path A is preferred.
-
-### Path A (preferred) — Google's first-party managed remote MCP
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes mcp add $NAME \
-    --url '$GCP_PRODUCT' \
-    --auth-header 'Authorization' \
-    --auth-scheme 'Bearer' \
-    --placeholder-token 'placeholder'
-"
-# Inject real token with pipe delimiter (OAuth tokens contain /+=)
-ssh "$VPS_USER@$VPS_IP" "sed -i 's|placeholder|'\"\$$ENV_VAR\"'|g' ~/.hermes/config.yaml" 2>/dev/null || true
-```
-
-The resulting `config.yaml` block looks like:
-
-```yaml
-gcp-bigquery:
-  url: https://bigquery.googleapis.com/mcp
-  headers:
-    Authorization: Bearer ${MCP_GCP_BIGQUERY_API_KEY}
-  enabled: true
-```
-
-The bearer token lands only in `~/.hermes/.env` (chmod 600), never in `config.yaml`, never in
-chat.
-
-### Path B (fallback) — generic HTTP tool against the product REST API
-
-If the Hermes build cannot register remote MCP endpoints, hit the product's REST API directly:
-
-- **Base URL:** the product's googleapis.com base, e.g. `https://bigquery.googleapis.com/bigquery/v2`
-- **Auth header:** `Authorization: Bearer ${MCP_GCP_<PRODUCT>_API_KEY}`
-- **Content type:** `Content-Type: application/json`
-
-The refresh cron in Step 8 keeps the bearer valid for both paths.
-
----
-
-## Step 6 — reload the gateway (stop + run, NOT restart)
-
-`gateway restart` does NOT reliably re-read `.env`. Always use stop + run.
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 7 — verify registration in logs (poll up to 30s)
-
-```bash
-REGISTERED=0
-for i in $(seq 1 6); do
-  if ssh "$VPS_USER@$VPS_IP" "hermes logs 2>&1 | tail -200" \
-       | grep -qiE "registered.*tool.*$NAME|MCP server.*$NAME.*(ok|ready)"; then
-    REGISTERED=1
-    echo "OK: $NAME registered in gateway logs."
-    break
-  fi
-  sleep 5
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-gcp
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
 done
-[ "$REGISTERED" = "1" ] || { echo "FAIL: $NAME not in logs after 30s. Rolling back."; rollback; exit 1; }
-```
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
+  else
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
+  fi
+done
 
-## Step 8 — live API smoke test + install refresh cron
-
-Smoke-test the endpoint with the freshly-injected token:
-
-```bash
-HTTP=$(ssh "$VPS_USER@$VPS_IP" "
-  curl -sS -o /dev/null -w '%{http_code}' \
-    -X POST '$GCP_PRODUCT' \
-    -H \"Authorization: Bearer \$$ENV_VAR\" \
-    -H 'Accept: application/json, text/event-stream' \
-    -H 'Content-Type: application/json' \
-    -d '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-03-26\",\"capabilities\":{},\"clientInfo\":{\"name\":\"probe\",\"version\":\"0\"}}}'
-")
-case "$HTTP" in
-  200) echo "OK: $GCP_PRODUCT reachable and token valid." ;;
-  401) echo "FAIL: token invalid or expired. Re-check Step 4."; rollback; exit 1 ;;
-  403) echo "FAIL: token valid but IAM role $GCP_ROLE missing, or product API not enabled."; exit 1 ;;
-  *)   echo "WARN: unexpected HTTP $HTTP from $GCP_PRODUCT. Check manually." ;;
-esac
-```
-
-Now install the refresh cron — the token dies in ~1 hour, so calls will start 401-ing without
-this step. This is the part everyone forgets:
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "cat > /usr/local/bin/hermes-gcp-token-refresh.sh <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-TOKEN=\\\$(gcloud auth print-access-token --impersonate-service-account='$SA_EMAIL')
-hermes config set $ENV_VAR \"\\\$TOKEN\"
-chmod 600 ~/.hermes/.env
-hermes gateway stop || true
-sleep 3
-hermes gateway run --daemon
-EOF
-chmod 700 /usr/local/bin/hermes-gcp-token-refresh.sh
-( crontab -l 2>/dev/null; echo '*/45 * * * * /usr/local/bin/hermes-gcp-token-refresh.sh >> /var/log/hermes-gcp-refresh.log 2>&1' ) | crontab -
-"
-```
-
-`*/45` keeps refresh safely inside the ~60 min token lifetime. Use `/hermes-cron` if you'd
-rather have this managed as a Hermes-native job.
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
 rollback() {
-  ssh "$VPS_USER@$VPS_IP" "hermes mcp remove $NAME 2>/dev/null || true"
-  ssh "$VPS_USER@$VPS_IP" "hermes config unset $ENV_VAR 2>/dev/null || \
-    sed -i '/^$ENV_VAR=/d' ~/.hermes/.env"
-  ssh "$VPS_USER@$VPS_IP" "crontab -l 2>/dev/null | grep -v hermes-gcp-token-refresh | crontab - || true"
-  ssh "$VPS_USER@$VPS_IP" "rm -f /usr/local/bin/hermes-gcp-token-refresh.sh"
-  ssh "$VPS_USER@$VPS_IP" "hermes gateway stop; sleep 2; hermes gateway run --daemon"
-  echo "Rolled back. $NAME is no longer wired."
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
 }
 ```
 
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in skills/hstack-gcp/SKILL.md skills/hstack-gcp/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Refuse to replace a changed or foreign native workflow. A concurrent user edit
+# belongs to the user; retain all recovery artifacts for manual reconciliation.
+p="$HOME/.hermes/skills/hstack-gcp"
+original="$b/skills_hstack-gcp_SKILL.md"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] || exit 1
+  entries=$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')
+  if [ "$entries" = 0 ] && [ -f "$original.absent" ]; then :
+  else
+    [ "$entries" = 2 ] && [ -f "$p/SKILL.md" ] && [ -f "$p/.hstack-managed" ] \
+      && [ ! -L "$p/SKILL.md" ] && [ ! -L "$p/.hstack-managed" ] \
+      && [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] \
+      || { echo "extra_restore: native skill was edited or is unowned; active backup retained." >&2; exit 1; }
+  fi
+elif [ ! -f "$original.absent" ]; then
+  echo "extra_restore: previous native skill was removed; active backup retained." >&2
+  exit 1
+fi
+# Validate all copies before restoring any artifact.
+for rel in skills/hstack-gcp/SKILL.md skills/hstack-gcp/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in skills/hstack-gcp/SKILL.md skills/hstack-gcp/.hstack-managed; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
+
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+
+## Step 1 — verify the pinned Hermes host
+
+```bash
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+remote 'whoami; hostname' || exit 1
+# Existing local skill files are checked for ownership before any replacement.
+```
+
+## Step 3 — HARD GATE before snapshot or preview
+
+```bash
+secret_chars_ok() { local LC_ALL=C; case "$1" in ""|*[!A-Za-z0-9_.~+/=-]*) return 1 ;; esac; }
+secret_chars_ok "${GCP_PROJECT:-}" || { echo "ABORT: GCP_PROJECT is empty or unsafe. Nothing was written."; exit 1; }
+case "$GCP_PROJECT" in -*|.*|*[!A-Za-z0-9.-]*) echo "ABORT: invalid GCP_PROJECT. Nothing was written."; exit 1 ;; esac
+
+remote 'bash -s' <<'REMOTE' || { echo "ABORT: local skill is not safely replaceable. Nothing was written."; exit 1; }
+p="$HOME/.hermes/skills/hstack-gcp"
+[ ! -L "$p" ] || exit 1
+if [ -e "$p" ]; then
+  [ -d "$p" ] && [ -f "$p/.hstack-managed" ] && [ -f "$p/SKILL.md" ] && [ ! -L "$p/SKILL.md" ] || exit 1
+  [ "$(cksum < "$p/SKILL.md")" = "$(cat "$p/.hstack-managed")" ] || exit 1
+  [ "$(find "$p" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" = 2 ] || exit 1
+fi
+REMOTE
+printf '%s\n' "${GCP_PROJECT:-}" | remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d=dict(zip(['"'"'"'"'"'"'"'"'GCP_PROJECT'"'"'"'"'"'"'"'"'],sys.stdin.read().splitlines()))
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+r=subprocess.run(["gcloud","projects","describe",d["GCP_PROJECT"],"--format=json"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+if r.returncode: raise RuntimeError("GCP project read check failed")
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "ABORT: vendor authentication or read-only probe failed. Nothing was written."; exit 1; }
+```
+
+Credentials travel on SSH stdin, with redirects refused, timeout bounded, and response bodies suppressed. No `.env` file is sourced as shell code. No credentials are sent to a different host after an HTTP redirect.
+
+## Step 4 — review the concrete plan
+
+```bash
+cat <<EOF
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: gcp; path: rest.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Install a discoverable read-only Hermes skill with owned-file recovery.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
+EOF
+```
+
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
+
+## Step 5 — snapshot and private settings
+
+```bash
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
+}
+put_env GCP_PROJECT "${GCP_PROJECT:-}" || { echo "FAIL: private setting write."; fail_transaction; }
+```
+
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'bash -s' <<'REMOTE' || { echo "FAIL: native skill installation."; fail_transaction; }
+set -e
+p="$HOME/.hermes/skills/hstack-gcp"
+[ ! -L "$HOME/.hermes/skills" ] && [ ! -L "$p" ] || exit 1
+mkdir -p "$p" && chmod 700 "$p"
+t=$(mktemp "$p/.SKILL.XXXXXX")
+trap 'rm -f "$t"' EXIT
+cat > "$t" <<'HSTACK_NATIVE_SKILL'
 ---
+name: hstack-gcp
+description: Read gcp account data using a private host credential; use for the installed read-only gcp connection.
+---
+
+# gcp: read-only account access
+
+Only run this read request when the user asks for gcp account data. Do not print credentials.
+This connector is read-only; changes require a separately reviewed workflow and user authorization.
+The script reads the private ~/.hermes/.env without sourcing it as executable shell code.
+Use the following command through the native terminal tool on the Hermes host:
+
+
+    python3 -c 'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+    d={}
+    p=os.path.expanduser("~/.hermes/.env")
+    if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+    if os.path.isfile(p):
+     for line in open(p):
+      k, sep, v=line.rstrip("\n").partition("=")
+      if sep:
+       v=v.strip()
+       if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+       d[k]=v
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+     def redirect_request(self, req, fp, code, msg, headers, newurl):
+      raise RuntimeError("Redirect refused; credentials were not forwarded")
+    def req(url, headers=None, body=None):
+     if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+     r=urllib.request.Request(url,headers=headers or {},data=body)
+     with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+      if f.status != 200: raise RuntimeError("Non-200 response")
+      data=f.read(2 * 1024 * 1024 + 1)
+      if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+      return data
+    r=subprocess.run(["gcloud","projects","describe",d["GCP_PROJECT"],"--format=json"],stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)
+    if r.returncode: raise RuntimeError("GCP project read check failed")
+    print(r.stdout.decode())
+    '
+
+Return only requested account fields. Keep the fixed read-only endpoint and never expose .env values.
+HSTACK_NATIVE_SKILL
+chmod 600 "$t"
+mv "$t" "$p/SKILL.md"
+cksum < "$p/SKILL.md" > "$p/.hstack-managed"
+chmod 600 "$p/.hstack-managed"
+REMOTE
+remote 'hermes -p default skills list --enabled-only | grep -F "hstack-gcp"' >/dev/null || { echo "FAIL: installed skill is not discoverable/enabled."; fail_transaction; }
+```
+
+This installs a real Hermes-discoverable native skill, with an executable read request and managed-file checksum. Existing user edits or unowned files are refused. The previous skill file and marker are recovered with the transaction.
+
+## Step 7 — reload and health
+
+```bash
+echo "Native skills are discovered by Hermes; no separate MCP server or gateway restart is required for installation."
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+remote 'python3 -c '"'"'import sys, json, os, stat, urllib.request, urllib.error, urllib.parse, subprocess, base64
+d={}
+p=os.path.expanduser("~/.hermes/.env")
+if os.path.islink(p) or not os.path.isfile(p) or stat.S_IMODE(os.stat(p).st_mode)!=0o600: raise RuntimeError("Private regular .env required")
+if os.path.isfile(p):
+ for line in open(p):
+  k, sep, v=line.rstrip("\n").partition("=")
+  if sep:
+   v=v.strip()
+   if len(v)>1 and v[0]==v[-1] and v[0] in (chr(34),chr(39)): v=v[1:-1]
+   d[k]=v
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+ def redirect_request(self, req, fp, code, msg, headers, newurl):
+  raise RuntimeError("Redirect refused; credentials were not forwarded")
+def req(url, headers=None, body=None):
+ if not url.startswith("https://"): raise RuntimeError("HTTPS required")
+ r=urllib.request.Request(url,headers=headers or {},data=body)
+ with urllib.request.build_opener(NoRedirect).open(r,timeout=30) as f:
+  if f.status != 200: raise RuntimeError("Non-200 response")
+  data=f.read(2 * 1024 * 1024 + 1)
+  if len(data)>2 * 1024 * 1024: raise RuntimeError("Response too large")
+  return data
+r=subprocess.run(["gcloud","projects","describe",d["GCP_PROJECT"],"--format=json"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+if r.returncode: raise RuntimeError("GCP project read check failed")
+print("OK: authenticated read-only vendor probe")
+'"'"'' >/dev/null 2>&1 || { echo "FAIL: persisted credentials failed the read-only probe."; fail_transaction; }
+finish || { echo "FAIL: recovery point retained for inspection."; exit 1; }
+echo "Read-only credential probe passed; validate one real Hermes chat turn before claiming live end-to-end compatibility."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-gcp.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Treating the credential as a static API key | It is a 1-hour OAuth2 access token; calls start 401-ing after an hour | Refresh cron in Step 8 is non-optional |
-| 2 | Expecting a long-lived key from the console | Cloud data/infra MCP servers are OAuth/IAM only — no static key exists | Service-account impersonation + `print-access-token` |
-| 3 | Running gcloud / SSH commands inside a container | gcloud auth added in a container is invisible to the host | `whoami; hostname` check (Step 1); operate on the host |
-| 4 | 403 even with a valid token | IAM role not granted, or the product API not enabled | `add-iam-policy-binding` + `gcloud services enable` (Step 4) |
-| 5 | Wrong endpoint base path | Cloud Storage is `/storage/mcp`, not `/mcp`; AI Platform uses sub-paths | Copy URLs verbatim from the supported-products list |
-| 6 | SA key left on host disk or in chat | Long-lived key is the highest-value secret here | `docker cp` into `/opt/data`, `chmod 600`, `rm` host copy |
-| 7 | Quota/rate limits on underlying API | MCP calls consume the same project quota as the REST API | Watch Cloud Monitoring; request quota bumps per product |
-| 8 | `gateway restart` to pick up env | Restart does NOT reliably re-read `.env` | Always `stop` + `run` |
-| 9 | `echo >> .env` instead of `config set` | Can merge onto a prior line without a trailing newline | Always `hermes config set`, never `echo >>` |
-| 10 | Secret in `config.yaml` or compose-level `.env` | Wrong file → world-readable or not loaded by runtime | Only `~/.hermes/.env`, `chmod 600` |
-| 11 | sed with `/` delimiter on tokens | OAuth tokens contain `/+=`; sed breaks | Always use `\|` delimiter |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Existing authentication | The recipe reuses gcloud on the VPS | Authenticate through the native CLI if absent |
+| 2 | Refresh ownership | gcloud manages its own access tokens | Do not install a separate refresh cron |
+| 3 | Project permissions | The probe describes the selected project | Use an existing read permission |
+| 4 | Private keys | This route does not mint service-account key files | Do not create IAM keys to make the probe pass |
+| 5 | Read capability | The installed skill returns project metadata | BigQuery/Storage mutations need a separately reviewed workflow |
+| 6 | Active account | gcloud uses the selected CLI identity | Confirm that identity with the user before using private data |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x); confirmed on host (not container)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] Service account `$SA_EMAIL` created with least-privilege IAM role; product API enabled
-- [ ] SA key staged at `/opt/data/gcp-sa.json` (chmod 600); no copy left on host
-- [ ] `$ENV_VAR` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] MCP registered via Path A (managed remote) or REST documented via Path B
-- [ ] Gateway reloaded with `stop` + `run` (NOT restart)
-- [ ] Logs show `registered N tool(s) for '$NAME'` within 30s
-- [ ] Smoke test: `initialize` POST against `$GCP_PRODUCT` returned `200`
-- [ ] Refresh cron installed at `/usr/local/bin/hermes-gcp-token-refresh.sh`, runs `*/45`
-- [ ] Rollback function defined (removes MCP, unsets env, drops cron, restarts gateway)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and bearer-token failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.

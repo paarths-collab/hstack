@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { FAKE, STUB, TXN, pinnedHermesVersion, sandbox } from './helpers/sandbox.mjs';
 
 function populated(sb) {
@@ -103,6 +104,53 @@ test('a wrong version is reported verbatim; judging it is the JS caller job', ()
   } finally { sb.cleanup(); }
 });
 
+// A minimal legacy-form `hermes`: prints a fixed --version text, an empty `cron list`, and fails everything else.
+function versionOnlyHermes(sb, text) {
+  const file = join(sb.home, '.local', 'bin', 'hermes');
+  writeFileSync(file, `#!/bin/sh\n[ "$1 $2" = "cron list" ] && exit 0\n[ "$1" = "--version" ] && [ $# -eq 1 ] || exit 99\ncat <<'__HSTACK_VERSION__'\n${text}\n__HSTACK_VERSION__\n`);
+  chmodSync(file, 0o755);
+}
+
+test('the Hermes version is the banner token, printed verbatim: suffixes are never dropped and later lines never win', () => {
+  // Real format: hermes_cli/_startup_fast.py print_fast_version_info (first line from banner.format_banner_version_label).
+  const real = (banner) => `${banner}\nInstall directory: /home/operator/.hermes/hermes-agent\nInstall method: git\nPython: 3.11.16\nOpenAI SDK: 2.24.0`;
+  const cases = [
+    ['Hermes Agent v0.15.2 (2026.5.29) \u00b7 upstream bf0203a7', '0.15.2'],
+    ['Hermes Agent v0.15.2 (2026.5.29)', '0.15.2'],
+    ['Hermes Agent v0.22.5.1 (2026.9.24)', '0.22.5.1'],
+    ['Hermes Agent v0.22.5+3.gabc1234 (2026.9.24)', '0.22.5+3.gabc1234'],
+    ['Hermes Agent v0.22.5.dev3 (2026.9.24)', '0.22.5.dev3'],
+    ['Hermes Agent v0.22.5-rc1 (2026.9.24)', '0.22.5-rc1'],
+  ];
+  const sb = sandbox({ stub: false });
+  try {
+    for (const [banner, expected] of cases) {
+      versionOnlyHermes(sb, real(banner));
+      const r = sb.run(['inspect']);
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.equal(r.kv.runtime_version, expected, banner);
+      assert.equal(r.kv.runtime_evidence, 'measured', banner);
+    }
+    // No banner on the first line: a later x.y.z (Python, SDK, release date) must not be taken for the Hermes version.
+    for (const text of ['Python: 3.11.16\nHermes Agent v0.15.2 (2026.5.29)', 'Install directory: /x\nPython: 0.15.2', 'something 0.15.2', 'Hermes Agent vbanana', '']) {
+      versionOnlyHermes(sb, text);
+      const r = sb.run(['inspect']);
+      assert.equal(r.kv.runtime_version, 'unknown', JSON.stringify(text));
+      assert.equal(r.kv.runtime_evidence, 'unknown', JSON.stringify(text));
+    }
+  } finally { sb.cleanup(); }
+});
+
+test('the stub and the legacy sandbox form `hermes <version>` keep working, with suffixes reported verbatim', () => {
+  const sb = sandbox();
+  try {
+    for (const v of ['0.15.2', '0.15.2.1', '0.15.2.dev3', '0.15.2+local', '0.15.2-rc1']) {
+      const r = sb.run(['inspect'], { env: { HSTACK_STUB_VERSION: v } });
+      assert.equal(r.kv.runtime_version, v);
+    }
+  } finally { sb.cleanup(); }
+});
+
 test('inspect reports managed cron ids, incomplete txns and rejects arguments', () => {
   const sb = sandbox();
   try {
@@ -122,7 +170,7 @@ test('stub test double refuses doctor / --fix / unknown subcommands with exit 99
   try {
     sb.write('.hermes/.env', 'A=1\n');
     const before = sb.hash();
-    for (const argv of [['doctor'], ['doctor', '--fix'], ['--fix'], ['cron', 'bogus'], ['gateway', 'restart'], ['totally-unknown'], []]) {
+    for (const argv of [['doctor'], ['doctor', '--fix'], ['--fix'], ['cron', 'bogus'], ['gateway', 'run'], ['totally-unknown'], []]) {
       const r = spawnSync('env', ['-i', `HOME=${sb.home}`, 'PATH=/usr/bin:/bin', 'bash', STUB, ...argv], { encoding: 'utf8' });
       assert.equal(r.status, 99, `argv=${argv.join(' ')}`);
     }

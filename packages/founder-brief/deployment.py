@@ -93,6 +93,19 @@ def desired_job(instance_id=None):
     return config
 
 
+def hermes_banner_version(output):
+    """The Hermes release token of ``hermes --version`` output, or None.
+
+    v0.22.5 prints a multi-line report (hermes_cli/_startup_fast.py print_fast_version_info): the banner
+    ``Hermes Agent v<ver> (<release date>)[ · ...]``, then the install directory, Python and OpenAI SDK
+    versions, which are themselves shaped like x.y.z. Only the first line is the banner. Its token is
+    returned verbatim, so ``0.22.5+3.gabc`` and ``0.22.5.1`` are not ``0.22.5``.
+    """
+    lines = output.splitlines()
+    match = re.fullmatch(r"Hermes Agent v(\S+)(?:\s.*)?", lines[0].strip()) if lines else None
+    return match.group(1) if match else None
+
+
 class Deployment:
     def __init__(self, home, hermes, *, offline=False, instance_id=None):
         self.scope = scope_for(instance_id)
@@ -374,7 +387,7 @@ class Deployment:
         except native_adapter.Refusal:
             refuse("native_scope_refused")
         version = self._run(["--profile", "default", "--version"], output=True).decode("utf-8", errors="replace")
-        if re.findall(r"(?<![0-9])[0-9]+\.[0-9]+\.[0-9]+(?![0-9])", version) != [VERSION]:
+        if hermes_banner_version(version) != VERSION:
             refuse("native_version_mismatch")
         payload = self._run(["--profile", "default", "gateway", "ensure", "--json", "--timeout", "60"], output=True, timeout=70)
         try:

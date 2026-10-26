@@ -14,13 +14,13 @@
     "name": "hermes",
     "declared_version": "0.15.2",
     "supported_versions": ["0.15.2"],
-    "versions_source": "VERSIONS.txt#HERMES_VERSION"
+    "versions_source": "VERSIONS.txt#HERMES_LEGACY_FIXTURE_VERSION"
   },
   "adapters": {
     "github": {
       "skill": "integration-github",
       "access": "read_only",
-      "mcp_pkg": "@modelcontextprotocol/server-github@2025.10.30",
+      "mcp_pkg": "@modelcontextprotocol/server-github@2025.4.8",
       "mcp_pkg_source": "VERSIONS.txt#GITHUB_MCP_PKG"
     },
     "telegram": {
@@ -61,8 +61,7 @@
     "cron create",
     "cron remove",
     "cron run",
-    "gateway stop",
-    "gateway run --daemon",
+    "gateway restart",
     "config set"
   ],
   "adapter_surface_status": "declared-unverified-against-real-hermes",

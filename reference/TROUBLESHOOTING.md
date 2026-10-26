@@ -42,8 +42,8 @@ Real failure chain from a documented deploy session — in the order they appear
 ## Gateway / autostart
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| Restart loop, "PID file race lost… Exiting" | stale `~/.hermes/gateway.pid` after crash/OOM (#13655) | `gateway stop` → `rm gateway.pid` + clear `~/.local/state/hermes/gateway-locks/*.lock` → `gateway start` |
-| RSS grows to 20–37 GB then OOM-kill after ~a day | gateway memory leak (#25315: `_evict_cached_agent` never releases clients on `/new`,`/model`) | pin a version, cap container memory, add a **nightly `gateway restart` cron** |
+| Restart loop, "PID file race lost… Exiting" | stale `~/.hermes/gateway.pid` after crash/OOM (#13655) | `hermes -p default gateway restart --detach` then `gateway ensure --json --timeout 60` (native stop/ensure handle stale pid/lock files; do not delete them by hand) |
+| RSS grows to 20–37 GB then OOM-kill after ~a day | gateway memory leak (#25315: `_evict_cached_agent` never releases clients on `/new`,`/model`) | pin a version, cap container memory, cap container memory (Hermes v0.22.5 refuses cron jobs that restart or stop the gateway: `cron/lifecycle_guard.py:30-67`) |
 | Gateway dies when WSL terminal closes / "systemd not available" | #18032 — `is_wsl()` short-circuits | use tmux/nohup, not systemd; or set `systemd=true` in `/etc/wsl.conf` + `wsl --shutdown` |
 | Service doesn't start at boot (user systemd) | no lingering | `loginctl enable-linger "$USER"` (or `--system` install) |
 | Docker `chown … Operation not permitted` / `PermissionError` on `gateway_state.json` | UID mismatch (#15865 v2026.4.23; #32559 s6-overlay UID-99) | pin a tagged image (avoid `v2026.4.23`, avoid `main`/`latest` on NAS); honor `HERMES_UID`/`HERMES_GID`; run CLI + gateway as same UID |
@@ -87,7 +87,43 @@ Real failure chain from a documented deploy session — in the order they appear
 | Status check passes while the gateway is down; a count shows `0` on two lines | `grep -c … \|\| echo 0` prints two lines, and `grep -c 'running'` matches "not running" | use `\|\| true` and test negatives first |
 | `hermes config set KEY -- "$v"` fails "unrecognized arguments" for values starting with `-` (negative Telegram group ids) | option parsing treats the value as a flag | put `--` before the value (unverified against upstream; marked in the skills) |
 | A `[[ … =~ … ]]` regex with a large repetition count (e.g. `{16,300}`) errors in a bash block on macOS | the regex engine in stock macOS bash 3.2 rejects repetition counts above 255 (`{16,255}` works) | keep repetition counts ≤ 255 |
-| `rollback: files restored, but the gateway did NOT come back` | the rollback ends by running `gateway run --daemon` and checking `gateway status` | start it manually (`hermes gateway start`) and check `hermes logs`; `gateway run --daemon` and `gateway status` wording is unverified against upstream docs |
+| `rollback: files restored, but the gateway did NOT come back` | after restoring files the rollback runs `gw_reload`: `gateway restart --detach`, then `gateway ensure --json` must report `ready` with a NEW `instance_id`; one of those failed (restart refused, ensure exit 3/4/5/6/7, or the instance did not change) | look at `hermes -p default gateway ensure --json --timeout 60` (exit codes: `hermes_cli/gateway_runtime_cli.py:8-14`) and `hermes -p default logs gateway`, fix the fault, run `rollback` again; the snapshot is kept until it succeeds |
+| `gw_reload: gateway restart failed or was refused` | live sessions exist and there is no terminal, so `gateway restart` exits 1 (`hermes_cli/gateway_lifecycle_guards.py:97-129`) | retry with `GW_INTERRUPT=1` (adds `-y`) only if interrupting live chats is acceptable |
+| `unrecognized arguments: --daemon` (exit 2) from `hermes gateway run --daemon` | the flag never existed (`hermes_cli/subcommands/gateway.py:70-119` lists the `gateway run` flags); `gateway run` is the foreground command | use `gateway restart --detach` + `gateway ensure --json` (the skills' `gw_reload`) |
+| a health check says the gateway is fine while it is stopped | `gateway status` prints `✗ Gateway is not running` (`hermes_cli/gateway.py:5636`), which contains the word `running` | never grep status text; use `gateway ensure --json` exit 0 + `"state":"ready"` |
+| `gateway restart` over ssh hangs forever | with no installed service, restart runs the replacement gateway in the foreground of the calling shell (`hermes_cli/gateway_supervised_restart.py:140-151`) | pass `--detach` (the skills' `gw_reload` does) |
+
+## Hermes v0.22.5 skills (source-verified; none of this has run against a live host)
+Rows written from the v0.22.5 source while modernizing the skills; file:line cites are in each skill's "Verified against Hermes v0.22.5" section.
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `gateway ensure` exits 3/4/5/6/7 | 3 incompatible, 4 authorization or profile mismatch, 5 deadline, 6 draining or update-paused, 7 conflicting supervisor or the started gateway died (`hermes_cli/gateway_runtime_cli.py:8-14`) | read the JSON `reason_code`/`detail` and `hermes -p default logs gateway`, then follow /hermes-restart |
+| `gateway restart` exits 0 but nothing changed | a failed systemd user-service restart without linger prints a warning and returns 0 (`hermes_cli/gateway.py:5499-5512`) | `gw_reload` also demands a NEW `instance_id`; run `loginctl enable-linger <user>` and retry; never delete pid/lock files by hand |
+| `hermes doctor` exits 1 right after a fresh install | it exits non-zero while any issue remains, e.g. no provider key yet (`hermes_cli/doctor.py:171-194`); exit 0 does not mean the gateway runs | record it, configure the key with /hermes-model; `doctor --fix` also edits `.env`/`config.yaml`/`state.db`, so ask first |
+| Bot silent right after setup or restart (Telegram) | on a cold boot Hermes discards updates queued while it was offline (`platforms.telegram.extra.drop_pending_on_cold_boot`, default true) | wait for `Connected to Telegram (polling mode)` in the gateway log, then send again; a second restart does not help |
+| Telegram log shows `Conflict` / `polling bootstrap conflict` | another process polls the same bot token | stop the other consumer or use a separate bot |
+| Unknown sender receives a pairing code | no allowlist for that platform, so Hermes uses pairing; pairing approvals also authorize users and are not in the hstack snapshot | set the allowlist with the platform skill; review `hermes -p default pairing list` |
+| `-z` exits 2 with empty stdout or `Gateway could not start` | at v0.22.5 `-z` goes through the profile gateway | check `gateway ensure --json --timeout 60` and `logs gateway`, then re-test |
+| Anthropic returns 401 with a pasted key | the key is a Claude Code OAuth token (`sk-ant-oat...`), not an API key | create an API key in the Anthropic Console and re-run /hermes-model |
+| `hermes mcp add` exits 0 but the server is missing from `mcp list` | `mcp add` is interactive; closed stdin answers "cancel" at the tool-selection prompt (`hermes_cli/mcp_config.py:586-601`) | feed answers on stdin (`printf 'y\n' \|` for stdio, `'y\ny\n'` with `--auth header`) and always check `mcp list` and `mcp test` |
+| `mcp add ... --auth-header/--auth-scheme` fails with exit 2 | those flags do not exist; only `--auth oauth\|header` does | pre-write `MCP_<NAME>_API_KEY` to `.env` and use `--url U --auth header` |
+| `mcp add notion --args '-y,@notionhq/...'` runs a bogus package | `--args` is REMAINDER (must be last) and takes the remaining words | `--env K='${VAR}' --command npx --args -y <pkg>` |
+| Notion catalog install finishes but no tools | `mcp install notion` is OAuth and a headless VPS cannot finish the login | use the token + stdio path, or `ssh -t` and `mcp login notion`, then `mcp test notion` |
+| Discord online but `discord_intents_required` in the gateway log | Message Content Intent off in the Developer Portal (`plugins/platforms/discord/adapter.py:1659-1668`) | enable it, then `gw_reload` |
+| Discord silent in channels, fine in DMs | `discord.require_mention` defaults to true | @mention the bot or `hermes -p default config set discord.require_mention false` |
+| Platform token in `.env` but the platform never starts | an explicit `platforms.<name>.enabled: false` beats env credentials (`gateway/config_env.py:84-109,192-194`); a `platforms.<name>.extra.*` block can also shadow env values | `config set platforms.<name>.enabled true`; `config unset` the shadowing extra keys; reload |
+| Slack `[Slack] SLACK_APP_TOKEN not set` / `invalid_auth` on `apps.connections.open` | only the bot token was written, or the app-level token lacks `connections:write` / Socket Mode is off | write the `xapp-` token; regenerate it with the scope |
+| Mattermost `failed to authenticate` | wrong URL/token, deactivated bot, or the VPS cannot reach the server | from the VPS call `/api/v4/users/me` with the token |
+| Teams log `MISSING_SDK` / Google Chat `missing_deps` | the `teams` / `google-chat` extras are not in the default install and lazy installs are blocked | allow `security.allow_lazy_installs` (or install the extra) and reload |
+| Teams silent, log shows `"UNKNOWN / HTTP/1.0" 400` | the proxy forwards HTTPS to Hermes' plain-HTTP listener | terminate TLS at the proxy and forward HTTP to 127.0.0.1:3978 |
+| Google Chat connected but nothing arrives | `chat-api-push@system.gserviceaccount.com` lacks Pub/Sub Publisher on the topic, or `subscription_permission` / `subscription_not_found` at start | grant Publisher on the topic and Subscriber + Viewer on the subscription |
+| Signal: nothing arrives / `SIGNAL_ENABLED=true` has no effect | there is no such variable; `SIGNAL_HTTP_URL` + `SIGNAL_ACCOUNT` enable it and the account must be the number the daemon serves | write those two, set `platforms.signal.enabled true`; group IDs go in `SIGNAL_GROUP_ALLOWED_USERS` |
+| `hermes whatsapp` says it needs an interactive terminal | the pairing wizard refuses to run without a TTY | run it with `ssh -t`; the QR scan is a human step |
+| WhatsApp log says connected but nothing arrives | the adapter proceeds after 30 s even if the bridge is not linked | check the bridge `/health` for `"status":"connected"`; re-pair; set `WHATSAPP_DM_POLICY=allowlist` so strangers get no pairing codes |
+| `hermes plugins enable honcho` does not make honcho the memory provider | `plugins enable` cannot activate a memory provider | attended `hermes memory setup honcho`, or `plugins install honcho --enable` |
+| `hermes plugins install X` over ssh fails with a dependency-consent message | no terminal, so it is refused without `--yes-deps` | review the manifest, then `--yes-deps --no-enable` |
+| `hermes import` refuses: "Drain and stop the gateway" | a running gateway owns the home | stop the gateway (add `-y` only if interrupting chats is acceptable), then import |
+| Other skills abort "source-verified for Hermes 0.22.5 only" after /hermes-update | stable moved past 0.22.5 | expected; the update is reported unverified for hstack until the skills are re-verified |
 
 ## Acceptance transaction
 Failure states from `packages/acceptance/` (see its README for the full state machine and recovery commands).
@@ -97,3 +133,13 @@ Failure states from `packages/acceptance/` (see its README for the full state ma
 | `restore_conflict` / `manual_recovery_required` | a managed key or `config.yaml` changed after apply | nothing was overwritten; inspect the named keys, resolve manually, then restore or purge with the exact commands in the README |
 | `incomplete_transaction:<id>` | an earlier transaction has no done/restored marker | resume it (`restore`) or abandon it per the README before starting another |
 | `delivery check unknown` | no delivery observer supplied | provide an observer; without one a transaction cannot reach `verified` |
+
+## Migration regression checks (Hermes 0.22.5)
+
+| Symptom | Cause | Recovery |
+|---|---|---|
+| Restart refuses with active chats | Interrupting requires explicit consent | Leave `GW_INTERRUPT` unset to preserve chats; only literal `GW_INTERRUPT=1` opts in. Values `0` and `false` do not. |
+| Native transaction reports `native_previous_instance_unconfirmed` | No authoritative pre-restart identity was obtained | Resolve readiness or profile identity first; the adapter refuses to claim a restart without a baseline. |
+| Legacy receipt refuses restore after upgrading Hermes | Its TSV recovery contract belongs only to the exact 0.15.2 fixture | Preserve the backup and recover with the original runtime or manually reconcile the files. Do not run legacy mutations on the upgraded runtime. |
+| Seven-day brief crosses autumn DST | Seven local calendar days can be 169 elapsed hours | Current scheduled collection handles the local calendar bound; explicit standalone collector windows retain their 168-hour limit. |
+| PowerShell installer fails under a root-level relative symlink | `Split-Path` can return an empty parent for `/var` on Unix | Current installers resolve relative link targets against the filesystem root using the path API. |

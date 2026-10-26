@@ -57,6 +57,76 @@
       "upstream_path": "hermes_cli/main.py",
       "git_blob_sha": "03f6c60555fa0578a6063d29017437e6d268d7cf",
       "sha256": "95635aea97728e2759f9158210ae60fcfb7141610f9e7cbc2182021d9a50d416"
+    },
+    "subcommands/cron.py": {
+      "upstream_path": "hermes_cli/subcommands/cron.py",
+      "git_blob_sha": "ae6115293a0d415001bf0306fe1b75374fb4b46b",
+      "sha256": "c07a27db9575afd77dfd7e1e0f0051241262706c11998d92f8b26369536f3222"
+    },
+    "subcommands/backup.py": {
+      "upstream_path": "hermes_cli/subcommands/backup.py",
+      "git_blob_sha": "00b94447405ca16593ef13b0fb706893cd507c3c",
+      "sha256": "9f9ec5ea34845c669147acaaed57706555c3f136fe0913a0d2558dc3a6c7562f"
+    },
+    "subcommands/import_cmd.py": {
+      "upstream_path": "hermes_cli/subcommands/import_cmd.py",
+      "git_blob_sha": "562727c78cd41798ccb3ea1ee1999f7e5f8d03af",
+      "sha256": "6f9693da4cb934938e68d193704e2c4e63c77bcf3617230975edf72d5373e31f"
+    },
+    "subcommands/skills.py": {
+      "upstream_path": "hermes_cli/subcommands/skills.py",
+      "git_blob_sha": "7f32096938f7930ba42c67b6b23f45712d384ba7",
+      "sha256": "40ba69b7ecf79f75b4e68619567ea639bc16182cc7f7421558206feef9fa54d1"
+    },
+    "subcommands/mcp.py": {
+      "upstream_path": "hermes_cli/subcommands/mcp.py",
+      "git_blob_sha": "5977969ba638b1a9a6afb462b6be085885bc2f51",
+      "sha256": "8a50f70c67ff671485229e8929f8503dfe1c6287d628cba8acbb6c0de2a09ea4"
+    },
+    "subcommands/doctor.py": {
+      "upstream_path": "hermes_cli/subcommands/doctor.py",
+      "git_blob_sha": "17fc1db8ee76826521fb3d9a50ba8fc86e9c8a3e",
+      "sha256": "fef55e46b31c942055eac53634259b4a5fb756e5f35c5732dd68fad2e425cbc5"
+    },
+    "subcommands/logs.py": {
+      "upstream_path": "hermes_cli/subcommands/logs.py",
+      "git_blob_sha": "8709a49aba5f2485d13e75574dc95ccc24cf0444",
+      "sha256": "e855e1295bdea80e461e4f9614089ec1ad4388bb518a86e01907e0ee42e58e60"
+    },
+    "subcommands/pairing.py": {
+      "upstream_path": "hermes_cli/subcommands/pairing.py",
+      "git_blob_sha": "24df9045b5016f9835ed71ddc3568a926118c2c1",
+      "sha256": "39b27d3a89c058174b70652d565278a90f679921b3de8479004f4b9c2baa6515"
+    },
+    "subcommands/sessions.py": {
+      "upstream_path": "hermes_cli/subcommands/sessions.py",
+      "git_blob_sha": "e47a3bbf7bab0e6df78e7bf95731fd62c482f2d9",
+      "sha256": "b7cd914b025306e48f1b5d49575fd773c0cc7ce1d9bd1381f109feebb6b8c6eb"
+    },
+    "subcommands/status.py": {
+      "upstream_path": "hermes_cli/subcommands/status.py",
+      "git_blob_sha": "f1735f1ee0a0b83d9d056541c2953e7bea9c3168",
+      "sha256": "ef95f72122ff5e284a73b189c7327da7a43dfb65628e675af75ffc7ecefe0147"
+    },
+    "subcommands/plugins.py": {
+      "upstream_path": "hermes_cli/subcommands/plugins.py",
+      "git_blob_sha": "26a0eec6469eddeee7dbd331dbd39c02eb103c49",
+      "sha256": "4c605eac125d603cf5d72e4f48e6191079210888bbb2dcf70722d98757b596f4"
+    },
+    "subcommands/profile.py": {
+      "upstream_path": "hermes_cli/subcommands/profile.py",
+      "git_blob_sha": "a67300f912262596d1a268ec9982c77b76939ab3",
+      "sha256": "17e2b5349c307edf5fde0a698c2c7056bf687f72fd8a6267f8bf6a42fee131e9"
+    },
+    "send_cmd.py": {
+      "upstream_path": "hermes_cli/send_cmd.py",
+      "git_blob_sha": "80739e78d6ad8d8764e358307168c41d41135b4d",
+      "sha256": "7a0bfae4da94e0cc70735c635eee52fb35722d983e96a5f22702f3f82dec2cc3"
+    },
+    "sessions_discard.py": {
+      "upstream_path": "hermes_cli/sessions_discard.py",
+      "git_blob_sha": "2cff3be1e2aa7dbd7fe6affdfd0762d6ed1427f9",
+      "sha256": "f0e3738da5f956bf52fd358e064ec54e168ed7405dab794c89c3000a9d75c774"
     }
   }
 }

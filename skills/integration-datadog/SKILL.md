@@ -1,529 +1,338 @@
 ---
 name: integration-datadog
-description: Connect Datadog (metrics, logs, events, monitors, incidents) to a self-hosted Hermes agent over SSH. Uses site-aware REST API with DD-API-KEY + DD-APPLICATION-KEY headers. Refuses the shipped Datadog Agent daemon (out of scope). Idempotent and rollback-safe. Works from Claude Code, Codex, Cursor, Hermes itself, and any AI agent.
+description: Connect datadog to a host-installed Hermes assistant over SSH using native supported interfaces, private credentials and verified rollback.
 ---
 
-# /integration-datadog — connect Datadog to a remote Hermes (SSH-first)
+# /integration-datadog — connect datadog over SSH
 
-You are the engineer connecting Datadog to a self-hosted Hermes agent on the user's VPS.
-You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
-SSH as root against the VPS. Every command in this skill runs on the VPS, not on the
-local machine.
+Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+This procedure targets the exclusive default profile on one host account. Containers,
+named profiles and concurrent configuration writers need a separately scoped procedure.
+Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
 
-Do everything autonomously; stop only for things a machine cannot do — minting the API
-key and Application key in the Datadog UI, and picking the correct site.
+## Before you start — gather (ask once)
 
-**Honest picture (verified 2026-06):** Datadog ships **no first-party MCP server**.
-The REST API is site-scoped — Datadog runs isolated regions (`datadoghq.com` US1,
-`us3.datadoghq.com`, `us5.datadoghq.com`, `datadoghq.eu` EU1, `ddog-gov.com` US1-Gov,
-`ap1.datadoghq.com` AP1). Using the wrong site returns `403 Forbidden — API key not
-authorized for this region`. Auth is **two headers, not Bearer**:
+Collect `$VPS_USER` and `$VPS_IP` with SSH key access. Native OAuth for the intended Datadog account/site; WRITES_ACKNOWLEDGED=1 acknowledges monitor/incident tools can mutate state and page on-call staff. API/application keys are not used by the catalogue path.
+Keep secrets in the local shell or a secret manager; do not paste them into chat.
+Confirm the remote account is the host with `whoami` and `hostname` before proceeding.
+The code blocks form one shell session; run them in order. Show the concrete preview before changing the server.
 
-- `DD-API-KEY: <32-char hex>` — allows event/metric/log **submit**
-- `DD-APPLICATION-KEY: <40-char hex>` — additionally allows monitor/dashboard/incident
-  **query and mutation**
-
-Datadog's *Agent* (the daemon that ships host metrics + APM traces) is out of scope for
-this skill — that's a systems concern, not an integration wiring. Wire the Agent
-separately via Datadog's own installer if the user wants host telemetry. This skill
-covers the *API* surface an AI agent uses to emit events, submit custom metrics, query
-monitors, and page on-call.
-
----
-
-## Before you start — gather (ask once, in one batch)
-
-| Variable | What | Where to get it |
-|----------|------|-----------------|
-| `$VPS_IP` | IP/hostname of the VPS running Hermes | User's hosting dashboard |
-| `$VPS_USER` | SSH user (typically `root`) | User's hosting dashboard |
-| `$DD_SITE` | Datadog site: `datadoghq.com` (US1) / `us3.datadoghq.com` / `us5.datadoghq.com` / `datadoghq.eu` / `ap1.datadoghq.com` / `ddog-gov.com` | Bottom-left of Datadog UI, or the domain in the browser URL bar |
-| `$DD_API_KEY` | 32-char hex, submit-only | Organization Settings -> API Keys -> **New Key** |
-| `$DD_APP_KEY` | 40-char hex, adds query + mutation scope | Personal Settings -> Application Keys -> **New Key** (scope to `metrics_read`, `monitors_read`, `monitors_write`, `events_write`, `logs_write` minimum) |
-| `$WRITES_ACKNOWLEDGED` | Set to `1` to confirm the Application key has monitor/incident write scope and the agent may create/mute monitors | Consent gate — monitor mutations can page on-call staff |
-
-Confirm SSH access before doing anything:
+## Step 0 — shared lifecycle and recovery helpers
 
 ```bash
-ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
-    "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
-  || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
-```
+# Run every block of this skill in ONE shell session: later steps call these functions.
+# If your harness starts a fresh shell per command, re-run this block first.
+SKILL_NAME=integration-datadog
+# Non-login ssh shells miss ~/.local/bin, where the Hermes installer puts `hermes`.
+remote() { ssh -o BatchMode=yes "$VPS_USER@$VPS_IP" "export PATH=\"\$HOME/.local/bin:\$PATH\"; $*"; }
+# gw_ready [SECONDS]: native readiness. Succeeds only when `gateway ensure --json` exits 0 and reports "state":"ready"
+# (the transient pending/draining codes 5 and 6 are retried twice). It never greps `gateway status` text, because the stopped
+# gateway prints "✗ Gateway is not running", which contains "running".
+gw_ready() {
+  remote "T=${1:-60} bash -s" <<'REMOTE'
+n=0
+while :; do
+  out=$(hermes -p default gateway ensure --json --timeout "$T") && rc=0 || rc=$?
+  [ "$rc" = 0 ] && break
+  n=$((n + 1))
+  { [ "$rc" = 5 ] || [ "$rc" = 6 ]; } && [ "$n" -lt 3 ] || { printf '%s\n' "$out" >&2; exit 1; }
+  sleep 3
+done
+case $out in *'"state":"ready"'*) printf '%s\n' "$out" ;; *) printf '%s\n' "$out" >&2; exit 1 ;; esac
+REMOTE
+}
+# gw_reload: restart the default-profile gateway natively and require a ready gateway with a NEW instance_id.
+# `--detach` keeps `restart` from running the gateway inside the ssh shell when no service is installed. With live
+# sessions and no terminal, restart refuses; GW_INTERRUPT=1 adds -y and interrupts them deliberately (never set by default).
+# Side effect: the pre-restart `ensure` read that captures the old instance_id STARTS a gateway when none is running (ensure never
+# installs a service, but it does start one). A reload implies the gateway should run, so that is accepted; read-only skills never call gw_reload.
+gw_reload() {
+  local old new out interrupt
+  interrupt=""
+  if [ "${GW_INTERRUPT:-0}" = 1 ]; then interrupt=1; fi
+  # Keep an endpoint identity even when ensure exits 6 (draining/restart_wait).
+  out=$(remote 'hermes -p default gateway ensure --json --timeout 10 2>/dev/null') || :
+  old=$(printf '%s\n' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  remote "hermes -p default gateway restart --detach${interrupt:+ -y}" \
+    || { echo "gw_reload: gateway restart failed or was refused (live sessions? re-run with GW_INTERRUPT=1 only if interrupting them is acceptable)." >&2; return 1; }
+  out=$(gw_ready) || return 1
+  new=$(printf '%s' "$out" | sed -n 's/.*"instance_id":"\([^"]*\)".*/\1/p')
+  if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
+  printf '%s\n' "$out"
+}
 
----
-
-## Step 1 — verify Hermes is reachable on the VPS
-
-```bash
-ssh "$VPS_USER@$VPS_IP" '
-  set -e
-  if command -v hermes >/dev/null 2>&1; then
-    hermes --version
-  elif docker ps --format "{{.Names}}" | grep -q hermes; then
-    AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-    docker exec "$AGENT" hermes --version
+# snapshot: copy ~/.hermes/.env and config.yaml aside BEFORE the first write.
+# The snapshot dir doubles as the "run in progress" marker that rollback looks for.
+snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+p="$HOME/.hermes/.hstack-backup"
+d="$p/$SKILL_NAME"
+# The active recovery point is published only after every artifact has been verified.
+if [ -e "$d" ] || [ -L "$d" ]; then
+  echo "snapshot: $d exists — a previous $SKILL_NAME run did not finish. Run rollback first (restores the state before that run), then re-run." >&2
+  exit 1
+fi
+mkdir -p "$p" && chmod 700 "$p"
+lock="$d.creating"
+mkdir "$lock" 2>/dev/null || { echo "snapshot: another $SKILL_NAME snapshot is being created; retry after it finishes." >&2; exit 1; }
+t=""
+trap '[ -z "$t" ] || rm -rf "$t"; rmdir "$lock" 2>/dev/null || true' EXIT
+[ ! -e "$d" ] && [ ! -L "$d" ] || { echo "snapshot: a recovery point appeared; nothing was written." >&2; exit 1; }
+t=$(mktemp -d "$p/.snapshot-$SKILL_NAME.XXXXXX")
+for f in .env config.yaml; do
+  if [ -f "$HOME/.hermes/$f" ]; then
+    cp -p "$HOME/.hermes/$f" "$t/$f"
+    cmp -s "$HOME/.hermes/$f" "$t/$f"
+    chmod 600 "$t/$f"
+  elif [ -e "$HOME/.hermes/$f" ] || [ -L "$HOME/.hermes/$f" ]; then
+    echo "snapshot: $f is not a readable regular file; nothing was written." >&2; exit 1
   else
-    echo "FAIL: hermes not found on host or in container"; exit 1
+    : > "$t/$f.absent"
+    chmod 600 "$t/$f.absent"
   fi
-' || { echo "ABORT: Hermes is not installed/running. Run /hermes-install first."; exit 1; }
+done
+
+for f in .env config.yaml; do
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$t/$entry" ]; then cksum < "$t/$entry" > "$t/$entry.cksum"; chmod 600 "$t/$entry.cksum"; fi
+  done
+done
+printf 'hstack-snapshot-v1\n' > "$t/.complete"
+chmod 600 "$t/.complete"
+mv "$t" "$d"
+[ -f "$d/.complete" ] && [ ! -d "$t" ] || { echo "snapshot: recovery-point publication failed; nothing was written." >&2; exit 1; }
+t=""
+REMOTE
+}
+# rollback: restore the exact pre-skill .env + config.yaml (so a FORCE=1 re-run that
+# fails puts the previous working value back), reload the gateway with gw_reload, then retire the snapshot.
+rollback() {
+  local rc=0
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE' || rc=$?
+set -e
+trap 'echo "rollback: restoration failed; active snapshot retained for recovery." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ ! -d "$d.creating" ] || { echo "rollback: snapshot creation is still in progress; retry later." >&2; exit 1; }
+[ -d "$d" ] || { echo "rollback: no snapshot for $SKILL_NAME; nothing was written."; exit 10; }
+# Incomplete legacy snapshots cannot prove that their final copy succeeded. Keep them for manual recovery.
+[ -f "$d/.complete" ] && [ "$(cat "$d/.complete")" = hstack-snapshot-v1 ] \
+  || { echo "rollback: snapshot is incomplete or legacy; active snapshot retained for manual recovery." >&2; exit 1; }
+for f in .env config.yaml; do
+  count=0
+  for entry in "$f" "$f.absent"; do
+    if [ -f "$d/$entry" ]; then
+      count=$((count + 1))
+      [ -f "$d/$entry.cksum" ] || { echo "rollback: missing checksum for $f; active snapshot retained for recovery." >&2; exit 1; }
+      checksum=$(cksum < "$d/$entry")
+      expected_checksum=$(cat "$d/$entry.cksum")
+      [ "$checksum" = "$expected_checksum" ] \
+        || { echo "rollback: corrupt backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+    fi
+  done
+  [ "$count" = 1 ] || { echo "rollback: missing or ambiguous backup for $f; active snapshot retained for recovery." >&2; exit 1; }
+done
+for f in .env config.yaml; do
+  if [ -f "$d/$f" ]; then
+    cp -p "$d/$f" "$HOME/.hermes/$f"
+    cmp -s "$d/$f" "$HOME/.hermes/$f"
+  elif [ -f "$d/$f.absent" ]; then
+    rm -f "$HOME/.hermes/$f"
+    [ ! -e "$HOME/.hermes/$f" ] && [ ! -L "$HOME/.hermes/$f" ] || { echo "rollback: file removal failed; active snapshot retained." >&2; exit 1; }
+  else
+    echo "rollback: missing backup for $f; active snapshot retained for recovery." >&2
+    exit 1
+  fi
+done
+[ -f "$HOME/.hermes/.env" ] && chmod 600 "$HOME/.hermes/.env"
+exit 0
+REMOTE
+  [ "$rc" = 10 ] && return 0
+  [ "$rc" = 0 ] || return "$rc"
+  gw_reload >/dev/null \
+    || { echo "rollback: files restored, but the gateway did NOT come back ready — active snapshot retained; inspect the gateway and retry rollback after resolving the fault" >&2; return 1; }
+  finish || return 1
+  echo "rollback: restored ~/.hermes/.env and config.yaml to their pre-$SKILL_NAME state."
+}
+
+# finish: mark the run successful; keep the snapshot as .prev for a manual undo.
+finish() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+trap 'echo "finish: could not retire the active snapshot; inspect the recovery point before continuing." >&2' ERR
+d="$HOME/.hermes/.hstack-backup/$SKILL_NAME"
+[ -d "$d" ] || exit 0
+rm -rf "$d.prev"
+[ ! -e "$d.prev" ] && [ ! -L "$d.prev" ] || { echo "snapshot retirement: previous destination remains; active snapshot retained." >&2; exit 1; }
+mv "$d" "$d.prev"
+[ ! -e "$d" ] && [ ! -L "$d" ] && [ -f "$d.prev/.complete" ] || { echo "snapshot retirement: move could not be verified; inspect the recovery point." >&2; exit 1; }
+REMOTE
+}
 ```
 
-Expected: `0.15.x` or `0.17.x`.
+```bash
+# Extra local artifacts are restored before the shared .env/config rollback.
+extra_snapshot() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+mkdir "$b" && chmod 700 "$b"
+for rel in mcp-tokens/datadog.json mcp-tokens/datadog.client.json mcp-tokens/datadog.meta.json mcp-tokens/datadog.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || { echo 'Refusing symlink artifact' >&2; exit 1; }
+  if [ -f "$p" ]; then cp -p "$p" "$b/$k"; cmp -s "$p" "$b/$k"; chmod 600 "$b/$k"; cksum < "$b/$k" > "$b/$k.cksum"
+  elif [ -e "$p" ]; then exit 1
+  else : > "$b/$k.absent"; fi
+done
+printf 'complete\n' > "$b/.complete"
+REMOTE
+}
+extra_restore() {
+  remote "SKILL_NAME='$SKILL_NAME' bash -s" <<'REMOTE'
+set -e
+b="$HOME/.hermes/.hstack-backup/$SKILL_NAME/extra"
+[ -f "$b/.complete" ] || { echo 'Incomplete extra backup retained for manual recovery' >&2; exit 1; }
+# Validate all copies before restoring any artifact.
+for rel in mcp-tokens/datadog.json mcp-tokens/datadog.client.json mcp-tokens/datadog.meta.json mcp-tokens/datadog.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  k=$(printf '%s' "$rel" | tr / _)
+  if [ -f "$b/$k" ]; then [ "$(cksum < "$b/$k")" = "$(cat "$b/$k.cksum")" ]; else [ -f "$b/$k.absent" ]; fi
+done
+for rel in mcp-tokens/datadog.json mcp-tokens/datadog.client.json mcp-tokens/datadog.meta.json mcp-tokens/datadog.cimd-off; do
+  parent=$(dirname "$HOME/.hermes/$rel")
+  while [ "$parent" != "$HOME/.hermes" ]; do [ ! -L "$parent" ] || exit 1; parent=$(dirname "$parent"); done
+  p="$HOME/.hermes/$rel"; k=$(printf '%s' "$rel" | tr / _)
+  [ ! -L "$p" ] || exit 1
+  if [ -f "$b/$k" ]; then mkdir -p "$(dirname "$p")"; cp -p "$b/$k" "$p"; cmp -s "$p" "$b/$k"; chmod 600 "$p"
+  else rm -f "$p"; [ ! -e "$p" ]; fi
+done
+REMOTE
+}
+fail_transaction() { extra_restore && rollback; exit 1; }
+```
 
----
+The shared snapshot restores the prior `.env` and `config.yaml` bytes, rather than deleting keys.
+OAuth cache files are also backed up. A local rollback cannot revoke authorization granted at the vendor; revoke a new grant in the vendor UI if desired. OAuth callback ports need forwarding from the browser to the VPS; Asana uses 27890 exactly.
 
-## Step 2 — idempotency check (skip if already wired)
+## Step 1 — verify the pinned Hermes host
 
 ```bash
-ALREADY=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^DD_API_KEY=' ~/.hermes/.env 2>/dev/null" || echo 0)
-if [ "$ALREADY" -gt 0 ] && [ "${FORCE:-0}" != "1" ]; then
-  echo "Datadog is already wired (DD_API_KEY present). Set FORCE=1 to rewire."
-  exit 0
+HERMES_BANNER=$(remote '
+  set -e
+  command -v hermes >/dev/null 2>&1 \
+    || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
+  hermes -p default --version
+') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+}
+```
+
+## Step 2 — inspect the existing integration
+
+```bash
+MCP_NAME=datadog
+
+if remote "hermes -p default mcp list | grep -E '^ *$MCP_NAME .*enabled'" >/dev/null 2>&1 && [ "${FORCE:-0}" != 1 ]; then
+  remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 && { echo "Already enabled and connected."; exit 0; }
+  echo "ABORT: existing integration is unhealthy; use FORCE=1 to repair it. Nothing was written."; exit 1
 fi
 ```
 
----
-
-## Step 3 — HARD GATE: validate credential format AND live Datadog API pre-flight
-
-Do NOT write anything until all checks pass.
+## Step 3 — HARD GATE before snapshot or preview
 
 ```bash
-[ "${WRITES_ACKNOWLEDGED:-0}" = "1" ] || {
-  echo "ABORT: WRITES_ACKNOWLEDGED=1 required. Monitor mutations page on-call. Set the Application key's scope narrowly if you don't want that."; exit 1;
-}
-
-# Format
-echo "$DD_API_KEY" | grep -qE '^[a-f0-9]{32}$' || { echo "ABORT: DD_API_KEY must be 32 lowercase hex chars."; exit 1; }
-echo "$DD_APP_KEY" | grep -qE '^[a-f0-9]{40}$' || { echo "ABORT: DD_APP_KEY must be 40 lowercase hex chars."; exit 1; }
-case "$DD_SITE" in
-  datadoghq.com|us3.datadoghq.com|us5.datadoghq.com|datadoghq.eu|ap1.datadoghq.com|ddog-gov.com) ;;
-  *) echo "ABORT: DD_SITE must be one of the six valid Datadog sites (got '$DD_SITE'). Copy from the URL bar of your Datadog UI."; exit 1 ;;
-esac
-
-DD_HOST="https://api.$DD_SITE"
-
-# Pre-flight 1: API key validation (cheap, submit-scope)
-HTTP=$(curl -sS -o /tmp/dd-validate.json -w "%{http_code}" \
-  -H "DD-API-KEY: $DD_API_KEY" \
-  "$DD_HOST/api/v1/validate")
-case "$HTTP" in
-  200) echo "OK: DD_API_KEY valid for site $DD_SITE." ;;
-  403) echo "ABORT: 403 — API key not authorized for site $DD_SITE. Confirm the site in Datadog UI bottom-left."; rm -f /tmp/dd-validate.json; exit 1 ;;
-  *)   echo "ABORT: unexpected HTTP $HTTP on /v1/validate."; cat /tmp/dd-validate.json; rm -f /tmp/dd-validate.json; exit 1 ;;
-esac
-rm -f /tmp/dd-validate.json
-
-# Pre-flight 2: App key validation via a read that requires both keys
-HTTP=$(curl -sS -o /tmp/dd-monitors.json -w "%{http_code}" \
-  -H "DD-API-KEY: $DD_API_KEY" \
-  -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
-  "$DD_HOST/api/v1/monitor?page_size=1")
-case "$HTTP" in
-  200) echo "OK: DD_APP_KEY has monitors_read scope." ;;
-  403) echo "ABORT: 403 — Application key missing monitors_read scope. Regenerate with the scopes listed in gather table."; rm -f /tmp/dd-monitors.json; exit 1 ;;
-  *)   echo "ABORT: unexpected HTTP $HTTP on /v1/monitor."; cat /tmp/dd-monitors.json; rm -f /tmp/dd-monitors.json; exit 1 ;;
-esac
-rm -f /tmp/dd-monitors.json
+[ "${WRITES_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: WRITES_ACKNOWLEDGED=1 required; monitor mutations can page staff. Nothing was written."; exit 1; }
+[ "${OAUTH_ACKNOWLEDGED:-0}" = 1 ] || { echo "ABORT: OAUTH_ACKNOWLEDGED=1 required for native browser authorization. Nothing was written."; exit 1; }
+remote "hermes -p default mcp catalog | grep -E '(^|[[:space:]])datadog([[:space:]]|$)'" >/dev/null || { echo "ABORT: pinned native catalogue entry unavailable. Nothing was written."; exit 1; }
 ```
 
----
+Catalogue and consent checks are read-only. This OAuth path has no PAT preflight: the account authentication happens through Hermes after snapshot; `mcp test` must then prove access.
 
-## Step 4 — DRY RUN preview (always show before writing)
+## Step 4 — review the concrete plan
 
 ```bash
 cat <<EOF
-DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  1. Write DD_API_KEY  (length ${#DD_API_KEY}, prefix ${DD_API_KEY:0:4}...)
-     Write DD_APP_KEY  (length ${#DD_APP_KEY}, prefix ${DD_APP_KEY:0:4}...)
-     Write DD_SITE     ($DD_SITE)
-  2. chmod 600 ~/.hermes/.env
-  3. Document REST surface at /opt/data/datadog-rest.md (events, metrics, logs, monitors, incidents)
-  4. Reload gateway: hermes gateway stop && hermes gateway run
-  5. Verify env loaded: env | grep -c '^DD_' inside the gateway
-  6. Smoke test: GET /v1/validate from inside Hermes -> expect 200
-  7. Emit one hstack.integration.wired event via /v1/events -> confirm 202
-
-Secrets are NEVER printed in plaintext.
+DRY RUN — $VPS_USER@$VPS_IP, default profile only:
+  Integration: datadog; path: catalog.
+  Preserve previous .env/config bytes in a private completed snapshot.
+  Use the pinned native MCP catalogue and native OAuth refresh.
+  Any post-snapshot failure restores previous local files and checks gateway readiness.
+  Vendor state changes are outside local rollback; requests require their own authorization.
 EOF
 ```
 
-Wait for user confirmation (or skip if `AUTO_APPROVE=1`).
+Proceed when this work is already authorized; if material scope or account authorization is missing, obtain it before Step 5. Never treat elapsed time as approval.
 
----
-
-## Step 5 — write the secrets (chmod 600, no echo, no logging)
+## Step 5 — snapshot and private settings
 
 ```bash
-ssh "$VPS_USER@$VPS_IP" "
-  hermes config set DD_API_KEY '$DD_API_KEY'
-  hermes config set DD_APP_KEY '$DD_APP_KEY'
-  hermes config set DD_SITE    '$DD_SITE'
-  chmod 600 ~/.hermes/.env
-"
-```
-
-Verify each landed (returns `1` per line, NEVER the value):
-
-```bash
-for K in DD_API_KEY DD_APP_KEY DD_SITE; do
-  N=$(ssh "$VPS_USER@$VPS_IP" "grep -c '^$K=' ~/.hermes/.env" || echo 0)
-  [ "$N" = "1" ] || { echo "FAIL: $K not written. Rolling back."; rollback; exit 1; }
-done
-```
-
-> If your Hermes build has no `config set` subcommand, use the safe sed pattern with
-> `|` delimiter — Datadog keys are hex but keep the pattern uniform:
-> ```bash
-> ssh "$VPS_USER@$VPS_IP" "
->   for KV in 'DD_API_KEY=$DD_API_KEY' 'DD_APP_KEY=$DD_APP_KEY' 'DD_SITE=$DD_SITE'; do
->     K=\${KV%%=*}
->     grep -q \"^\$K=\" ~/.hermes/.env || printf '%s\n' \"\$K=\" >> ~/.hermes/.env
->     sed -i \"s|^\$K=.*|\$KV|\" ~/.hermes/.env
->   done
->   chmod 600 ~/.hermes/.env
-> "
-> ```
-
----
-
-## Step 6 — document the REST surface (no MCP exists)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "mkdir -p /opt/data && cat > /opt/data/datadog-rest.md" <<'DOC'
-# Datadog REST surface (wired via Hermes generic HTTP tool)
-
-**Site-scoped host:** `https://api.${DD_SITE}` — using the wrong site returns 403.
-
-**Auth headers (both required for query/mutation):**
-- `DD-API-KEY: ${DD_API_KEY}`
-- `DD-APPLICATION-KEY: ${DD_APP_KEY}` (submit-only endpoints accept API key alone)
-
-## Events — narrative signal for humans
-
-`POST /api/v1/events`
-```json
-{"title":"hstack: agent restarted","text":"gateway stop+run after Datadog wire","tags":["source:hermes-agent"]}
-```
-Success: `202 Accepted`.
-
-## Metrics — custom time series
-
-`POST /api/v2/series` (v2, JSON)
-```json
-{"series":[{"metric":"hermes.msg.count","type":1,"points":[{"timestamp":1720000000,"value":42}],"tags":["platform:telegram"]}]}
-```
-`type`: `0`=unspecified, `1`=count, `2`=rate, `3`=gauge. Success: `202`.
-
-## Logs — structured log intake
-
-`POST https://http-intake.logs.${DD_SITE}/api/v2/logs`  (note: separate host)
-```json
-[{"ddsource":"hermes","service":"gateway","ddtags":"env:prod","message":"…","hostname":"vps-1"}]
-```
-Header: `DD-API-KEY` only (log intake does not need App Key). Success: `202`.
-
-## Monitors — read + mute + trigger
-
-- `GET /api/v1/monitor?page_size=100` — list.
-- `GET /api/v1/monitor/{id}` — read one.
-- `POST /api/v1/monitor/{id}/mute` — silence (optional `end` unix ts).
-- `POST /api/v1/monitor/{id}/unmute` — unsilence.
-- `POST /api/v1/monitor` — create. Requires `monitors_write` scope.
-
-## Incidents — page and update on-call
-
-- `POST /api/v2/incidents` — create. Body: `{"data":{"type":"incidents","attributes":{"title":"…","customer_impact_scope":"…"}}}`
-- `PATCH /api/v2/incidents/{id}` — update.
-- `POST /api/v2/incidents/{id}/timeline` — post narrative updates.
-
-## Dashboards — read (for context) + create
-
-- `GET /api/v1/dashboard` — list.
-- `GET /api/v1/dashboard/{id}` — full JSON model.
-- `POST /api/v1/dashboard` — create.
-
-## Common failure modes to surface in agent replies
-
-| Code | Meaning | Fix |
-|------|---------|-----|
-| 400  | Malformed payload (bad tag chars, missing required field) | Datadog tags: lowercase, `[a-z0-9_./-]`, max 200 chars |
-| 403  | Wrong site OR missing App Key scope | Verify `DD_SITE`; check the App Key's scopes in Personal Settings |
-| 404  | Monitor/incident ID not found (or wrong site) | Confirm ID exists in this site's org |
-| 429  | Rate limited | Datadog rate limits differ per endpoint; back off with `X-RateLimit-Reset` header |
-DOC
-ssh "$VPS_USER@$VPS_IP" "chmod 644 /opt/data/datadog-rest.md"
-```
-
----
-
-## Step 7 — reload the gateway (stop + run, NOT restart)
-
-```bash
-ssh "$VPS_USER@$VPS_IP" "hermes gateway stop || true"
-sleep 2
-ssh "$VPS_USER@$VPS_IP" "hermes gateway run --daemon"
-sleep 5
-```
-
----
-
-## Step 8 — verify env is loaded inside the gateway
-
-```bash
-LOADED=$(ssh "$VPS_USER@$VPS_IP" '
-  AGENT=$(docker ps --filter name=hermes --format "{{.Names}}" | head -1)
-  if [ -n "$AGENT" ]; then
-    docker exec "$AGENT" env | grep -cE "^DD_(API_KEY|APP_KEY|SITE)="
-  else
-    hermes gateway env 2>/dev/null | grep -cE "^DD_(API_KEY|APP_KEY|SITE)="
-  fi
-')
-[ "$LOADED" = "3" ] || { echo "FAIL: expected 3 DD_* vars in gateway env, saw $LOADED. Rolling back."; rollback; exit 1; }
-```
-
----
-
-## Step 9 — live smoke test (inside the VPS so credentials stay there)
-
-Two checks: `/v1/validate` (API key), then emit one `hstack.integration.wired` event.
-
-```bash
-RES=$(ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  H="https://api.$DD_SITE"
-  V=$(curl -sS -o /dev/null -w "%{http_code}" -H "DD-API-KEY: $DD_API_KEY" "$H/api/v1/validate")
-  E=$(curl -sS -o /dev/null -w "%{http_code}" \
-        -H "DD-API-KEY: $DD_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d "{\"title\":\"hstack.integration.wired\",\"text\":\"Datadog reachable from Hermes\",\"tags\":[\"source:hstack\",\"skill:integration-datadog\"]}" \
-        "$H/api/v1/events")
-  echo "validate=$V event=$E"
-')
-echo "$RES"
-case "$RES" in
-  *validate=200*event=202*) echo "OK: Datadog reachable and event emitted. Check Events Explorer." ;;
-  *validate=200*)           echo "WARN: validate OK but event emit failed. Investigate."; rollback; exit 1 ;;
-  *)                        echo "FAIL: Datadog unreachable from Hermes. Rolling back."; rollback; exit 1 ;;
-esac
-```
-
----
-
-## Rate limits and capacity planning
-
-Datadog rate-limits per endpoint class, not globally. Every response includes
-`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` (seconds until
-the window resets), and `X-RateLimit-Period` (window size in seconds). Read them
-before writing retry logic.
-
-| Endpoint class | Default limit (per org) | Reset | Notes |
-|---|---|---|---|
-| `POST /api/v1/events` | 1,000 / hour | rolling 3600s | 429 with `Retry-After`; consider `POST /api/v2/events` for higher throughput plans |
-| `POST /api/v2/series` (metrics) | 3,600 / hour on the free/pro plans, 60,000+ on enterprise | rolling 3600s | Batch metrics into a single call — up to 3.2 MB payload, no per-series cap |
-| Log intake `POST /api/v2/logs` | 5 MB / request, 1,000 logs / request | per request | No hourly cap; billed by ingestion GB — the real cost gate |
-| `GET /api/v1/monitor` | 60 / hour | rolling 3600s | Deceptively low; cache monitor lists locally when you can |
-| `POST /api/v1/monitor` (create/update/mute) | 60 / hour | rolling 3600s | Mutations share the read budget |
-| `POST /api/v2/incidents` | 100 / hour | rolling 3600s | An incident storm can hit this fast |
-
-**Retry pattern the agent should follow when it hits `429`:**
-
-```bash
-# Read Retry-After from the response header; fall back to Reset epoch delta.
-retry_after=$(curl -sSD - -o /dev/null -H "DD-API-KEY: $DD_API_KEY" \
-                "$DD_HOST/api/v1/events" | grep -i '^Retry-After:' | awk '{print $2}' | tr -d '\r')
-sleep "${retry_after:-30}"
-```
-
-**Ingestion-cost gate (metrics + logs):** Datadog bills logs by ingested GB and
-metrics by custom-metric-count. Agents that emit one metric per message on a
-Telegram bot with 50k msgs/day can trip the free-tier metric cap in one
-afternoon. Cap emission at the agent side: sample logs, aggregate metrics into
-5-min buckets, dedupe events by title within a rolling window.
-
-**Long-term storage vs live view:** Events retained 15 days, metrics 15 months
-at 1-min resolution then rolled up, logs 15 days by default (indexable), 30 days
-in Live Search cold storage. If an agent needs to correlate against events > 15
-days old, snapshot to `integration-r2` weekly rather than expecting Datadog to
-retain them.
-
----
-
-## Worked debugging scenarios
-
-### Scenario A — "Datadog was working, then this morning every call returns 403"
-
-Symptoms: no config changes on the VPS side; the smoke test in Step 9 now fails
-with `validate=403`.
-
-Diagnosis order:
-
-1. **Rotate check.** Did anyone rotate the API or App key in the Datadog UI without
-   pushing the new value via `hermes config set`? Ask, then check
-   Organization Settings → API Keys → sort by "Modified" desc.
-2. **Site mismatch after org migration.** Datadog sometimes migrates enterprise
-   orgs between sites (US1 → US5). The old `DD_SITE` value is stale.
-   `curl -H "DD-API-KEY:$DD_API_KEY" https://api.us5.datadoghq.com/api/v1/validate`
-   — if that returns 200, update `DD_SITE`.
-3. **App Key scope revoked.** Personal Settings → Application Keys → check the
-   key's scopes. A collaborator with admin rights can prune scopes.
-4. **Account suspension.** Overdue invoice → org-wide 403 from all endpoints.
-   Datadog does not clearly communicate this on the API; check billing.
-
-Once fixed: `hermes config set DD_SITE 'us5.datadoghq.com'`, then
-`hermes gateway stop && hermes gateway run` (never `restart`).
-
-### Scenario B — "Metrics show up in Events Explorer but not in dashboards"
-
-Root cause is almost always the tag namespace. Datadog silently accepts
-mis-typed tags but you can't filter dashboards on them.
-
-Debug:
-
-```bash
-# List tag keys emitted in the last 10 min
-ssh "$VPS_USER@$VPS_IP" '
-  set -a; . ~/.hermes/.env; set +a
-  curl -sS -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
-    "https://api.$DD_SITE/api/v1/tags/hosts" | python3 -m json.tool | grep source
-'
-```
-
-If you see `source:hstack` and `source:Hstack`, you have case drift. Tags are
-case-sensitive in filters but lowercase-normalized in some UI views — a nasty
-mismatch. Fix: sanitize all tag emit code to `tr '[:upper:]' '[:lower:]'`.
-
-### Scenario C — "Monitor mute worked but the monitor still alerted"
-
-Datadog has two mute mechanisms: (a) `POST /v1/monitor/{id}/mute` — mutes the
-monitor globally, (b) `POST /v1/monitor/{id}/mute?scope=env:staging` —
-mutes only the scope. Passing an empty scope string is treated as (a); passing
-a malformed scope silently mutes nothing. Confirm with:
-
-```bash
-curl -sS -H "DD-API-KEY: $DD_API_KEY" -H "DD-APPLICATION-KEY: $DD_APP_KEY" \
-  "https://api.$DD_SITE/api/v1/monitor/$MONITOR_ID" | python3 -m json.tool | grep -A2 '"options"'
-```
-
-The response block will show `"silenced": {}` when nothing is muted. If your
-mute call returned 200 but the block is `{}`, the scope was malformed.
-
-### Scenario D — "Log intake returns 202 but logs never appear"
-
-Two independent causes worth checking in order:
-
-1. **Wrong intake host.** Skills using `api.$DD_SITE/api/v2/logs` — that's the
-   Public API, not intake. Real intake is `http-intake.logs.$DD_SITE`. The
-   Public API accepts your call and drops it.
-2. **Log index filter drops the log.** Logs → Configuration → Indexes.
-   Filters run before indexing; a filter with a typo silently drops matching
-   logs. Add a temporary catch-all index to isolate.
-
----
-
-## Credential rotation procedure
-
-Datadog credentials come in three flavors, each with distinct rotation
-mechanics:
-
-**API key (`DD_API_KEY`) — 32-char hex, submit-scope:**
-
-1. Datadog UI → Organization Settings → API Keys → **New Key**. Copy the value.
-2. On the VPS: `hermes config set DD_API_KEY '<new>'`.
-3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
-4. Re-run Step 9's smoke test; confirm `validate=200`.
-5. Back in the UI, disable the old key. Wait 10 minutes to confirm no other
-   integration was silently using it (log intake, agent daemon, external
-   collectors will 403 loudly), then delete it.
-
-**Application key (`DD_APP_KEY`) — 40-char hex, adds query + mutation scope:**
-
-1. UI → Personal Settings → Application Keys → **New Key**. Match the scopes
-   listed in the gather table exactly: `metrics_read`, `monitors_read`,
-   `monitors_write`, `events_write`, `logs_write`. Do NOT grant "all scopes."
-2. On the VPS: `hermes config set DD_APP_KEY '<new>'`.
-3. `hermes gateway stop && sleep 2 && hermes gateway run --daemon`.
-4. Re-run Step 9's smoke test AND
-   `curl -H "DD-API-KEY:$DD_API_KEY" -H "DD-APPLICATION-KEY:$DD_APP_KEY" $DD_HOST/api/v1/monitor?page_size=1`
-   — needs 200 for query scope confirmation.
-5. Delete the old key in the UI.
-
-**Site (`DD_SITE`) — rare, but sometimes forced by an enterprise migration:**
-
-1. New site announced by Datadog support → new keys minted on the new site.
-2. Rotate `DD_API_KEY`, `DD_APP_KEY`, AND `DD_SITE` in the same
-   `hermes config set` batch, then a single gateway stop+run.
-3. Update `DD_SITE` references in every skill's `/opt/data/*-rest.md` if they
-   hard-coded the old site (they should reference `${DD_SITE}` — grep to
-   confirm).
-
-**Rotation-triggered blast-radius review:** After any rotation, check that the
-old key doesn't appear in `~/.hermes/logs/*.log` or `/var/log/*` on the VPS.
-If it does, purge the file (the token is worthless once revoked, but grep-scans
-by future security auditors will flag it as a live-looking secret).
-
----
-
-## Rollback (auto-runs on any failure above)
-
-```bash
-rollback() {
-  ssh "$VPS_USER@$VPS_IP" "
-    for K in DD_API_KEY DD_APP_KEY DD_SITE; do
-      hermes config unset \$K 2>/dev/null || sed -i \"/^\$K=/d\" ~/.hermes/.env
-    done
-    rm -f /opt/data/datadog-rest.md
-    hermes gateway stop; sleep 2; hermes gateway run --daemon
-  "
-  echo "Rolled back. Datadog is no longer wired."
+snapshot || { echo "ABORT: snapshot failed. Nothing was written."; exit 1; }
+extra_snapshot || { echo "FAIL: extra snapshot incomplete; retain active backup for manual recovery. No integration settings were written."; exit 1; }
+put_env() {
+  printf '%s\n' "$2" | remote "IFS= read -r v && hermes -p default config set $1 \"\$v\" >/dev/null 2>&1 && chmod 600 ~/.hermes/.env"
 }
 ```
 
----
+Only values on stdin reach SSH. The remote `hermes config set` process briefly has its value in its argv; use a trusted exclusive VPS account. `chmod 600` protects the persisted `.env`.
+
+## Step 6 — native registration
+
+```bash
+remote 'hermes -p default mcp install datadog' >/dev/null 2>&1 || { echo "FAIL: catalogue installation."; fail_transaction; }
+remote "hermes -p default mcp list | grep -E '^ *datadog .*enabled'" >/dev/null || { echo "FAIL: catalogue entry is not enabled."; fail_transaction; }
+```
+
+Run native OAuth login in an **interactive SSH terminal**, with callback forwarding as required by the installed manifest. The browser must reach the VPS loopback callback. Complete it before running Step 7:
+
+`hermes -p default mcp login datadog`
+
+`mcp install` can save an entry despite a failed probe, and `mcp login` can exit 0 after failure. Neither is health evidence. If authorization is cancelled, run `extra_restore && rollback` in the original shell; retain the active backup if recovery fails.
+
+## Step 7 — reload and health
+
+```bash
+gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready."; fail_transaction; }
+remote "hermes -p default mcp test $MCP_NAME" >/dev/null 2>&1 || { echo "FAIL: MCP tools are not reachable."; fail_transaction; }
+```
+
+## Step 8 — verify persistence and finish
+
+```bash
+finish || { echo "FAIL: recovery point could not be retired; inspect it before continuing."; exit 1; }
+echo "Native catalogue entry is enabled, gateway ready, and MCP tools reachable. A real chat-turn read still requires live validation."
+```
+
+## Rollback
+
+For an active failed transaction run `extra_restore && rollback`. Recovery validates backup checksums before replacing files and preserves the active recovery point when restoration or readiness fails.
+After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/integration-datadog.prev`. For manual undo first inspect that backup, ensure no newer transaction or config writer exists, and move `.prev` back to the active name; then call the recovery command above. Do not delete a newer active backup.
 
 ## Pitfalls
 
-| # | Pitfall | Why it bites | Prevention |
-|---|---------|--------------|------------|
-| 1 | Wrong site | US1 keys on EU1 return 403; the error message barely hints at it. | Read `DD_SITE` from the UI bottom-left; validate against the six-site allowlist. |
-| 2 | Bearer auth | Datadog rejects Bearer. Auth is via `DD-API-KEY` + `DD-APPLICATION-KEY` headers. | Never send `Authorization:`; use the two DD headers. |
-| 3 | Missing App Key on query | `/v1/monitor` returns 403 with only API key. | Add `DD-APPLICATION-KEY` to any query/mutation call. |
-| 4 | Log intake on wrong host | Logs go to `http-intake.logs.$DD_SITE`, NOT `api.$DD_SITE`. Silently drops. | Use the doc's host table; grep for `http-intake.logs` in the REST doc. |
-| 5 | App Key with over-broad scope | Compromise = write access to every monitor. | Scope narrowly: `metrics_read`, `monitors_read`, `events_write`, add `_write` only where needed. |
-| 6 | Tag character rules | Datadog tags must be lowercase `[a-z0-9_./-]`, max 200 chars. Bad tags → 400. | Sanitize tag values client-side. |
-| 7 | Confusing with the Datadog Agent daemon | The daemon is a separate install for host telemetry; this skill only wires the API. | Document this explicitly; point at Datadog's installer for the daemon. |
-| 8 | `gateway restart` for env changes | Restart doesn't reliably re-read `.env`. | Always `stop` + `run`. |
-| 9 | Storing keys in `config.yaml` | World-readable; can't rotate without restart. | Only `~/.hermes/.env`, `chmod 600`. |
-| 10 | sed with `/` delimiter | Keys are hex — safe, but keep pattern uniform. | Always `\|` delimiter. |
-| 11 | Container vs host confusion | Env on host but Hermes in container. | Step 1 detects layer; verify env inside gateway (Step 8). |
-| 12 | Emitting events without tags | Datadog Events Explorer is unfiltered — ops can't correlate. | Always tag: `source:hermes-agent`, `env:prod`, `skill:…`. |
-| 13 | Monitor mutate without approval | Auto-mute can hide real outages. | Require `WRITES_ACKNOWLEDGED=1`; log every mutate. |
-| 14 | Log intake at `api.$DD_SITE/api/v2/logs` | Public API accepts and drops; intake host is `http-intake.logs.$DD_SITE`. | Use the doc's host table; grep the REST doc for `http-intake.logs`. |
-| 15 | Ingesting one metric per message | Custom-metric count trips the free-tier cap within a day on any bot with real traffic. | Aggregate into 5-min buckets; sample logs; dedupe events by title. |
-| 16 | Mute call with malformed `scope=` param | Datadog returns 200 but the monitor stays unmuted. | Verify the `silenced:` block on the monitor; retry with a validated scope string. |
-| 17 | Case-drift on tags (`source:hstack` vs `source:Hstack`) | Filters are case-sensitive; UI is not. Dashboards show empty, Events Explorer shows data. | Lowercase all tag values client-side before emit. |
-| 18 | Monitor list endpoint deceptively rate-limited (60/hr) | An agent that polls monitors every minute exhausts the budget in an hour. | Cache monitor list locally; refresh on webhook, not on poll. |
-| 19 | Enterprise site migration (`us1` → `us5`) breaks old keys | 403 with a misleading "not authorized" message. | Re-mint keys on the new site; update `DD_SITE`; grep for hard-coded old-site URLs. |
-| 20 | Trial expiring silently downgrades scopes | An App Key that had `monitors_write` on trial loses it when the org reverts to Pro. | Monitor billing; alert on trial-end 14 days out. |
+| # | Symptom | Meaning | Action |
+|---|---|---|---|
+| 1 | Write consent | Monitor and incident actions can page on-call staff | Require WRITES_ACKNOWLEDGED=1 |
+| 2 | Key confusion | The native catalogue uses OAuth | Do not mix in the legacy API/application key flow |
+| 3 | Wrong site | Authorization must target the intended Datadog account/site | Check the grant before approval |
+| 4 | Event probes | Creating an event changes vendor state | Use tool connection testing instead |
+| 5 | Callback unreachable | Browser and Hermes run on different machines | Forward the selected loopback port |
+| 6 | Login exit0 | Authentication can still have failed | Require mcp test |
 
----
+## Verified against
+
+Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/datadog/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/datadog/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (0.15.x / 0.17.x)
-- [ ] Idempotency check passed (or `FORCE=1` overrode)
-- [ ] `WRITES_ACKNOWLEDGED=1` consent gate passed
-- [ ] Format checks passed for API key (32 hex), App key (40 hex), site (six-allow-list)
-- [ ] Live pre-flight: `/v1/validate` returned `200`
-- [ ] Live pre-flight: `/v1/monitor?page_size=1` returned `200` (App Key scope check)
-- [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
-- [ ] `DD_API_KEY`, `DD_APP_KEY`, `DD_SITE` in `~/.hermes/.env`, `chmod 600`, **not** in `config.yaml` or chat
-- [ ] `/opt/data/datadog-rest.md` written with events/metrics/logs/monitors/incidents + error table
-- [ ] Gateway reloaded with `stop` + `run` (NOT `restart`)
-- [ ] Env verified: 3 `DD_*` vars visible inside gateway
-- [ ] Hermes-side smoke test: `validate=200` and `event=202` returned
-- [ ] `hstack.integration.wired` event visible in Datadog Events Explorer
-- [ ] Rollback function defined and proven (re-run with `FORCE=1` rewires cleanly)
-
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and REST failure modes.
+- [ ] Pinned host/default profile confirmed; correct account and consent selected.
+- [ ] Read-only credential or catalogue preflight passed before configuration writes.
+- [ ] Native registration/discovery verified; zero exit from install/add/login was not treated as proof.
+- [ ] Private values stayed on SSH stdin and in mode-600 credential files.
+- [ ] Exact previous values and extra owned artifacts recover on failure.
+- [ ] A real account read through Hermes is recorded separately as pending until observed.
