@@ -573,4 +573,4 @@ NOT verified: that `https://api.githubcopilot.com/mcp/` accepts a PAT as a beare
 - [ ] Smoke test: `GET https://api.github.com/user` on the VPS, token read back from `~/.hermes/.env`, returned `200`
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml` (a failed `FORCE=1` re-run keeps the old working token)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

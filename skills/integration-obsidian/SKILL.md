@@ -648,4 +648,4 @@ NOT verified: the Local REST API plugin's endpoints and authentication, `mcp-obs
 - [ ] Smoke test passed: probe note written, read back and removed (A) or `GET /vault/` = 200 with the stored key (C)
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml`
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

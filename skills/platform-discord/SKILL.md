@@ -776,7 +776,7 @@ Removing Discord for good is a separate decision (unset the three `DISCORD_*` ke
 - [ ] `finish` ran; any failure after the snapshot ran `rollback` and restored the previous `.env` and `config.yaml`
 - [ ] Human step: an allowlisted user messaged the bot and got a reply
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and Discord failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and Discord failure modes.
 
 ---
 

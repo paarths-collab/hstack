@@ -59,13 +59,15 @@ Design notes for anyone touching the installer:
 
 ## Repo layout
 
+The complete directory map and placement rules are in [docs/architecture.md](docs/architecture.md). Validation commands are in [tests/README.md](tests/README.md).
+
 ```
 install.sh, install.ps1  — 1-click universal installers (all 6 IDEs, interactive picker)
 skills/<name>/SKILL.md   — one skill per folder; frontmatter + procedure + pitfalls + verify
 setup, setup-codex, setup-cursor, setup-hermes, setup-gemini, setup-openclaw
                           — per-IDE distributors (symlink or format-convert)
 setup-all                — runs every setup-* in sequence
-reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
+docs/reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
 metrics/                 — clone traffic tracking (update-clone-traffic.mjs + clone-traffic.svg)
 .github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
 acceptance/              — acceptance contract(s) for the reversible transaction
@@ -164,7 +166,7 @@ Secrets always go in `~/.hermes/.env` or `/opt/data/.env` (inside container), ne
 ## SSH access to a VPS — the right procedure
 
 When a user hands off a VPS for remote work, follow this exact sequence.
-Deviating from it causes the failure chain documented in `reference/TROUBLESHOOTING.md`.
+Deviating from it causes the failure chain documented in `docs/reference/TROUBLESHOOTING.md`.
 
 ### Before touching anything — confirm you're on the host, not a container
 
@@ -310,7 +312,7 @@ journal, lock and rollback. Omitted `--instance` selects only the legacy
 - Branch from `main`: `<type>/<short-description>` (e.g. `feat/hermes-mcp-add`, `fix/ssh-key-merge`)
 - Commit messages: `<type>(<scope>): <what> — <why>` (conventional commits)
 - Every skill addition needs a `Definition of done` checklist in the skill file
-- `reference/TROUBLESHOOTING.md` grows after every real failure — add the row, don't skip it
+- `docs/reference/TROUBLESHOOTING.md` grows after every real failure — add the row, don't skip it
 
 ## Secrets hygiene
 

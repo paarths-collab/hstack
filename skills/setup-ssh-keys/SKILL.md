@@ -329,5 +329,5 @@ on one can delete an unrelated key.
 - [ ] If `HARDEN_SSHD=1`: `sshd -t` passed, and key auth was re-verified after the reload
 - [ ] Rollback function defined, and the private key path reported back to the calling skill
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for the full SSH
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for the full SSH
 failure chain in the order the errors appear.

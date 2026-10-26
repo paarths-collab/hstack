@@ -808,4 +808,4 @@ Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab90
 
 **Not verified:** nothing was run against a real Hermes, Azure tenant, Teams client or reverse proxy. The Microsoft token request is the documented client-credentials grant that the adapter uses, but it was never sent to Microsoft; the AADSTS hints are Microsoft's published codes. Behaviour of every `hermes` command in the offline tests is a stub written from the source's output strings (the argparse syntax is real). Whether `aadObjectId` arrives lower-case in a live activity is assumed. The public endpoint, the Azure bot registration, tenant admin consent and Teams delivery are human steps that this skill cannot check from the VPS. The `hermes pm install --extra teams` command exists (`hermes_cli/main.py:679-682`) but is not called by this skill because the offline parser harness does not cover it.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway failure modes.

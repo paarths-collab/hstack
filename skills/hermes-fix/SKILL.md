@@ -659,4 +659,4 @@ Not verified: nothing was run against a real Hermes host, a real Docker containe
 (a "not configured" cosmetic row, an RSS leak, a Docker image tag) could not be confirmed or refuted from the tagged source and are not repeated. The stub the tests use reproduces the command
 syntax of v0.22.5 but invents behaviour.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for the full symptom -> cause -> fix catalogue.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for the full symptom -> cause -> fix catalogue.

@@ -1,7 +1,8 @@
 # hstack launch plan — v2 (reviewed, auto-decided, then stress-tested)
 
+> Historical planning material. For current capabilities and validation, use the [documentation index](../README.md) and [compatibility record](../../compatibility/VALIDATION.md).
+
 Status: APPROVED-PENDING-STEP-0 · updated 2026-07-28 (VPS/pricing specifics stripped from README + launch copy)
-Design doc: `~/.gstack/projects/paarths-collab-hstack/2026-07-27-paarth-hook-repositioning-design-launch-plan-v2.md`
 v1 was reviewed via /autoplan (2026-07-14); v2 adds the four fixes from /office-hours (2026-07-27).
 
 ---
@@ -91,11 +92,11 @@ Would you install this on your server tomorrow? Yes or no is fine.
 3. **Reconcile counts** — the truth is **94 skills = 15 hermes + 8 platform + 71 integration**
    (SKILL.md file count). README badges (94/71/8) are correct. Fix the stragglers:
    - CLAUDE.md line 18 says 73/68/5 → change to 15/8/71 = 94
-   - docs/image-content-brief.md lines 4, 24, 67, 102, 141 → 68/73/5 all stale
+   - docs/maintainers/image-content-brief.md lines 4, 24, 67, 102, 141 → 68/73/5 all stale
    - CHANGELOG.md — historical refs (line 29 etc) are accurate at time-of-writing,
      leave alone; only fix present-tense refs if any drift
    - CI guard `.github/workflows/count-check.yml` already exists and passes; extend
-     scope to also grep `docs/image-content-brief.md` so it can't drift again
+     scope to also grep `docs/maintainers/image-content-brief.md` so it can't drift again
 4. **Fix `skills/integration-launchdarkly/`** — empty dir (no SKILL.md), created
    2026-07-01 and never finished. Either (a) complete the skill and bump to 72
    integrations + update all counts, or (b) `rm -rf` the empty dir. Pre-launch

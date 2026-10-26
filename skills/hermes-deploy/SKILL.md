@@ -706,7 +706,7 @@ HR, marketing, support, ops/admin, research).
 - [ ] User sent first "hello" on `$PLATFORM` and Hermes replied
 - [ ] Throwaway root password rotated/locked
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway,
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway,
 MCP, SSH-key, and platform failure modes.
 
 ## Verified against Hermes v0.22.5

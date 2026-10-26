@@ -569,4 +569,4 @@ is written from the source above, not observed. Unknown: the exit status of `gat
 `unzip`/`python3` exist on your VPS (the check degrades with a warning); restores of very large `state.db` files; and cross-version
 restores (restore an archive onto the same Hermes version that made it).
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway failure modes.

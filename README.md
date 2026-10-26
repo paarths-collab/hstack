@@ -31,6 +31,10 @@ Your server. Your data. No hstack-hosted service. Each pack installs a reviewed 
 
 ---
 
+## Repository guide
+
+Start with the [documentation index](docs/README.md), [repository structure](docs/architecture.md), or [test guide](tests/README.md). Setup procedures live in `skills/`, executable implementations in `packages/`, and the browser planner in `apps/composer/`.
+
 ## Three workflows you can prepare now
 
 | Pack | What arrives in Telegram |
@@ -308,7 +312,7 @@ The repaired paths check concrete failure modes and preserve recovery evidence:
 
 Current Hermes provides native backup and update facilities. The candidate uses
 supported service commands and does not add an unconditional nightly restart.
-Historical symptoms in [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md)
+Historical symptoms in [docs/reference/TROUBLESHOOTING.md](docs/reference/TROUBLESHOOTING.md)
 must be checked against the installed release before applying an older workaround.
 
 ## Acceptance transaction (experimental)
@@ -338,7 +342,7 @@ input. The report packs share a separate reviewed Python runtime; see their setu
 The value here is the accumulated knowledge of what breaks and what works. **New Hermes failure mode + fix, or a verified new integration** — those are the highest-leverage contributions.
 
 1. Fork and branch.
-2. Add or update `skills/<name>/SKILL.md`, or add a row to [reference/TROUBLESHOOTING.md](reference/TROUBLESHOOTING.md) (symptom → cause → fix, GitHub issue # if any).
+2. Add or update `skills/<name>/SKILL.md`, or add a row to [docs/reference/TROUBLESHOOTING.md](docs/reference/TROUBLESHOOTING.md) (symptom → cause → fix, GitHub issue # if any).
 3. New integrations follow the SSH-first template in [CLAUDE.md](CLAUDE.md) and [templates/SKILL.template.md](templates/SKILL.template.md): SSH check → verify supported Hermes → idempotency → credential preflight → preview → private write → native connector or reviewed setup → supported gateway lifecycle → live smoke test → recovery.
 4. Open a PR.
 

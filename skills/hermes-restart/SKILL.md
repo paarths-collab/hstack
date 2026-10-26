@@ -349,4 +349,4 @@ Not verified: nothing here was run against a real Hermes host, systemd, or a liv
 syntax but invents behaviour. The service-install path (Step 4) and the restart of an installed service while an unmanaged gateway runs are
 source-read only.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway failure modes.

@@ -1,5 +1,7 @@
 # Agent Recipes — Product Hunt launch kit
 
+> Historical planning material. For current capabilities and validation, use the [documentation index](../README.md) and [compatibility record](../../compatibility/VALIDATION.md).
+
 This launch kit describes the product as it exists today:
 
 ```text

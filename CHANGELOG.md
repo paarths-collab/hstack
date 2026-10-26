@@ -54,7 +54,7 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 - **`--pick` accepts menu numbers** (`1` for everything, `2`–`21` for one tier each) as well as tier and integration names.
 - **PowerShell installer mirror.** `install.ps1` and `setup.ps1` apply the same ownership and backup rules and always copy skills (no symlinks). `tests/installer/test-install.ps1` runs under `pwsh`; it has been verified on Linux `pwsh` only, not on Windows PowerShell 5.1.
 - **Acceptance transaction (experimental).** `packages/acceptance/` wraps the Founder Brief GitHub-to-Telegram workflow in a reversible transaction that writes a secret-free receipt and restores the last working state on rollback. It is verified offline only; a real-server run is still required. See its README.
-- **Docs.** README and CONTRIBUTING describe stock bash 3.2 support, re-run and backup behaviour, and how to test the installers. `reference/TROUBLESHOOTING.md` gains rows for the integration, Telegram, deploy and acceptance failures above.
+- **Docs.** README and CONTRIBUTING describe stock bash 3.2 support, re-run and backup behaviour, and how to test the installers. `docs/reference/TROUBLESHOOTING.md` gains rows for the integration, Telegram, deploy and acceptance failures above.
 
 ## [0.3.0] — 2026-08-03
 
@@ -63,7 +63,7 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 - **README hero rewritten around the product's actual magic moment** (the agent's home channel messages you first) instead of catalog size. Counts corrected to reality everywhere: **97 skills = 15 hermes-* + 1 setup-* + 2 blueprint-* + 8 platform-* + 71 integration-***. The count guard keeps README, CLAUDE, installer, and banner copy aligned.
 - **Clone-traffic bot commits moved off `main`** to the `metrics-data` branch, so the visible commit history reflects human work instead of daily `[skip ci]` noise.
 - **`scripts/check-skill-refs.sh` now also validates the `setup-` prefix.** It shipped covering only `hermes|platform|integration` and therefore passed clean on a tree where all 94 skills referenced a skill that did not exist. Deliberately still an allowlist rather than a general `/[a-z-]+` match: integration skills document vendor REST surfaces, so a broad pattern matches `/customers`, `/chat`, `/invoices` and hundreds more.
-- **Docker framing corrected across README and LAUNCH.md.** Both described hstack as updating "the Docker config". No skill has ever contained the string `Dockerfile`; Docker appears only as a detection branch (`docker ps | grep hermes`, then `docker exec` to reach the binary). Hermes installs via the upstream install script plus a pinned `pip install`. What the skills actually write: `~/.hermes/.env` (877 references), `config.yaml` (226), `/opt/data/.env` (11). Copy now says that.
+- **Docker framing corrected across README and docs/archive/launch-plan.md.** Both described hstack as updating "the Docker config". No skill has ever contained the string `Dockerfile`; Docker appears only as a detection branch (`docker ps | grep hermes`, then `docker exec` to reach the binary). Hermes installs via the upstream install script plus a pinned `pip install`. What the skills actually write: `~/.hermes/.env` (877 references), `config.yaml` (226), `/opt/data/.env` (11). Copy now says that.
 - **`CLAUDE.md` tier index corrected against `install.sh`.** It advertised three integrations that do not exist (`confluence`, `s3-compatible`, `matrix`) and omitted nine that do (`railway`, `tally`, `tavily`, `twilio`, `vercel`, `webflow`, `wordpress`, `zoho-crm`, `zoom`); it also claimed 16 `hermes-*` core skills on line 78 while line 18 of the same file said 15. `check-skill-refs.sh` cannot catch this class — these are bare names, not `/slash-refs`.
 
 ### Removed
@@ -150,11 +150,11 @@ Per-IDE distributors: `setup` (Claude Code), `setup-codex`, `setup-cursor` (`.md
 ### Added — docs
 - `README.md` — 109-line scannable reference (was 447, marketing-heavy).
 - `CLAUDE.md` — codebase and user instructions, including the SSH-first template, the `printf '\n%s\n'` vs `echo >>` explanation for `authorized_keys`, and the two-`.env`-file distinction (compose-level vs Hermes-runtime).
-- `reference/TROUBLESHOOTING.md` — symptom → cause → fix catalog, one row per real failure.
+- `docs/reference/TROUBLESHOOTING.md` — symptom → cause → fix catalog, one row per real failure.
 - `templates/SKILL.template.md` — the canonical skeleton every new integration copies.
 - `blog/01-hermes-setup-guide.md` — beginner setup walkthrough.
 - `blog/deploy-ai-agent-one-command-hstack.md` — one-command deploy narrative.
-- `docs/image-content-brief.md` — content brief for future banner refreshes.
+- `docs/maintainers/image-content-brief.md` — content brief for future banner refreshes.
 
 ### Fixed
 - Shell-lint workflow chokes on multi-line file list ([#78](https://github.com/paarths-collab/hstack/pull/78)) — pre-existing latent bug that finally tripped when a second script matched `**.sh`. Fixed by piping `find → xargs → shellcheck` in the same step instead of routing through `$GITHUB_OUTPUT`. Also quoted `TIERS["ai-tools"]` to prevent shfmt from parsing `ai-tools` as arithmetic subtraction inside a bash subscript, and marked shfmt `continue-on-error` since install.sh's aligned case arms pre-date the workflow's opinionated style enforcement.

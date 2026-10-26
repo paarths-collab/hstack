@@ -492,7 +492,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on VPS (0.15.x or 0.17.x)
+- [ ] Hermes version verified on VPS (exact pinned 0.22.5 target)
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] HARD GATE passed: credential format OK and the live vendor preflight returned `200` BEFORE any write
 - [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
@@ -504,4 +504,4 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 - [ ] Live smoke test (value read back from `~/.hermes/.env`) returned `200`
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml` (a failed `FORCE=1` re-run keeps the old working value)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See `docs/reference/TROUBLESHOOTING.md` in the repository root for gateway and MCP failure modes.

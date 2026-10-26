@@ -789,5 +789,5 @@ webhook mode. The exact wording of runtime log lines is read from the source's f
 treats anything it cannot classify as "not connected" and rolls back. The behaviour of the offline stub is written down in
 `tests/skills/stubs/hermes`; it is not evidence about the real CLI.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway,
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway,
 allowlist, and Telegram long-poll failure modes.

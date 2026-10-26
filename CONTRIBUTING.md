@@ -1,5 +1,7 @@
 # Contributing to hstack
 
+Before editing, read the [repository structure](docs/architecture.md) and [test guide](tests/README.md).
+
 Welcome. hstack's real moat is **accumulated knowledge of what breaks** — every skill that survived contact with a real deploy encodes fixes for traps we hit so the next operator doesn't. That knowledge grows via contributions.
 
 This guide covers:
@@ -22,7 +24,7 @@ This guide covers:
 
 In rough priority order:
 
-1. **New Hermes failure mode + fix**, added as a row in [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md) with the GitHub issue # if there is one. Two lines of markdown that save the next person an hour.
+1. **New Hermes failure mode + fix**, added as a row in [`docs/reference/TROUBLESHOOTING.md`](docs/reference/TROUBLESHOOTING.md) with the GitHub issue # if there is one. Two lines of markdown that save the next person an hour.
 2. **A new `/integration-<vendor>`** covering a vendor Hermes doesn't already handle natively. Follow the [Authoring an integration skill](#authoring-an-integration-skill--the-extra-bar) section — the bar is genuinely high, but the template does most of the work.
 3. **A new `/platform-<name>`** for a messaging surface we don't yet cover (matrix, teams-bot-only, discord-forum-only, etc.).
 4. **A hardening PR** on an existing skill — pitfalls table row we forgot, an idempotency bug, a rollback path that leaves detritus.
@@ -411,7 +413,7 @@ Everything above, plus:
 - **Test against a real vendor account.** Sandbox accounts if the vendor provides them; the free tier otherwise. If the vendor requires a paid account with no free tier, coordinate with a maintainer to test using our test accounts.
 - **Consent flags for every dangerous capability.** Cost gates (`OWNS_VOICE_ACKNOWLEDGED` for ElevenLabs cloning), scope gates (`ALLOW_WRITES` for Postgres superuser), reachability gates (`LONG_LIVED_ACKNOWLEDGED` for E2B > 15 min sessions). Pattern-match existing skills for the exact wording style.
 - **Pin the MCP or SDK package version in `VERSIONS.txt`**, not inline in the SKILL.md. Reference the pin from the skill.
-- **File a row in `reference/TROUBLESHOOTING.md`** for every failure mode you hit while authoring. That row is often more valuable than the skill itself.
+- **File a row in `docs/reference/TROUBLESHOOTING.md`** for every failure mode you hit while authoring. That row is often more valuable than the skill itself.
 
 ## Authoring a platform skill — the extra bar
 
@@ -430,7 +432,7 @@ Platform skills wire an inbound messaging surface. Extra rules:
 
 ## Contributing to TROUBLESHOOTING.md
 
-The catalog lives at [`reference/TROUBLESHOOTING.md`](reference/TROUBLESHOOTING.md). Every row is:
+The catalog lives at [`docs/reference/TROUBLESHOOTING.md`](docs/reference/TROUBLESHOOTING.md). Every row is:
 
 ```
 | Symptom | Cause | Fix | Issue # (if any) |

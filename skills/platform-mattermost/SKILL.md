@@ -775,7 +775,7 @@ Removing Mattermost for good is a separate decision (unset the `MATTERMOST_*` ke
 - [ ] `finish` ran; any failure after the snapshot ran `rollback` and restored the previous `.env` and `config.yaml`
 - [ ] Human steps: the bot was added to its channels, and an allowlisted user messaged it and got a reply
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and Mattermost failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and Mattermost failure modes.
 
 ---
 

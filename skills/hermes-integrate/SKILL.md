@@ -378,4 +378,4 @@ repository root of that tag, except `skills/` and `install.sh`, which are this r
 installed in the four skill folders it searches. Unknown: how many restarts a given specialist performs (read its Step 7), and
 whether a REST-only specialist leaves anything for `mcp test` to find.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

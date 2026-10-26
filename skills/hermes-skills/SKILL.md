@@ -416,4 +416,4 @@ encodes the strings quoted above; it is not evidence about the real CLI.
 - [ ] No gateway reload, no `.env` or `config.yaml` change, no secret handled
 - [ ] A failure uninstalled exactly what this run installed (`undo_installs`)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for tap and skill-registry failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for tap and skill-registry failure modes.

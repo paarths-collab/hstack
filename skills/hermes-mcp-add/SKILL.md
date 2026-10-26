@@ -715,4 +715,4 @@ repository root of that tag.
 accepts any of the probe shapes; the device flow against a specific OAuth server; and how `config set mcp_servers.*` behaves
 after a Hermes update that changes the `mcp_servers` schema.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

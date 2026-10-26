@@ -398,4 +398,4 @@ repository root of that tag.
 Unknown: whether a gateway that started before SOUL.md existed behaves differently for sessions it already opened (the code path says
 each new session builds its prompt from disk); and how a very large SOUL.md is truncated for a specific model window.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and identity-load failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and identity-load failure modes.

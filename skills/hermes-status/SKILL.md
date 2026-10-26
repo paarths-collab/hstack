@@ -314,4 +314,4 @@ Not verified: nothing was run against a real Hermes host, so the exact printed l
 machine-readable gateway readiness probe exists as a CLI command at v0.22.5 (`discover_gateway_endpoint` is a Python API,
 `gateway_state.json` can outlive a dead process), which is why this skill reports text and makes no pass/fail verdict.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway, memory and platform failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway, memory and platform failure modes.

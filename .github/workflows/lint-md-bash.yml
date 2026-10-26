@@ -1,7 +1,7 @@
 name: Markdown bash lint
 
 # The deploy procedures are bash blocks inside Markdown (skills/**/SKILL.md, CLAUDE.md,
-# reference/TROUBLESHOOTING.md ...), which `**.sh` shellcheck globs never see.
+# docs/reference/TROUBLESHOOTING.md ...), which `**.sh` shellcheck globs never see.
 # scripts/lint-md-bash.sh runs `bash -n` over those fenced blocks; it documents that it
 # "runs locally and in CI", but no workflow ran it.
 

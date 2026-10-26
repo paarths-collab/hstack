@@ -525,4 +525,4 @@ strings quoted above; it is not evidence about the real CLI.
 - [ ] No gateway-restart job, no LLM job over `~/.hermes`, no secret in a prompt or script
 - [ ] A failure after creation removed only what this run created (`undo_job`)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and cron failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and cron failure modes.

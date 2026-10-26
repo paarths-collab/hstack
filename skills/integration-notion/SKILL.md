@@ -549,4 +549,4 @@ NOT verified: that `@notionhq/notion-mcp-server@1` exists, starts under Hermes' 
 - [ ] Smoke test: `POST /v1/search` on the VPS, token read back from `~/.hermes/.env`, returned `200`
 - [ ] `finish` ran; rollback restores the pre-skill `.env`/`config.yaml` (a failed `FORCE=1` re-run keeps the old working token)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and MCP failure modes.

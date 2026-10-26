@@ -487,4 +487,4 @@ The test double that exercises these blocks encodes the strings quoted above; it
 - [ ] The id was never printed beyond a short prefix; `finish` ran (or the run was verify-only)
 - [ ] A failed run restored the previous `.env` and `config.yaml` (`rollback`)
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and platform delivery failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and platform delivery failure modes.

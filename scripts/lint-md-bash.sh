@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lint the bash that hstack actually ships: fenced ```bash / ```sh blocks inside
-# Markdown (skills/**/SKILL.md, CLAUDE.md, reference/TROUBLESHOOTING.md, blog/*).
+# Markdown (skills/**/SKILL.md, CLAUDE.md, docs/reference/TROUBLESHOOTING.md, blog/*).
 #
 # The repo's whole reason for existing is bash deploy procedures embedded in
 # Markdown — none of which match `**.sh`, so they bypass the ShellCheck job.

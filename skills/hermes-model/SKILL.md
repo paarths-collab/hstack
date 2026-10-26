@@ -560,4 +560,4 @@ chosen model id exists for the key, and the wording of runtime error text (the 4
 fails closed to "could not confirm", never to success) are assumptions. The behaviour of the offline stub is written down in
 `tests/skills/stubs/hermes`; it is not evidence about the real CLI.
 
-See [reference/TROUBLESHOOTING.md](../../reference/TROUBLESHOOTING.md) for gateway and provider failure modes.
+See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway and provider failure modes.
