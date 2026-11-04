@@ -1,0 +1,27 @@
+name: Mailchimp vendor runtime verification (manual)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-mailchimp-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --ignore-scripts
+      - name: Prepare hash-locked community Mailchimp MCP
+        run: |
+          python -m venv "$RUNNER_TEMP/mailchimp-mcp"
+          "$RUNNER_TEMP/mailchimp-mcp/bin/python" -m pip install --require-hashes --only-binary=:all: -r integrations/mailchimp/requirements.lock
+      - name: Verify real vendor process with network denied and a synthetic key
+        run: HSTACK_MAILCHIMP_PYTHON="$RUNNER_TEMP/mailchimp-mcp/bin/python" npm run verify:mailchimp-runtime

@@ -1,0 +1,10 @@
+{
+  "id": "brevo",
+  "label": "Brevo",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.brevo.com/v1/brevo/mcp",
+  "headers": {"Authorization": {"env": "BREVO_MCP_TOKEN", "prefix": "Bearer "}},
+  "readTools": [],
+  "allowWrites": false
+}

@@ -1,0 +1,60 @@
+{
+  "vendor": "michaelrice/zendesk-mcp",
+  "vendorVersion": "0.1.6",
+  "community": true,
+  "sourceCommit": "3606125940e554eafea04f356402352df681a9d9",
+  "environment": "real installed vendor process; synthetic OAuth/HTTP fixture; no Zendesk account, external request or model",
+  "checks": {
+    "fourteenSchemasAndMissingAuthErrors": true,
+    "nativeWritesAbsentAndDownloadsBlocked": true,
+    "nativeReadOnlySurvivesInvalidConfig": true,
+    "directNativeConcurrentRefreshFailureReproduced": true,
+    "actualVendorRefreshAndGroupReadWithLoopbackFixture": true,
+    "twoGatewaysShareOneRotation": true,
+    "nativeHermesWithSyntheticBackend": true,
+    "noExternalNetworkAttempted": true,
+    "liveAccountValidated": false
+  },
+  "sourceBlobs": {
+    "server": "144a9b699620164a57e8edf388ee3d3a35046d26",
+    "config": "8cd46c8cc92be212ee4e88f1e102430fd3130128",
+    "client": "3c12a604daae76a6180df4b8423f55314ab8038b",
+    "tool_policy": "2300efa15d2042ec394af38ddb0523fe07f10ba8",
+    "lifecycle": "0337ff93668d86f57ab52e4bdce732b355e70506"
+  },
+  "pythonMcpVersion": "2.3.0",
+  "lockSha256": "17ddf3a5f322fc667aa9cf8b4354416cf54e6e807fa12580c566434ccd75bc75",
+  "discoveredReadOnlyTools": 19,
+  "schemaSha256": "a8a98f08c648a712f0fadc0bca78d379e9f3a69cab5eabe5b4c119aea23c70ab",
+  "comparison": {
+    "direct": {
+      "refreshRequests": 2,
+      "rotations": 1,
+      "successfulGroupReads": 1,
+      "refreshRejections": 1
+    },
+    "hstack": {
+      "refreshRequests": 1,
+      "rotations": 1,
+      "successfulGroupReads": 2,
+      "refreshRejections": 0
+    }
+  },
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "audit": {
+    "packages": 45,
+    "knownVulnerabilities": 0,
+    "skippedPackages": 0
+  },
+  "platform": "macOS arm64; Python 3.12; Node 26.8.1",
+  "limitations": [
+    "No real Zendesk account, authorization consent, eligibility, API operation or refresh tested",
+    "Actual vendor refresh/read evidence uses synthetic local HTTP; network routing is replaced for tests",
+    "Fourteen JSON reads reviewed; remote writes and attachment downloads are disabled or blocked",
+    "Native setup requests read/write OAuth scope; Hstack read-only policy does not narrow the underlying grant",
+    "Only Hstack processes sharing this private vendor HOME coordinate; standalone vendor clients/setup do not acquire the lock",
+    "Plaintext native credential storage; POSIX guards only; crashed locks require manual owner verification",
+    "Upstream resources/prompts and comprehensive quota-header interpretation are not relayed",
+    "Windows/Linux, model-driven Hermes and GitHub CI unverified"
+  ]
+}

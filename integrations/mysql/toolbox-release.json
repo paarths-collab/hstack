@@ -1,0 +1,32 @@
+{
+  "repository": "googleapis/mcp-toolbox",
+  "version": "1.15.0",
+  "sourceCommit": "8e8e569594a4a864def8598fd3f4977a8d65e431",
+  "releaseUrl": "https://github.com/googleapis/mcp-toolbox/releases/tag/v1.15.0",
+  "binaries": {
+    "darwin-arm64": {
+      "url": "https://storage.googleapis.com/mcp-toolbox-for-databases/v1.15.0/darwin/arm64/toolbox",
+      "sha256": "ddf69a8cd52904f86532d5e195d06e5d4c158de61c69dc17bd4d8b6203fc52fc"
+    },
+    "darwin-x64": {
+      "url": "https://storage.googleapis.com/mcp-toolbox-for-databases/v1.15.0/darwin/amd64/toolbox",
+      "sha256": "7407018697f346ae1ca6e610ed6096d26173349289ba61c62017efd7dc81376b"
+    },
+    "linux-x64": {
+      "url": "https://storage.googleapis.com/mcp-toolbox-for-databases/v1.15.0/linux/amd64/toolbox",
+      "sha256": "f6fac005c39898a379523700727a2a3d0a2828f579bec22cc0efe74e0652062d"
+    }
+  },
+  "compatibilityBuild": {
+    "name": "Hstack MySQL-only Toolbox",
+    "goVersion": "go1.27.3",
+    "registrationSourceBlob": "31d3559394093cb6b2fb741663a5dd82ff87c437",
+    "sourceModuleSum": "h1:otQYf+8sLnOFdWFj+mZr0262aHGHSqB4q+52zQZMZKA=",
+    "platforms": {
+      "darwin-arm64": {
+        "sha256": "56768bfc7065dc262f647459ed355a198a45216ccbce5dbad28c17836f95f18e"
+      }
+    },
+    "telemetrySourceBlob": "e39ef75fb07de30c6bcc0a56b244ca08438d33d9"
+  }
+}

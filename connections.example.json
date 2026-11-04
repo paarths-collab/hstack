@@ -1,0 +1,778 @@
+{
+  "connections": [
+    {
+      "id": "brand24",
+      "enabled": false,
+      "label": "Brand24",
+      "readTools": [],
+      "allowWrites": false,
+      "transport": "http",
+      "url": "https://mcp.brand24.com/v1/mcp",
+      "oauth": {
+        "type": "oauth"
+      }
+    },
+    {
+      "id": "brevo",
+      "label": "Brevo",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.brevo.com/v1/brevo/mcp",
+      "headers": {
+        "Authorization": {
+          "env": "BREVO_MCP_TOKEN",
+          "prefix": "Bearer "
+        }
+      },
+      "readTools": [],
+      "allowWrites": false
+    },
+    {
+      "id": "kit",
+      "label": "Kit",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://app.kit.com/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://api.kit.com"
+      },
+      "readTools": [
+        "list_prompt_suggestions",
+        "get_current_account",
+        "list_colors",
+        "get_creator_profile",
+        "get_email_stats",
+        "get_growth_stats",
+        "filter_subscribers",
+        "get_subscriber",
+        "list_stats_for_a_subscriber",
+        "list_subscribers",
+        "list_tags_for_a_subscriber",
+        "list_subscribers_for_tag",
+        "list_tags",
+        "list_segments",
+        "list_custom_fields",
+        "list_forms",
+        "list_subscribers_for_form",
+        "get_sequence",
+        "list_sequences",
+        "list_subscribers_for_sequence",
+        "get_sequence_email",
+        "list_sequence_emails",
+        "get_broadcast",
+        "get_link_clicks_for_a_broadcast",
+        "get_stats_for_a_broadcast",
+        "get_stats_for_a_list_of_broadcasts",
+        "list_broadcasts",
+        "list_email_templates",
+        "list_snippets",
+        "get_snippet",
+        "get_post",
+        "list_posts",
+        "list_products",
+        "list_tax_codes",
+        "get_purchase",
+        "list_purchases",
+        "list_domains",
+        "list_webhooks"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "mailchimp",
+      "label": "Mailchimp Marketing (community MCP)",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_MAILCHIMP_PYTHON",
+      "resultPolicy": "mailchimp-1.2.0",
+      "args": [
+        "-I",
+        "-m",
+        "mailchimp_mcp_server.server"
+      ],
+      "env": {
+        "MAILCHIMP_API_KEY": "MAILCHIMP_API_KEY",
+        "MAILCHIMP_READ_ONLY": "MAILCHIMP_READ_ONLY",
+        "MAILCHIMP_MAX_RETRIES": "MAILCHIMP_MAX_RETRIES"
+      },
+      "readTools": [
+        "list_accounts",
+        "describe_tools",
+        "list_audiences",
+        "list_campaigns"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "readwise",
+      "enabled": false,
+      "label": "Readwise",
+      "readTools": [],
+      "allowWrites": false,
+      "transport": "http",
+      "url": "https://mcp2.readwise.io/mcp",
+      "oauth": {
+        "type": "oauth"
+      }
+    },
+    {
+      "id": "evernote",
+      "label": "Evernote",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.evernote.com/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://accounts.evernote.com",
+        "scope": "read"
+      },
+      "readTools": [
+        "get_note",
+        "search_notes",
+        "semantic_search",
+        "search_tasks",
+        "search_assigned_tasks",
+        "search_notebooks",
+        "search_spaces",
+        "get_space",
+        "search_tags",
+        "get_task"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "typeform",
+      "label": "Typeform",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "TYPEFORM_MCP_URL",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuerEnv": "TYPEFORM_MCP_ISSUER",
+        "clientMetadataUrlEnv": "TYPEFORM_MCP_CLIENT_METADATA_URL"
+      },
+      "readTools": [
+        "accounts-list_accounts",
+        "workspaces-list_workspaces",
+        "forms-public_get_capabilities",
+        "forms-public_get_form",
+        "forms-public_list_forms",
+        "themes-public_list_themes",
+        "themes-get_theme",
+        "insights-public_discover",
+        "insights-public_aggregate",
+        "insights-public_timeseries",
+        "insights-public_toplist",
+        "insights-public_list",
+        "automations-public_get_authorized_email_domains",
+        "automations-public_get_automation",
+        "automations-public_get_email_notification",
+        "automations-public_get_trigger",
+        "automations-public_list_automations",
+        "automations-public_list_referenceable_fields",
+        "contacts-public_get_contact",
+        "contacts-public_get_contacts_database_properties",
+        "contacts-public_get_contacts_list",
+        "contacts-public_get_form_property_compatibility",
+        "contacts-public_get_form_property_mappings",
+        "contacts-public_get_form_property_mappings_by_id",
+        "contacts-public_list_contacts",
+        "contacts-public_list_contacts_database_properties",
+        "contacts-public_list_contacts_lists",
+        "contacts-public_list_form_property_mappings"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "calcom",
+      "label": "Cal.com",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.cal.com/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://mcp.cal.com"
+      },
+      "readTools": [
+        "get_app_link",
+        "search_docs",
+        "get_me",
+        "get_event_types",
+        "get_event_type",
+        "get_event_type_settings",
+        "get_event_type_history",
+        "get_scheduling_config",
+        "get_crm_sync_errors",
+        "get_events",
+        "get_event",
+        "get_bookings",
+        "get_booking",
+        "get_booking_attendees",
+        "get_booking_attendee",
+        "get_booking_routing_trace",
+        "get_org_team_bookings",
+        "get_org_user_bookings",
+        "get_schedules",
+        "get_schedule",
+        "get_default_schedule",
+        "get_availability",
+        "get_busy_times",
+        "get_connected_calendars",
+        "get_conferencing_apps",
+        "get_my_teams",
+        "get_org_teams",
+        "get_team_memberships",
+        "get_team_membership",
+        "get_org_memberships",
+        "get_org_membership",
+        "get_org_attributes",
+        "get_org_attribute",
+        "get_attribute_options",
+        "get_user_attributes",
+        "get_user_attribute_history",
+        "get_org_routing_forms",
+        "get_org_routing_form_responses",
+        "get_team_routing_forms",
+        "get_routing_form",
+        "get_routing_form_history",
+        "find_api_operation",
+        "describe_api_operation"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "trello",
+      "enabled": false,
+      "label": "Trello",
+      "readTools": [],
+      "allowWrites": false,
+      "transport": "http",
+      "url": "https://mcp.trello.com/v1",
+      "oauth": {
+        "type": "oauth"
+      }
+    },
+    {
+      "id": "pipedrive",
+      "label": "Pipedrive",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.pipedrive.ai/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://oauth.pipedrive.com",
+        "clientIdEnv": "PIPEDRIVE_MCP_CLIENT_ID",
+        "clientSecretEnv": "PIPEDRIVE_MCP_CLIENT_SECRET",
+        "scope": "base deals:full contacts:full activities:full leads:full search:read users:read products:full"
+      },
+      "readTools": [
+        "getActivities",
+        "getActivity",
+        "getDeals",
+        "getDeal",
+        "searchDeals",
+        "getPersons",
+        "getPerson",
+        "searchPersons",
+        "getOrganizations",
+        "getOrganization",
+        "searchOrganization",
+        "getLeads",
+        "getLead",
+        "searchLeads",
+        "getLeadConversionStatus",
+        "getProducts",
+        "getProduct",
+        "searchProduct",
+        "getStages",
+        "getStage",
+        "getNotes",
+        "getNote",
+        "getAccountContext"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "zoho-crm",
+      "label": "Zoho CRM",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "ZOHO_CRM_MCP_URL",
+      "readTools": [],
+      "allowWrites": false
+    },
+    {
+      "id": "hubspot",
+      "label": "HubSpot",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.hubspot.com",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://mcp.hubspot.com",
+        "clientIdEnv": "HUBSPOT_MCP_CLIENT_ID",
+        "clientSecretEnv": "HUBSPOT_MCP_CLIENT_SECRET"
+      },
+      "readTools": [
+        "get_user_details",
+        "get_organization_details",
+        "discover_hubspot_schema",
+        "search_crm_objects",
+        "get_crm_objects",
+        "search_properties",
+        "get_properties",
+        "search_owners",
+        "get_campaign_attribution_reports",
+        "read_campaign_data",
+        "search_conversations",
+        "get_conversation_channel_metadata",
+        "search_intent_signals",
+        "get_marketing_email_analytics",
+        "get_content_analytics_report",
+        "get_aeo_metrics",
+        "tool_guidance"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "helpscout",
+      "enabled": false,
+      "label": "Help Scout",
+      "readTools": [],
+      "allowWrites": false,
+      "transport": "http",
+      "url": "https://mcp.helpscout.net/mcp",
+      "oauth": {
+        "type": "oauth"
+      }
+    },
+    {
+      "id": "zendesk",
+      "label": "Zendesk (community MCP)",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_ZENDESK_PYTHON",
+      "args": [
+        "-I",
+        "-m",
+        "zendesk_mcp"
+      ],
+      "env": {
+        "HOME": "HSTACK_ZENDESK_HOME",
+        "ZENDESK_MCP_READ_ONLY": "ZENDESK_MCP_READ_ONLY"
+      },
+      "resultPolicy": "zendesk-0.1.6",
+      "readTools": [
+        "zendesk_search_tickets",
+        "zendesk_get_tickets",
+        "zendesk_get_ticket",
+        "zendesk_get_comments",
+        "zendesk_list_views",
+        "zendesk_get_view",
+        "zendesk_get_view_tickets",
+        "zendesk_list_macros",
+        "zendesk_search_users",
+        "zendesk_get_groups",
+        "zendesk_get_group_users",
+        "zendesk_get_organization",
+        "zendesk_list_custom_statuses",
+        "zendesk_get_time_tracking"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "zoho-desk",
+      "label": "Zoho Desk",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "ZOHO_DESK_MCP_URL",
+      "readTools": [],
+      "allowWrites": false
+    },
+    {
+      "id": "pandadoc",
+      "label": "PandaDoc",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.pandadoc.com/v1/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://mcp.pandadoc.com/",
+        "dcrAuthMethod": "client_secret_post",
+        "scope": "read documents:read"
+      },
+      "readTools": [],
+      "allowWrites": false
+    },
+    {
+      "id": "docusign",
+      "label": "Docusign (demo)",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp-d.docusign.com/mcp",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://mcp-d.docusign.com",
+        "clientIdEnv": "DOCUSIGN_DEMO_CLIENT_ID",
+        "clientSecretEnv": "DOCUSIGN_DEMO_CLIENT_SECRET",
+        "scope": "signature"
+      },
+      "readTools": [
+        "getUserInfo",
+        "searchDocusignDocs"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "quickbooks",
+      "label": "QuickBooks (Intuit compatibility build)",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_QUICKBOOKS_COMMAND",
+      "args": [],
+      "env": {
+        "QUICKBOOKS_TOKEN_STORE_PATH": "HSTACK_QUICKBOOKS_TOKEN_STORE_PATH"
+      },
+      "resultPolicy": "quickbooks-31a1dd5",
+      "readTools": [
+        "get_account",
+        "get_aged_payables",
+        "get_aged_receivables",
+        "get_attachable",
+        "get_balance_sheet",
+        "get_bill_payment",
+        "get-bill",
+        "get_cash_flow",
+        "get_class",
+        "get_company_info",
+        "get_credit_memo",
+        "get_customer_balance",
+        "get_customer_sales",
+        "get_customer",
+        "get_department",
+        "get_deposit",
+        "get_employee",
+        "get_estimate",
+        "get_general_ledger",
+        "get_journal_entry",
+        "get_payment_method",
+        "get_payment",
+        "get_preferences",
+        "get_profit_and_loss",
+        "get_purchase_order",
+        "get_purchase",
+        "get_refund_receipt",
+        "get_sales_receipt",
+        "get_tax_agency",
+        "get_tax_code",
+        "get_tax_rate",
+        "get_term",
+        "get_time_activity",
+        "get_transfer",
+        "get_trial_balance",
+        "get_vendor_balance",
+        "get_vendor_credit",
+        "get_vendor_expenses",
+        "get-vendor",
+        "read_invoice",
+        "read_item",
+        "search_accounts",
+        "search_attachables",
+        "search_bill_payments",
+        "search_bills",
+        "search_budgets",
+        "search_classes",
+        "search_credit_memos",
+        "search_customers",
+        "search_departments",
+        "search_deposits",
+        "search_employees",
+        "search_estimates",
+        "search_invoices",
+        "search_items",
+        "search_journal_entries",
+        "search_payment_methods",
+        "search_payments",
+        "search_purchase_orders",
+        "search_purchases",
+        "search_refund_receipts",
+        "search_sales_receipts",
+        "search_tax_agencies",
+        "search_tax_codes",
+        "search_tax_rates",
+        "search_terms",
+        "search_time_activities",
+        "search_transfers",
+        "search_vendor_credits",
+        "search_vendors"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "xero",
+      "label": "Xero",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://api.xero.com/mcp/v1",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://identity.xero.com",
+        "clientIdEnv": "XERO_MCP_CLIENT_ID",
+        "scope": "openid offline_access accounting.contacts.read accounting.invoices.read"
+      },
+      "readTools": [
+        "get_connected_tenants",
+        "list_contacts",
+        "list_invoices"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "zoho-books",
+      "label": "Zoho Books",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "ZOHO_BOOKS_MCP_URL",
+      "readTools": [],
+      "allowWrites": false
+    },
+    {
+      "id": "google-analytics",
+      "label": "Google Analytics",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_ANALYTICS_PYTHON",
+      "args": [
+        "-I",
+        "-m",
+        "analytics_mcp.server"
+      ],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT": "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_QUOTA_PROJECT": "GOOGLE_CLOUD_PROJECT"
+      },
+      "readTools": [
+        "get_account_summaries",
+        "get_property_details",
+        "list_google_ads_links",
+        "list_property_annotations",
+        "get_custom_dimensions_and_metrics",
+        "run_report",
+        "run_realtime_report",
+        "run_funnel_report",
+        "run_conversions_report"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "mongodb",
+      "label": "MongoDB",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_MONGODB_COMMAND",
+      "args": [
+        "--readOnly",
+        "--telemetry",
+        "disabled",
+        "--loggers",
+        "stderr",
+        "--timeoutMs",
+        "10000"
+      ],
+      "env": {
+        "MDB_MCP_CONNECTION_STRING": "MDB_MCP_CONNECTION_STRING"
+      },
+      "readTools": [
+        "list-databases",
+        "list-collections",
+        "count",
+        "find"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "mysql",
+      "label": "MySQL via Google Toolbox",
+      "enabled": false,
+      "transport": "stdio",
+      "commandEnv": "HSTACK_MYSQL_TOOLBOX",
+      "args": [
+        "--stdio",
+        "--prebuilt=mysql",
+        "--disable-version-check",
+        "--disable-reload",
+        "--log-level=ERROR"
+      ],
+      "env": {
+        "MYSQL_HOST": "MYSQL_HOST",
+        "MYSQL_PORT": "MYSQL_PORT",
+        "MYSQL_DATABASE": "MYSQL_DATABASE",
+        "MYSQL_USER": "MYSQL_USER",
+        "MYSQL_PASSWORD": "MYSQL_PASSWORD",
+        "MYSQL_QUERY_PARAMS": "MYSQL_QUERY_PARAMS"
+      },
+      "readTools": [
+        "list_tables",
+        "get_query_plan",
+        "list_active_queries",
+        "list_tables_missing_unique_indexes",
+        "list_table_fragmentation",
+        "list_all_locks",
+        "show_query_stats",
+        "list_table_stats"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "redis",
+      "label": "Redis",
+      "enabled": false,
+      "transport": "stdio",
+      "command": "/absolute/path/to/redis-venv/bin/python",
+      "args": [
+        "-I",
+        "-m",
+        "src.main"
+      ],
+      "env": {
+        "REDIS_HOST": "REDIS_HOST",
+        "REDIS_PORT": "REDIS_PORT",
+        "REDIS_DB": "REDIS_DB",
+        "REDIS_PWD": "REDIS_PWD",
+        "REDIS_SSL": "REDIS_SSL"
+      },
+      "readTools": [
+        "get",
+        "type",
+        "scan_keys",
+        "dbsize",
+        "info"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "bigquery",
+      "label": "BigQuery",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://bigquery.googleapis.com/mcp",
+      "protocol": "legacy",
+      "googleBigQuery": {
+        "credentialsFileEnv": "BIGQUERY_GOOGLE_CREDENTIALS_FILE"
+      },
+      "readTools": [
+        "list_dataset_ids",
+        "get_dataset_info",
+        "list_table_ids",
+        "get_table_info",
+        "get_job"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "snowflake",
+      "enabled": false,
+      "label": "Snowflake",
+      "readTools": [],
+      "allowWrites": false,
+      "transport": "http",
+      "urlEnv": "SNOWFLAKE_MCP_URL",
+      "protocol": "legacy",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuerEnv": "SNOWFLAKE_MCP_ISSUER",
+        "clientIdEnv": "SNOWFLAKE_MCP_CLIENT_ID",
+        "clientSecretEnv": "SNOWFLAKE_MCP_CLIENT_SECRET",
+        "scopeEnv": "SNOWFLAKE_MCP_SCOPES"
+      }
+    },
+    {
+      "id": "pagerduty",
+      "label": "PagerDuty",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://mcp.pagerduty.com/mcp",
+      "headers": {
+        "Authorization": {
+          "env": "PAGERDUTY_MCP_TOKEN",
+          "prefix": "Token token="
+        }
+      },
+      "readTools": [
+        "list_incidents"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "bamboohr",
+      "label": "BambooHR",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "BAMBOOHR_MCP_URL",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuerEnv": "BAMBOOHR_MCP_ISSUER",
+        "clientIdEnv": "BAMBOOHR_MCP_CLIENT_ID",
+        "clientSecretEnv": "BAMBOOHR_MCP_CLIENT_SECRET",
+        "scopeEnv": "BAMBOOHR_MCP_SCOPES"
+      },
+      "readTools": [
+        "list_fields",
+        "list_list_fields",
+        "list_tabular_fields"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "deel",
+      "label": "Deel",
+      "enabled": false,
+      "transport": "http",
+      "url": "https://api.letsdeel.com/mcp",
+      "protocol": "legacy",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678,
+        "issuer": "https://api.letsdeel.com",
+        "scope": "contracts:read people:read organizations:read profile:read"
+      },
+      "readTools": [
+        "eor_employment_cost_batch",
+        "eor_employment_cost_calculate",
+        "hiring_insights_employment_comparison_list",
+        "hiring_insights_eor_cost_calculate",
+        "hiring_insights_salary_calculate",
+        "hiring_insights_summary_get",
+        "hiring_insights_take_home_pay_calculate",
+        "retrieveAtsJobPostingsByOrganization"
+      ],
+      "allowWrites": false
+    },
+    {
+      "id": "greenhouse",
+      "label": "Greenhouse",
+      "enabled": false,
+      "transport": "http",
+      "urlEnv": "GREENHOUSE_MCP_URL",
+      "oauth": {
+        "type": "oauth",
+        "callbackPort": 8678
+      },
+      "readTools": [],
+      "allowWrites": false
+    }
+  ]
+}

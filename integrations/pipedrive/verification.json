@@ -1,0 +1,25 @@
+{
+  "vendor": "Pipedrive native MCP",
+  "endpoint": "https://mcp.pipedrive.ai/mcp",
+  "issuer": "https://oauth.pipedrive.com",
+  "sdk": "2.4.0",
+  "evidence": "Public unauthenticated OAuth metadata only; no registration, sign-in, credentials or tool calls.",
+  "checks": {
+    "officialSdkDiscovery": true,
+    "profileScopesAdvertised": true,
+    "registeredClientMethodsAdvertised": true,
+    "noRegistrationOrAccountOperations": true
+  },
+  "metadataSha256": "d35f7f2aac965a606a10810906acb9906557d6a7d796e912e423bfbe53044c2b",
+  "requests": [
+    "https://mcp.pipedrive.ai/.well-known/oauth-protected-resource/mcp",
+    "https://oauth.pipedrive.com/.well-known/oauth-authorization-server"
+  ],
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "No Pipedrive registration, sign-in, token exchange or tool call was performed",
+    "MCP-compatible registered client and loopback callback acceptance are unverified",
+    "Registered Basic/Post PKCE/refresh is covered by local fixtures only; native public DCR is not claimed compatible",
+    "No real Pipedrive account, plan or native Hermes vendor flow tested"
+  ]
+}

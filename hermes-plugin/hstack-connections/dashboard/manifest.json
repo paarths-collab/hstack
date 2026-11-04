@@ -1,0 +1,10 @@
+{
+  "name": "hstack-connections",
+  "label": "Hstack Connections",
+  "description": "Local Hstack social connection settings",
+  "version": "0.1.0",
+  "api": "plugin_api.py",
+  "tab": {
+    "hidden": true
+  }
+}

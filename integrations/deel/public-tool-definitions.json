@@ -1,0 +1,608 @@
+[
+  {
+    "name": "eor_employment_cost_batch",
+    "title": "eor_employment_cost_batch",
+    "description": "Determine the total employment costs for an Employee of Record (EOR) arrangement across different countries, including salary, employer costs, benefits, and additional fees.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "minItems": 1,
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "description": "The state or region within the country, if applicable."
+              },
+              "salary": {
+                "type": "number",
+                "minimum": 1,
+                "description": "The base salary for the employee."
+              },
+              "currency": {
+                "type": "string",
+                "description": "The currency in which the costs are calculated."
+              },
+              "country_code": {
+                "type": "string",
+                "description": "The two-letter country code where the employee is based."
+              },
+              "country_name": {
+                "type": "string",
+                "description": "The country where the employee is based."
+              },
+              "salary_period": {
+                "type": "string",
+                "enum": [
+                  "ANNUALLY",
+                  "MONTHLY"
+                ],
+                "description": "The salary_period frequency in uppercase format."
+              },
+              "payment_frequency": {
+                "type": "string",
+                "enum": [
+                  "ANNUALLY",
+                  "MONTHLY",
+                  "WEEKLY",
+                  "DAILY"
+                ],
+                "description": "The payment_frequency of the salary payment."
+              }
+            },
+            "required": [
+              "salary",
+              "currency",
+              "country_name"
+            ],
+            "additionalProperties": {}
+          },
+          "description": "Array of employee cost calculation requests."
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "eor_employment_cost_calculate",
+    "title": "eor_employment_cost_calculate",
+    "description": "Calculates the total employment cost for an EOR arrangement in a specified country, returning a breakdown that includes employer costs, benefits, platform fees, and severance accrual.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "description": "The state or region within the country, if applicable."
+            },
+            "salary": {
+              "type": "number",
+              "minimum": 1,
+              "description": "The base salary for the employee."
+            },
+            "country": {
+              "type": "string",
+              "description": "The full name of the country where the employee is based."
+            },
+            "benefits": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "plan_id": {
+                    "type": "string",
+                    "description": "The ID of the benefits plan, if applicable."
+                  },
+                  "provider_id": {
+                    "type": "string",
+                    "description": "The ID of the benefits provider."
+                  }
+                },
+                "required": [
+                  "provider_id"
+                ],
+                "additionalProperties": {}
+              },
+              "description": "A list of selected benefit plans for the employee."
+            },
+            "currency": {
+              "type": "string",
+              "description": "The currency in which the costs are calculated."
+            },
+            "country_code": {
+              "type": "string",
+              "description": "The two-letter country code where the employee is based."
+            },
+            "salary_period": {
+              "type": "string",
+              "enum": [
+                "ANNUALLY",
+                "MONTHLY"
+              ],
+              "description": "The salary period for the amount provided."
+            }
+          },
+          "required": [
+            "salary",
+            "country",
+            "currency"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "hiring_insights_employment_comparison_list",
+    "title": "hiring_insights_employment_comparison_list",
+    "description": "Use this endpoint to compare employment regulations, costs, time off, and payroll details across one or more countries for hiring analysis.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "draft": {
+          "description": "Draft version of the data",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum number of results to return",
+          "type": "number"
+        },
+        "cursor": {
+          "description": "Cursor for pagination to fetch the next page of results",
+          "type": "string"
+        },
+        "currency": {
+          "description": "Target currency (ISO 4217); when provided, amounts inside text are converted",
+          "type": "string"
+        },
+        "countries": {
+          "description": "Country codes to compare (ISO 3166-1 alpha-2)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "categories": {
+          "description": "Comparison categories to include",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "title": "hiring_insights_employment_comparison_list",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "hiring_insights_eor_cost_calculate",
+    "title": "hiring_insights_eor_cost_calculate",
+    "description": "Use this endpoint to compare EOR and local entity options for international hiring.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "country": {
+                "type": "string",
+                "description": "Country code (ISO 3166-1 alpha-2)"
+              },
+              "currency": {
+                "type": "string",
+                "description": "Output currency (ISO 4217). Defaults to country default currency"
+              },
+              "payroll_connect": {
+                "type": "boolean",
+                "description": "Whether to include payroll connect in the calculation"
+              },
+              "number_of_employees": {
+                "type": "number",
+                "minimum": 0,
+                "description": "Number of employees to calculate the comparison for"
+              }
+            },
+            "required": [
+              "country"
+            ],
+            "additionalProperties": {}
+          },
+          "description": "Array of calculation parameters"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "hiring_insights_salary_calculate",
+    "title": "hiring_insights_salary_calculate",
+    "description": "Use this endpoint to retrieve a salary histogram for a specified job title and seniority level in a given country, returned in the requested currency and time scale.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "scale": {
+                "type": "string",
+                "enum": [
+                  "ANNUALLY",
+                  "MONTHLY"
+                ],
+                "description": "The time scale for the salary data"
+              },
+              "country": {
+                "type": "string",
+                "pattern": "^[A-Z]{2}$",
+                "description": "Two-letter country code (ISO 3166-1 alpha-2)"
+              },
+              "currency": {
+                "type": "string",
+                "pattern": "^[A-Z]{3}$",
+                "description": "Three-letter currency code (ISO 4217)"
+              },
+              "job_title": {
+                "type": "string",
+                "description": "The job title for the salary data"
+              },
+              "seniority_level": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991,
+                "description": "Seniority level (typically 1-5 or similar scale)"
+              }
+            },
+            "required": [
+              "scale",
+              "country",
+              "currency",
+              "job_title",
+              "seniority_level"
+            ],
+            "additionalProperties": {}
+          },
+          "description": "Array of salary data requests"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "hiring_insights_summary_get",
+    "title": "hiring_insights_summary_get",
+    "description": "Provides the best countries to hire talent based on your criteria, so you can make informed, strategic hiring decisions with confidence.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "budget": {
+          "description": "Budget limit for the position",
+          "type": "number"
+        },
+        "regions": {
+          "description": "Geographic regions to filter by",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "EMEA",
+              "APAC",
+              "NA",
+              "LATAM",
+              "MENA",
+              "SSA",
+              "SEA",
+              "CA",
+              "EU",
+              "ALL"
+            ]
+          }
+        },
+        "job_title": {
+          "type": "string",
+          "description": "The job title for which you want to get hiring insights"
+        },
+        "seniority": {
+          "type": "string",
+          "enum": [
+            "JUNIOR",
+            "MIDDLE",
+            "SENIOR"
+          ],
+          "description": "The seniority level of the position"
+        },
+        "timezones": {
+          "description": "Timezone offsets to filter by",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "-12:00",
+              "-11:00",
+              "-10:00",
+              "-09:00",
+              "-08:00",
+              "-07:00",
+              "-06:00",
+              "-05:00",
+              "-04:00",
+              "-03:00",
+              "-02:00",
+              "-01:00",
+              "+00:00",
+              "+01:00",
+              "+02:00",
+              "+03:00",
+              "+04:00",
+              "+05:00",
+              "+06:00",
+              "+07:00",
+              "+08:00",
+              "+09:00",
+              "+10:00",
+              "+11:00",
+              "+12:00",
+              "+13:00",
+              "+14:00"
+            ]
+          }
+        },
+        "budget_type": {
+          "description": "Type of budget calculation",
+          "type": "string",
+          "enum": [
+            "GROSS_ANNUAL_SALARY",
+            "TOTAL_COST"
+          ]
+        },
+        "priority_factors": {
+          "description": "Priority factors to consider when filtering countries",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "HIGHER_TALENT_CONCENTRATION",
+              "SAME_TIMEZONE",
+              "ALIGNED_WITH_MY_BUDGET",
+              "FASTER_SPEED_TO_HIRE"
+            ]
+          }
+        }
+      },
+      "required": [
+        "job_title",
+        "seniority"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "title": "hiring_insights_summary_get",
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "hiring_insights_take_home_pay_calculate",
+    "title": "hiring_insights_take_home_pay_calculate",
+    "description": "Use this endpoint to estimate take-home pay for compensation inputs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "period": {
+                "type": "string",
+                "enum": [
+                  "ANNUAL",
+                  "MONTHLY"
+                ],
+                "description": "Salary period"
+              },
+              "salary": {
+                "type": "number",
+                "description": "Salary amount"
+              },
+              "country": {
+                "type": "string",
+                "description": "Country code (ISO 3166-1 alpha-2)"
+              },
+              "currency": {
+                "type": "string",
+                "description": "Currency code (ISO 4217)"
+              }
+            },
+            "required": [
+              "period",
+              "salary",
+              "country",
+              "currency"
+            ],
+            "additionalProperties": {}
+          },
+          "description": "Array of salary items to process"
+        }
+      },
+      "required": [
+        "data"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  },
+  {
+    "name": "retrieveAtsJobPostingsByOrganization",
+    "title": "retrieveAtsJobPostingsByOrganization",
+    "description": "Retrieves a list of all job postings in the Applicant Tracking System. Results can be filtered by query parameters.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "description": "Maximum number of records returned in one response (optional)",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "cursor": {
+          "description": "The cursor for pagination (optional)",
+          "type": "string"
+        },
+        "job_board_id": {
+          "description": "Job Board ID must be a valid UUID",
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+        },
+        "organization_id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+          "description": "Unique identifier of the organization"
+        }
+      },
+      "required": [
+        "organization_id"
+      ],
+      "$schema": "https://json-schema.org/draft/2020-12/schema"
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "securitySchemes": [
+        {
+          "type": "noauth"
+        }
+      ],
+      "com.deel/lifecycle": "stable",
+      "com.deel/apiVersion": "2026-01-01"
+    }
+  }
+]

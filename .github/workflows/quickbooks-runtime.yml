@@ -1,0 +1,28 @@
+name: QuickBooks compatibility runtime verification (manual)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify-quickbooks-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            integrations/quickbooks/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm ci --ignore-scripts --prefix integrations/quickbooks
+      - run: npm run build
+      - run: npm run build --prefix integrations/quickbooks
+      - run: node --test integrations/quickbooks/build.test.mjs
+      - name: Verify installed Intuit process with synthetic loopback OAuth and API only
+        run: npm run verify:quickbooks-runtime
+      - run: npm audit --prefix integrations/quickbooks

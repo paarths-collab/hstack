@@ -1,0 +1,65 @@
+{
+  "vendor": "Docusign native MCP",
+  "sdk": "2.4.0",
+  "evidence": "Public unauthenticated OAuth metadata only; no account credentials, registration, sign-in, tokens or tool calls.",
+  "sdkCompatible": false,
+  "environments": [
+    {
+      "environment": "demo",
+      "endpoint": "https://mcp-d.docusign.com/mcp",
+      "sdkCompatible": true,
+      "requests": [
+        {
+          "url": "https://mcp-d.docusign.com/.well-known/oauth-protected-resource/mcp",
+          "status": 403
+        },
+        {
+          "url": "https://mcp-d.docusign.com/.well-known/oauth-protected-resource",
+          "status": 200
+        },
+        {
+          "url": "https://mcp-d.docusign.com/.well-known/oauth-authorization-server",
+          "status": 200
+        }
+      ],
+      "checks": {
+        "officialSdkOAuthDiscovery": true,
+        "signatureScopeAdvertised": true,
+        "pkceAndRefreshAdvertised": true
+      },
+      "metadataSha256": "c046fc30d4ff964693edaf23c8c640d4fda0a1d47983f303b760facee841bc2b"
+    },
+    {
+      "environment": "production",
+      "endpoint": "https://mcp.docusign.com/mcp",
+      "sdkCompatible": false,
+      "requests": [
+        {
+          "url": "https://mcp.docusign.com/.well-known/oauth-protected-resource/mcp",
+          "status": 403
+        },
+        {
+          "url": "https://mcp.docusign.com/.well-known/oauth-protected-resource",
+          "status": 200
+        },
+        {
+          "url": "https://mcp.docusign.com/.well-known/oauth-authorization-server",
+          "status": 200
+        }
+      ],
+      "failure": {
+        "code": "ISSUER_MISMATCH",
+        "expectedIssuer": "https://mcp.docusign.com",
+        "observedIssuer": "https://account.docusign.com"
+      },
+      "metadataSha256": "f8de8eaad13e2140c6920cb924b3265b07fbb24eec9bbf9bc926fa69d57df15e"
+    }
+  ],
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "Demo public metadata passes; demo account integration key, callback acceptance, consent and tool operations are unverified",
+    "Production discovery fails SDK RFC 8414 issuer validation; there is no production compatibility proof or bundled production profile",
+    "Vendor guides disagree on production integration-key approval; no approval was requested",
+    "No tokens, documents, paid APIs, native Hermes Docusign account or model-driven flow tested"
+  ]
+}

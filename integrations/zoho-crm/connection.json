@@ -1,0 +1,9 @@
+{
+  "id": "zoho-crm",
+  "label": "Zoho CRM",
+  "enabled": false,
+  "transport": "http",
+  "urlEnv": "ZOHO_CRM_MCP_URL",
+  "readTools": [],
+  "allowWrites": false
+}

@@ -1,0 +1,10 @@
+{
+  "id": "pagerduty",
+  "label": "PagerDuty",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.pagerduty.com/mcp",
+  "headers": {"Authorization": {"env": "PAGERDUTY_MCP_TOKEN", "prefix": "Token token="}},
+  "readTools": ["list_incidents"],
+  "allowWrites": false
+}

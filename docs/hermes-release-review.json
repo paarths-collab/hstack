@@ -1,0 +1,114 @@
+{
+  "checkedOn": "2026-11-02",
+  "latestStable": {
+    "tag": "v0.22.5",
+    "commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+    "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5",
+    "changeSincePriorReview": false
+  },
+  "pinnedSourceReview": {
+    "tools/mcp_tool.py": {
+      "sha256": "0d4f2a29e4fea798df27a0c7aaf92befaf5ef6e49b17a5ff8cedd9ae067189fa",
+      "checkedDefinition": null,
+      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool.py"
+    },
+    "tools/mcp_tool_discovery.py": {
+      "sha256": "4cc0951ca745691705e11f943eff186a94a6ac41446eac06d5847d7efa56a5dd",
+      "checkedDefinition": "register_mcp_servers",
+      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_discovery.py"
+    },
+    "tools/mcp_tool_schema.py": {
+      "sha256": "0a0e214b1e19d2e7719cc1f8f7a4b6ecd5be8df6aab1b6ef61e0049c21428bea",
+      "checkedDefinition": "mcp_prefixed_tool_name",
+      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_schema.py"
+    },
+    "tools/mcp_tool_lifecycle.py": {
+      "sha256": "243bb5f655964ba32e4b8a9855ac2b60a189627628ec58a86487cf998acd3811",
+      "checkedDefinition": "shutdown_mcp_servers",
+      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_lifecycle.py"
+    }
+  },
+  "finding": "Optional native verification scripts referenced registration, naming and shutdown on the monolithic core module; pinned stable source defines them in discovery/schema/lifecycle modules instead. Hstack stdio protocol incompatibility was not established.",
+  "localFix": {
+    "resolver": "scripts/hermes_mcp_compat.py",
+    "verifiers": [
+      "scripts/verify-hermes-analytics.py",
+      "scripts/verify-hermes-bigquery.py",
+      "scripts/verify-hermes-mongodb.py",
+      "scripts/verify-hermes-mysql.py",
+      "scripts/verify-hermes-quickbooks.py",
+      "scripts/verify-hermes-redis.py",
+      "scripts/verify-hermes-zendesk.py"
+    ],
+    "regression": "tests/hermes-compat.test.mjs",
+    "behavior": "Delegate to native implementations in either layout; propagate internal import failures and reject non-callable interfaces without monkeypatching Hermes."
+  },
+  "nativeInstalledProbe": {
+    "sourceMcpSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+    "evidence": "Actual installed Hermes registry and real Hstack stdio with synthetic Google HTTP/auth only; Python-side network denied. Not a tagged runtime, account or model test.",
+    "checks": {
+      "realStdioSearchReadAndSqlBlock": true,
+      "healthDoesNotExposeAccountContent": true,
+      "oneRefreshForTwoReads": true,
+      "noNetworkOrSql": true,
+      "privateSourceFilesUnchanged": true,
+      "oneSdkClientForDiscoveryAndTwoReads": true
+    },
+    "registry": {
+      "directHermesLegacyRead": true,
+      "gatewayHermesSearchReadAndSqlBlock": true,
+      "directProtocolMode": "auto",
+      "directMethods": [
+        "initialize",
+        "notifications/initialized",
+        "tools/list",
+        "tools/call",
+        "tools/call"
+      ],
+      "directPreflights": [
+        "HEAD"
+      ],
+      "python": "3.11.16",
+      "mcp": "2.0.0"
+    },
+    "requestComparison": {
+      "readsPerPath": 2,
+      "directHermesMcpPosts": 5,
+      "hstackMcpPostsPerProcess": 5,
+      "limitation": "Synthetic request count only; direct path uses a static synthetic header. No equal auth/setup, latency, model or cost comparison."
+    }
+  },
+  "limitations": [
+    "Full pinned stable runtime was not executed; split layout resolution has fixture tests and pinned source review only.",
+    "Other installed vendor runtimes were not rerun.",
+    "No credentials, paid APIs, model calls, GitHub writes or deployments used; no candidate promoted.",
+    "GitHub API tag/candidate enumeration was unavailable; official latest-release metadata and release listing were checked, so this is not an exhaustive candidate audit."
+  ],
+  "regressionRuns": [
+    {
+      "node": "v22.23.4",
+      "exitCode": 0,
+      "tests": 357,
+      "pass": 357,
+      "fail": 0,
+      "skipped": 0
+    },
+    {
+      "node": "v24.22.2",
+      "exitCode": 0,
+      "tests": 357,
+      "pass": 357,
+      "fail": 0,
+      "skipped": 0
+    },
+    {
+      "node": "v26.8.1",
+      "exitCode": 0,
+      "tests": 357,
+      "pass": 357,
+      "fail": 0,
+      "skipped": 0
+    }
+  ],
+  "testedCodeAndConfigSha256": "17342e8abab7d96356f905bfc91a3b35a1c522430d4d376e5534ce9b937b4f0b"
+}

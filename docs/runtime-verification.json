@@ -1,0 +1,117 @@
+{
+  "checkedOn": "2026-11-04",
+  "scope": "Routine gateway build and regression suite in a clean public export; live Buffer Desktop backend/React evidence is recorded separately in desktop-verification.json",
+  "testedCodeAndConfigFiles": 194,
+  "testedCodeAndConfigSha256": "6ea2e105fb270f1ec0197a5e20f5365a4d4f1e48daa2b51f845ece5cb4254737",
+  "fingerprintRecipe": "Sort public relative paths lexicographically by UTF-8 bytes under src/tests/scripts/catalog/integrations/hermes-plugin/native excluding Markdown, plus package.json/package-lock.json/connections.example.json/tsconfig.json; hash concatenated path UTF-8 + NUL + raw SHA256(file bytes) + newline",
+  "environment": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "freshPrivateHomes": true,
+    "inheritedServiceCredentials": false,
+    "privateEnvOrConnectionsCopied": false,
+    "ignoredArtifactsCopied": false,
+    "dependencyInstall": "Reused installed integrity-locked root dependencies; dependency versions and package-lock.json unchanged; npm audit returned zero known vulnerabilities",
+    "credentialTestBackend": "Synthetic plaintext fixtures; dedicated keyfile tests exercise actual encryption. Native macOS Keychain separately tested with a disposable item."
+  },
+  "node22": {
+    "version": "v22.23.4",
+    "source": "https://nodejs.org/download/release/v22.23.4/node-v22.23.4-darwin-arm64.tar.xz",
+    "officialChecksums": "https://nodejs.org/download/release/v22.23.4/SHASUMS256.txt",
+    "archiveSha256": "037650d0839f457747396f052073fb48333d31bf5abd3c98b74da20d89ebb1ad",
+    "archiveChecksumVerified": true,
+    "testCommand": "npm test",
+    "testExitCode": 0,
+    "passed": 386,
+    "failed": 0,
+    "skipped": 0
+  },
+  "node24": {
+    "version": "v24.22.2",
+    "source": "https://nodejs.org/download/release/v24.22.2/node-v24.22.2-darwin-arm64.tar.xz",
+    "officialChecksums": "https://nodejs.org/download/release/v24.22.2/SHASUMS256.txt",
+    "archiveSha256": "1f5ac075be50bed4780ea3be19a007fda95ea4d527d28d76d0b91de47d915115",
+    "archiveChecksumVerified": true,
+    "testCommand": "npm test",
+    "testExitCode": 0,
+    "passed": 386,
+    "failed": 0,
+    "skipped": 0,
+    "sourceInstall": "Same clean public export and integrity-locked root dependencies"
+  },
+  "node26": {
+    "version": "v26.8.1",
+    "source": "Existing installed runtime; same clean public export and Node 22 lockfile installation",
+    "testCommand": "npm test",
+    "testExitCode": 0,
+    "passed": 386,
+    "failed": 0,
+    "skipped": 0
+  },
+  "workflowValidation": {
+    "version": "1.7.12",
+    "archiveSha256": "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+    "source": "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz",
+    "workflows": [
+      ".github/workflows/mailchimp-runtime.yml",
+      ".github/workflows/mongodb-local.yml",
+      ".github/workflows/quickbooks-runtime.yml",
+      ".github/workflows/redis-local.yml",
+      ".github/workflows/secret-scan.yml",
+      ".github/workflows/tests.yml"
+    ],
+    "exitCode": 0
+  },
+  "ciConfiguration": {
+    "workflow": ".github/workflows/tests.yml",
+    "workflowSha256": "51e099beeb012719bb53ea587b4ef1b9f2adf9e36333e76132cd4d2e50a19317",
+    "operatingSystems": [
+      "ubuntu-latest",
+      "macos-latest"
+    ],
+    "nodeLines": [
+      "22",
+      "24",
+      "26"
+    ],
+    "remoteJobsRun": false,
+    "checkoutPersistCredentials": false,
+    "actions": {
+      "actions/checkout": "11d5960a326750d5838078e36cf38b85af677262",
+      "actions/setup-node": "49933ea5288caeca8642d1e84afbd3f7d6820020"
+    },
+    "officialTagReferencesReviewed": [
+      "https://api.github.com/repos/actions/checkout/git/ref/tags/v4",
+      "https://api.github.com/repos/actions/setup-node/git/ref/tags/v4"
+    ]
+  },
+  "limitations": [
+    "Linux/GitHub-hosted runners and the remote CI matrix were not executed in this stage",
+    "Earlier Node 22 patch releases and Windows are not covered by these runs; POSIX auth/candidate permission guards remain unsupported on Windows",
+    "Optional installed vendor compatibility builds and hosted accounts were not rerun or validated by the routine suite",
+    "No measured setup-time, latency, model-cost or account-operation advantage over direct MCP was established by runtime validation",
+    "Hermes Desktop plugin UI loading and live service-account acceptance were not tested by the routine suite",
+    "The separate opt-in Desktop acceptance used a pre-existing Buffer key for read-only requests in a disposable Hermes profile; routine tests did not use it."
+  ],
+  "fingerprintValidation": "All 194 public code/config files compared byte-for-byte with the export tested on Node 22/24/26",
+  "testRunNote": "Final Node 22, 24 and 26 suites passed without failures; all tests use synthetic credentials.",
+  "credentialVault": {
+    "macOSNativeKeychain": "passed with disposable synthetic item; no existing entries read or changed",
+    "encryption": "AES-256-GCM; actual encryption/decryption and tamper/migration/recovery tests",
+    "headlessPOSIX": "owner-only raw 32-byte master-key file; no silent plaintext fallback"
+  },
+  "dependencyAudit": {
+    "command": "npm audit --json",
+    "knownVulnerabilities": 0,
+    "checkedOn": "2026-11-04"
+  },
+  "secretScan": {
+    "tool": "gitleaks",
+    "checkedOn": "2026-11-04",
+    "scope": "Clean public export including new source and documentation; real .env, connections.json and ignored artifacts excluded",
+    "allowCommentsIgnored": true,
+    "redacted": true,
+    "exitCode": 0,
+    "findings": 0
+  }
+}

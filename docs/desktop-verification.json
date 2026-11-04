@@ -1,0 +1,93 @@
+{
+  "checkedOn": "2026-11-04",
+  "codeFingerprintSha256": "6ea2e105fb270f1ec0197a5e20f5365a4d4f1e48daa2b51f845ece5cb4254737",
+  "installedHermesSourceCommit": "05f548f35dd3242bf2ff74743e9112acde251f77",
+  "scope": "Installed-source compatibility; not promotion of an official release or proof of packaged Desktop compatibility",
+  "bufferBackend": {
+    "result": "passed",
+    "liveAccountRead": true,
+    "disposableHermesProfile": true,
+    "normalUserProfileChanged": false,
+    "modelUsed": false,
+    "vendorWrites": false,
+    "path": [
+      "plugin HTTP API",
+      "private Node credential store",
+      "Hermes native MCP configuration",
+      "Hermes native registry worker",
+      "Hstack stdio",
+      "Buffer get_account"
+    ],
+    "checks": [
+      "save",
+      "unvalidated activation rejected",
+      "authenticated read validation",
+      "activate",
+      "native registry read",
+      "deactivate",
+      "inactive read rejected",
+      "remove",
+      "unrelated MCP configuration preserved",
+      "no key in result or config",
+      "encrypted storage after every operation"
+    ],
+    "credentialStorage": "AES-256-GCM with disposable private master-key file; encrypted envelope and absent plaintext key checked after every operation; record removed on disconnect"
+  },
+  "reactRenderer": {
+    "result": "passed",
+    "component": "hermes-plugin/hstack-connections/desktop/plugin.js",
+    "runtime": "jsdom with real React and Testing Library",
+    "dependencies": {
+      "react": "19.2.7",
+      "jsdom": "29.1.1",
+      "@testing-library/react": "16.3.2"
+    },
+    "backend": "real plugin HTTP calls and Buffer account reads",
+    "fixtures": [
+      "Hermes shell profile/connection atoms",
+      "ctx.rest transport routed to FastAPI TestClient"
+    ],
+    "checks": [
+      "activation disabled before validation",
+      "password cleared after save",
+      "validate",
+      "activate",
+      "native read through Hermes",
+      "deactivate",
+      "read disabled when inactive",
+      "remove key"
+    ]
+  },
+  "otherSocialProviders": {
+    "pallyy": {
+      "read": "get_me",
+      "evidence": "documentation plus synthetic fixtures"
+    },
+    "blotato": {
+      "read": "blotato_get_user",
+      "evidence": "documentation plus synthetic fixtures"
+    },
+    "ayrshare": {
+      "read": "list_profiles",
+      "evidence": "documentation plus synthetic fixtures; Business profile access required"
+    },
+    "metricool": {
+      "state": "activation blocked; no reviewed validation read"
+    }
+  },
+  "sources": [
+    "https://developers.buffer.com/guides/integrations/mcp.html",
+    "https://pallyy.com/docs/api/mcp/tools",
+    "https://help.blotato.com/start-with-an-ai-agent/mcp/tools",
+    "https://www.ayrshare.com/docs/additional/mcp-action-tools",
+    "https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk"
+  ],
+  "limitations": [
+    "Hermes Desktop app is not installed; no real Electron shell, authenticated plugin mount or UI profile switching acceptance",
+    "Read button uses a separate native registry worker, not an existing chat or an AI model",
+    "No live Pallyy, Blotato, Ayrshare or Metricool account tested",
+    "No other catalogue Desktop sign-in screens implemented",
+    "No commit, push or remote CI run",
+    "Windows unsupported; native vendor credential stores and legacy .env remain outside the vault; no automatic master-key rotation or stale-lock recovery"
+  ]
+}

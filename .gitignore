@@ -1,22 +1,28 @@
-# local state / secrets — never commit
-*.env
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
 .env
 .env.*
-*.key
-secrets/
-*.log
-
-# OS / editor
+!.env.example
 .DS_Store
-Thumbs.db
-.idea/
-.vscode/
-*.swp
+.coverage
+htmlcov/
 
-# scratch
-tmp/
-scratch/
-
-# node / next build output (never commit these)
 node_modules/
-.next/
+.hstack-setup/
+*.tsbuildinfo
+
+connections.json
+
+# Optional repository-local OAuth state (default storage is outside the repository).
+.hstack-auth/
+.hstack-tools/
+
+# Native Zendesk state can contain tokens/client secrets or private attachments.
+**/.config/zendesk-mcp/
+**/.cache/zendesk-mcp/
+.hstack-zendesk-locks/
+.hstack-quickbooks-locks/

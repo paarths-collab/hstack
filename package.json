@@ -1,0 +1,49 @@
+{
+  "name": "hstack",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Hstack MCP gateway prototype for Hermes",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/build-keychain.mjs",
+    "buffer:tools": "npm run build --silent && node --env-file=.env dist/buffer-tools.js",
+    "test": "npm run build --silent && node scripts/run-tests.mjs",
+    "start": "node --env-file=.env dist/server.js",
+    "smoke:buffer": "npm run build --silent && node dist/smoke.js",
+    "audit:buffer": "npm run build --silent && node dist/audit-buffer.js",
+    "smoke:search": "npm run build --silent && node dist/smoke-search.js",
+    "benchmark": "npm run build --silent && node scripts/benchmark-discovery.mjs",
+    "verify:redis-local": "npm run build --silent && node scripts/verify-redis-local.mjs",
+    "verify:mailchimp-runtime": "npm run build --silent && node scripts/verify-mailchimp-runtime.mjs",
+    "verify:mongodb-local": "npm run build --silent && node scripts/verify-mongodb-local.mjs",
+    "verify:xero-metadata": "node scripts/verify-xero-metadata.mjs",
+    "verify:pipedrive-metadata": "node scripts/verify-pipedrive-metadata.mjs",
+    "verify:typeform-metadata": "node scripts/verify-typeform-metadata.mjs",
+    "verify:hubspot-metadata": "node scripts/verify-hubspot-metadata.mjs",
+    "verify:remaining-oauth-metadata": "node scripts/verify-remaining-oauth-metadata.mjs",
+    "verify:deel-metadata": "npm run build --silent && node scripts/verify-deel-metadata.mjs",
+    "verify:docusign-metadata": "node scripts/verify-docusign-metadata.mjs",
+    "verify:bigquery-metadata": "npm run build --silent && node scripts/verify-bigquery-metadata.mjs",
+    "verify:bigquery-runtime": "npm run build --silent && node scripts/verify-bigquery-runtime.mjs",
+    "verify:analytics-runtime": "npm run build --silent && node scripts/verify-analytics-runtime.mjs",
+    "verify:mysql-local": "npm run build --silent && node scripts/verify-mysql-local.mjs",
+    "audit:mysql-binary": "node integrations/mysql/audit.mjs",
+    "verify:zendesk-runtime": "npm run build --silent && node scripts/verify-zendesk-runtime.mjs",
+    "verify:quickbooks-runtime": "npm run build --silent && node scripts/verify-quickbooks-runtime.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/core": "2.4.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "google-auth-library": "11.3.2"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/node": "2.1.2",
+    "@types/node": "22.20.5",
+    "typescript": "7.0.2",
+    "zod": "4.6.7"
+  }
+}

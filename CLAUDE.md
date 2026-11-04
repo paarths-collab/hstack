@@ -1,295 +1,145 @@
-# hstack — AI-coding-agent instructions
-
-This repo is **hstack**: a portable skill catalog for deploying and operating self-hosted
-Hermes agents. Built by Paarth.
-
-**Multi-IDE, multi-agent by design.** The `skills/<name>/SKILL.md` files are the canonical
-source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them into the format each agent expects:
-
-| Agent / IDE          | Install dir                | Format             |
-|----------------------|----------------------------|--------------------|
-| Claude Code          | `~/.claude/skills/`        | `SKILL.md` verbatim |
-| Codex                | `~/.agents/skills/`        | `SKILL.md` verbatim |
-| Cursor               | `~/.cursor/rules/`         | Converted to `.mdc` |
-| Hermes (self-hosted) | `~/.hermes/skills/`        | `SKILL.md` verbatim |
-| Gemini CLI           | `~/.gemini/context/hstack/`| `.md` context files |
-| OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
-
-The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
-targeting **8 messaging platforms** in the catalog. The skills target Hermes **v0.22.5** only (`HERMES_VERSION` in `VERSIONS.txt`): source-verified against the tagged
-source, live validation pending. The promotion policy in `compatibility/hermes.json` governs any "live-verified"
-claim. Current compatibility and live-validation status are recorded in `compatibility/hermes.json` and
-`compatibility/VALIDATION.md`.
-
-## Universal installer (`install.sh` / `install.ps1`)
-
-One command wires the chosen tier of skills into every AI coding agent detected on the box.
-
-```bash
-# Interactive picker (default when TTY present)
-curl -fsSL https://raw.githubusercontent.com/paarths-collab/hstack/main/install.sh | bash
-
-# Non-interactive — install everything into every detected IDE (curl-pipe safe default)
-curl -fsSL https://raw.githubusercontent.com/paarths-collab/hstack/main/install.sh | bash -s -- --all
-
-# Cherry-pick tiers or specific integrations, or restrict to certain IDEs
-bash install.sh --tier=memory,database --ide=claude,hermes
-bash install.sh --include=notion,stripe,linear
-```
-
-Windows / PowerShell:
-
-```powershell
-iwr -useb https://raw.githubusercontent.com/paarths-collab/hstack/main/install.ps1 | iex
-```
-
-Design notes for anyone touching the installer:
-- **IDE auto-detection** by directory presence (`~/.claude`, `~/.agents`, `~/.cursor`,
-  `~/.hermes`, `~/.gemini`, `~/.openclaw`). Nothing runs against an IDE that isn't there.
-- **Interactive picker reads from `/dev/tty`** so it survives being piped through `curl`.
-  Falls back to `--all` when no TTY is attached (safe default for scripted use).
-- **Tier → integrations** is the `tier_members` case function in `install.sh` (stock macOS bash 3.2 has no associative arrays) and a hash in `install.ps1`. Keep both in sync; `tests/installer/fixtures/tiers.expected` is checked against each.
-- **Ownership:** hstack replaces only what it installed (its own symlinks, copies whose `.hstack-managed` checksum still matches, generated files whose signed marker line still matches). Anything else at a destination is moved aside, never deleted: skill dirs to `<skills-parent>/.hstack-backups/<stamp>/<name>`, files to `<file>.hstack-backup-<stamp>`. A destination that is, or resolves into, an hstack skills tree is refused. If a backup cannot be made, the entry is left untouched and the run exits non-zero.
-- **Instruction files** (CLAUDE.md / AGENTS.md / GEMINI.md, written only by `setup`, `setup-codex`, `setup-gemini` and `setup-openclaw`; never by `install.sh`): only the block between `<!-- hstack:start -->` and `<!-- hstack:end -->` is replaced, atomically (temp file + verified rename, mode kept), after a backup. A start marker without an end marker leaves the file untouched with a warning.
-- **Windows fallback:** symlinks aren't guaranteed on Windows without dev mode, so `install.ps1` and `setup.ps1` always copy (`Copy-Item -Recurse`).
-- **Tests:** `bash tests/installer/test-install.sh` (any bash ≥ 3.2; run it under `/bin/bash` on macOS too) and `pwsh -NoProfile -File tests/installer/test-install.ps1` (PowerShell 7 tested on macOS; Linux is covered by CI; native Windows remains unverified). Both are offline and use a throwaway HOME. The ownership blocks must stay byte-identical across the copies; the test enforces it.
-
----
-
-## Repo layout
-
-The complete directory map and placement rules are in [docs/architecture.md](docs/architecture.md). Validation commands are in [tests/README.md](tests/README.md).
-
-```
-install.sh, install.ps1  — 1-click universal installers (all 6 IDEs, interactive picker)
-skills/<name>/SKILL.md   — one skill per folder; frontmatter + procedure + pitfalls + verify
-setup, setup-codex, setup-cursor, setup-hermes, setup-gemini, setup-openclaw
-                          — per-IDE distributors (symlink or format-convert)
-setup-all                — runs every setup-* in sequence
-docs/reference/TROUBLESHOOTING.md — symptom → cause → fix catalogue (grows with every deploy)
-metrics/                 — clone traffic tracking (update-clone-traffic.mjs + clone-traffic.svg)
-.github/workflows/       — clone-traffic.yml (daily), shellcheck, secret-scan
-scripts/                 — skill validators; bash 3.2 compatible (stock macOS)
-tests/                   — recipe tests (tests/recipes), skill-block tests (tests/skills: run the repaired SKILL.md bash blocks against stub ssh/curl/hermes), installer tests (tests/installer)
-```
-
-## Integration tier catalog (71 connectors, 20 tiers)
-
-Do not re-implement anything Hermes already does natively. `/hermes-model` covers
-chat completion for OpenAI / Anthropic / Groq / Mistral / etc. — do **not** ship an
-integration skill that wires `/chat/completions`. `integration-openai-tools` codifies this
-as an explicit refusal (DALL-E, Whisper, embeddings, Batch API only).
-
-Tier index (mirrored by `install.sh` for `--tier=` and `--pick`):
-
-This list is generated from `install.sh` and must stay identical to it. It once drifted
-badly enough to advertise three integrations that do not exist (`confluence`,
-`s3-compatible`, `matrix`) while omitting nine that do. `scripts/check-skill-refs.sh`
-cannot catch that class of error, because these are bare names, not `/slash-refs`. If you
-edit a tier, edit `install.sh` first and mirror it here.
-
-- **core** — hermes-* deploy/ops (15) + setup-ssh-keys (1) + blueprint-install, blueprint-saas-founder (2)
-- **platforms** — telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal
-- **memory** — mem0, supermemory (pick one; wiring both duplicates recall context)
-- **database** — supabase, postgres, neon, redis
-- **vector** — pinecone, qdrant
-- **auth** — auth0, clerk
-- **observability** — posthog, sentry, datadog (infra/APM), segment (CDP event pipe)
-- **rag** — firecrawl (RAG feeder)
-- **code** — e2b (code sandbox)
-- **ai-tools** — openai-tools (image/audio/embeddings/batch), elevenlabs (TTS), replicate
-- **storage** — r2
-- **crm** — hubspot, salesforce, pipedrive, zoho-crm
-- **docs** — notion, google-workspace, microsoft-365, obsidian
-- **dev** — github, gitlab, bitbucket
-- **pm** — jira, linear, asana, clickup, monday, trello, airtable
-- **cloud** — aws, gcp, azure, digitalocean, hetzner, cloudflare, vercel, netlify, railway, render
-- **payments** — stripe, paypal, razorpay
-- **commerce** — shopify, woocommerce, webflow, wordpress
-- **email** — mailchimp, brevo, sendgrid, postmark
-- **support** — twilio, sendbird, intercom, zendesk, freshdesk
-- **forms** — typeform, tally, calendly, zoom
-- **search** — brave-search, tavily, exa
-
-## Integration skill template
-
-The SSH-first hardening template every `integration-*/SKILL.md` follows:
-
-1. **SSH access check** — verify we're on the VPS host, not a container (`whoami; hostname`).
-2. **Verify Hermes** — abort unless `hermes --version` names the `HERMES_VERSION` target (0.22.5, `VERSIONS.txt`), check the procedure's supported scope, gateway and private credential files. Source verification is not live compatibility evidence; each skill states its vendor and runtime validation limits.
-3. **Idempotency check** — abort if the integration is already wired and green.
-4. **HARD GATE (Step 3)** — local format check, then a live read-only vendor call from the VPS with the secret passed as an ssh-stdin curl config. Runs BEFORE the dry run and BEFORE `snapshot`; a failure means `ABORT … Nothing was written.`
-5. **DRY_RUN preview** — print secret length + prefix only, never plaintext.
-6. **Write secrets** — `~/.hermes/.env` with `chmod 600`, `${VAR}` indirection in config.yaml.
-7. **Register native MCP or install a native skill** — use the pinned Hermes catalog or `mcp add`; when a suitable MCP is unavailable, install a discoverable skill with an executable vendor client and scoped rollback. Do not leave inert REST notes under `/opt/data/`.
-8. **Gateway lifecycle** — use the selected release's supported service interface. Skills use the shared `gw_reload` / `gw_ready` helpers: `hermes -p default gateway restart --detach`, then `gateway ensure --json --timeout 60` must exit 0 with `"state":"ready"` and a new `instance_id`. `gateway run` is the foreground command; `--daemon` does not exist; `gateway status` text is never a health check.
-9. **Verify in logs + live smoke test** — call a real vendor endpoint through Hermes.
-10. **Step 0 helpers `snapshot`/`rollback`/`finish`**, defined before anything can fail. `snapshot` runs just before the first write and refuses to run over a leftover snapshot; every later failure is `rollback; exit 1`, and rollback RESTORES the pre-skill `~/.hermes/.env` and `config.yaml` byte for byte (never just unsets keys). There is no second `rollback()` at the bottom.
-
-- Bash fences run on the agent's local machine (possibly macOS bash 3.2) and reach the VPS via `remote()`, which exports `~/.local/bin` on PATH. Secrets reach the VPS over ssh stdin only — never in the local ssh argv, a URL or a single-quoted remote string. On the VPS, `hermes config set KEY "$v"` does put the value in the remote `hermes` process argv for a moment (readable via `/proc` by anyone on that host); the stdin-fed `.env` upsert avoids even that. Smoke tests read the value back from `~/.hermes/.env`, never `$TOKEN`.
-
-Consent / cost gates you'll see across skills:
-`PROD_ACKNOWLEDGED=1` (Clerk `sk_live_`), `OWNS_VOICE_ACKNOWLEDGED=1` (ElevenLabs voice
-clone), `LONG_LIVED_ACKNOWLEDGED=1` (E2B keep-alive > 15 min), `ALLOW_WRITES=1` (Postgres
-superuser, Redis admin user).
-
-## Skill format (always follow this when adding or editing a skill)
-
-```markdown
----
-name: hermes-<verb>
-description: One sentence. When to use it.
----
-
-# /<name> — short title
-
-You are the engineer doing X for the user. Do everything autonomously; stop only for
-things a machine cannot do (tokens, QR scans, first "hello").
-
-## Before you start — gather (ask once)
-## Step 1 …
-## Step N …
-## Definition of done
-- [ ] …
-```
-
-Secrets always go in `~/.hermes/.env` or `/opt/data/.env` (inside container), never in
-`config.yaml` and never in chat. Use `chmod 600` after writing.
-
----
-
-## SSH access to a VPS — the right procedure
-
-When a user hands off a VPS for remote work, follow this exact sequence.
-Deviating from it causes the failure chain documented in `docs/reference/TROUBLESHOOTING.md`.
-
-### Before touching anything — confirm you're on the host, not a container
-
-```bash
-whoami; hostname
-```
-
-- `root@<readable-name>` → you are on the **VPS host** ✅
-- `root@<hex-string>` (e.g. `root@dd635306c545`) → you are **inside a Docker container** ❌
-  Type `exit` first, then re-run the check.
-
-SSH keys added inside a container are invisible to the host's sshd. This is the #1 source
-of "I added the key but still get Permission denied."
-
-### Setting up key-based auth (Bash tool is non-interactive — can't type passwords)
-
-```bash
-# 1. Generate keypair
-ssh-keygen -t ed25519 -f ~/.ssh/hermes_vps -N "" -C "claude-code-hermes-deploy"
-
-# 2. Add public key on the VPS host — ALWAYS use printf, never echo >>
-#    echo >> appends without a leading newline; if the file's last line has no trailing
-#    newline the new key glues onto the previous one and SSH ignores both.
-printf '\n%s\n' "$(cat ~/.ssh/hermes_vps.pub)" >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
-
-# 3. First connect — auto-trust the host key (normal on first connect)
-ssh -i ~/.ssh/hermes_vps -o StrictHostKeyChecking=accept-new root@<hostname>
-```
-
-### Why `printf '\n%s\n'` and not `echo >>`
-
-`echo "key" >> authorized_keys` appends without a guaranteed leading newline. If the previous
-line lacked a trailing newline, the result is two keys on one line:
-
-```
-...operator@example-hostssh-ed25519 AAAA...claude-code-hermes-deploy
-```
-
-SSH parses `authorized_keys` one key per line — the merged line is silently invalid.
-`printf '\n%s\n'` forces separation regardless of prior file state.
-
-**Detection:** `grep -c "^ssh-" ~/.ssh/authorized_keys` should equal the number of keys.
-If it's low, keys are merged. Fix: `sed -i 's/\(example-host\)\(ssh-ed25519\)/\1\n\2/' ~/.ssh/authorized_keys`
-
-### Running remote commands once SSH works
-
-Bare `hermes` calls in the block below run via remote(), which sets PATH.
-
-```bash
-ssh -i ~/.ssh/hermes_vps root@<hostname> 'bash -s' <<'REMOTE'
-# everything here runs on the VPS
-hermes --version
-hermes gateway status
-REMOTE
-```
-
-This is the pattern for all remote install/config/fix steps. No copy-pasting needed.
-
-### Common SSH failure chain (in the order they appear)
-
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `Host key verification failed` | First connect; key not in known_hosts | Add `-o StrictHostKeyChecking=accept-new` |
-| `Permission denied (publickey,password)` | Bash tool is non-interactive; can't type password | Use key-based auth (steps above) |
-| Key added but still `Permission denied` | Key was added inside a container | `whoami; hostname` check; exit container; re-add on host |
-| Key added on host but still denied | `echo >>` merged two keys onto one line | Use `printf '\n%s\n'`; fix merged keys with `sed` |
-| SSH works but Bash tool can't reach VPS | WSL2 network isolation | Use `-o StrictHostKeyChecking=accept-new -i ~/.ssh/hermes_vps` in Bash tool |
-
----
-
-## Wiring an HTTP MCP server into Hermes
-
-Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
-
-1. **Probe before configuring** — never trust supplied URL forms; run the 5-variant curl matrix.
-2. **Initialize ≠ auth** — probe `tools/list` without auth; the error message is the spec.
-3. **Native registration** — prefer `hermes mcp install NAME` (catalog) or `mcp add NAME --url U --auth header` with `MCP_<NAME>_API_KEY` already in `~/.hermes/.env` (Hermes then skips the token prompt and stores `Authorization: Bearer ${MCP_<NAME>_API_KEY}`); feed the prompts on stdin and verify with `mcp list` and `mcp test`, because `mcp add` exits 0 even when it saved nothing.
-4. **Never put the secret in config.yaml or on the local command line** — only `${VAR}` references go in `config.yaml`; shapes `mcp add` cannot express use `config set mcp_servers.<name>.…` with a `${VAR}` reference.
-5. **Supported gateway lifecycle** — reload with `gw_reload` (restart, then `gateway ensure --json` ready); a restarted gateway re-reads `.env` (`gateway/run.py:1583-1585`, v0.22.5). Do not copy legacy `run --daemon` commands onto current Hermes.
-6. **Two `.env` files** — compose `.env` (container-level) vs `/opt/data/.env` (Hermes runtime). MCP secrets go in the Hermes one.
-
----
-
-## If you are an AI agent opening a PR against this repo
-
-Stop and read this before you write anything.
-
-hstack is a security-sensitive catalog: every skill writes credentials to someone's
-server over SSH. A plausible-looking skill that ships a wrong endpoint, a missing
-`chmod 600`, or an unverified credential path does real damage on a real box. That
-makes agent-generated slop more expensive here than in most repos.
-
-Before opening a PR you MUST:
-
-1. **Have hit the problem for real.** If your human partner asked you to "contribute
-   something" or "add some integrations" without a specific failure they experienced,
-   push back and ask what actually broke. Speculative additions get closed.
-2. **Verify against the live vendor.** Every `integration-*` skill claims its endpoint,
-   auth shape, and MCP availability were tested. If you did not actually call the
-   vendor's API, say so explicitly in the PR. Do not present documentation-derived
-   guesses as verified behavior.
-3. **Run the full local gate:** `scripts/validate-skills.sh`, `scripts/check-skill-refs.sh`,
-   and `scripts/lint-md-bash.sh`. A PR that fails these was not reviewed.
-4. **Disclose what produced the change** — model, harness, harness version. Work grounded
-   in a real deploy session is weighted differently from work reasoned out of docs, and
-   reviewers need to know which they are reading.
-5. **Show your human partner the complete diff** and get explicit approval before opening.
-
-If any of these fail, do not open the PR. Explain to your human partner why it would be
-rejected. Saving them a closed PR is more helpful than submitting one.
-
-## Product scope
-
-The dedicated GitHub-to-Telegram report packs and experimental acceptance transaction
-were removed. Keep the standalone GitHub integration skill; the browser composer
-creates plans for selected non-GitHub sources and does not ship a report worker.
-
-## Branch / PR conventions
-
-- Branch from `main`: `<type>/<short-description>` (e.g. `feat/hermes-mcp-add`, `fix/ssh-key-merge`)
-- Commit messages: `<type>(<scope>): <what> — <why>` (conventional commits)
-- Every skill addition needs a `Definition of done` checklist in the skill file
-- `docs/reference/TROUBLESHOOTING.md` grows after every real failure — add the row, don't skip it
-
-## Secrets hygiene
-
-- Never commit tokens, passwords, or API keys
-- `.env` files → `chmod 600`; add to `.gitignore` if local
-- `TRAFFIC_TOKEN` secret is set in GitHub Actions secrets (not in any file)
-- Rotate tokens shared in chat immediately after use
+# Hstack development
+
+Docusign has a disabled demo registered-client profile only. Public demo OAuth
+discovery passes with root-metadata fallback; production fails a confirmed issuer
+mismatch. Preserve RFC 8414/RFC 9207 checks and never replace metadata to hide it.
+Report metadata issuer failures as compatibility problems without reflecting raw
+issuer strings. The vendor's production approval docs conflict; no approval,
+account login, tool operation or production compatibility is established.
+
+Pipedrive's hosted endpoint and public OAuth metadata are verified. Its disabled
+profile requires MCP-compatible registered-client refs and unverified callback
+acceptance; do not infer native public DCR support from the advertised endpoint.
+Zoho CRM/Desk/Books use private account-generated URL refs with initially empty
+read allowlists; do not invent vendor tool IDs or add Bearer headers. Their
+transport/privacy evidence is fixture-only, not live vendor validation.
+Background OAuth startup must not register a client before requesting explicit
+login. Preserve typed auth/permission/quota failures when SDK negotiation wraps
+them; traverse bounded Error causes, never parse/log raw upstream diagnostics.
+
+QuickBooks uses an Intuit source-pinned Hstack compatibility build, not an official
+binary. Keep the original 298-file tree check, dependency overrides, equivalent
+142-tool schema constraints, explicit error flags and noninteractive policy capture.
+Its 70 permitted reads exclude invoice PDF downloads. Preserve labels, genuine empty
+lists/counts and warnings; normalize only known native read failures. Credential
+guards inspect metadata only and coordinate Hstack clients, not standalone auth.
+Native Hermes registry search/read/download-block passed using the same synthetic
+backend in a fresh home. This does not prove live accounts, browser consent,
+model-driven use or official upstream release compatibility.
+
+BigQuery uses the official SDK legacy handshake (2025-11-25) without result
+rewriting. Its disabled native Google profile permits five metadata reads; SQL
+stays blocked. Modern server/discover still returns -32601. Public metadata and
+synthetic Google/Hermes registry tests are not real account/IAM/model evidence.
+Preserve explicit protocol selection; do not fabricate capabilities or promote
+the candidate before required live validation.
+
+Zendesk pins the community 0.1.6 runtime with native read-only mode and 14 JSON
+reads. Do not claim it is official or live-account tested. Its private child HOME
+owns the native credential file; Hstack checks metadata but never copies/opens
+tokens. Co-located locks coordinate Hstack clients across state roots and are
+drained on graceful close. Standalone vendor clients/setup are outside this lock.
+Keep native writes suppressed and attachment downloads blocked. Normalize only
+reviewed JSON-read errors; never scan ticket JSON/Markdown for error keywords.
+The actual vendor comparison uses local synthetic HTTP and network routing,
+not live Zendesk OAuth/API proof. Native setup still requests read/write OAuth
+scope. POSIX plaintext storage, crashed locks and quota-header limitations remain.
+
+MySQL uses a reproducible MySQL-only Toolbox 1.15.0 compatibility build. Keep
+native query code unchanged; registration filtering, locked dependency updates
+and a hash-guarded telemetry schema import are the bounded changes. Retain symbols
+for precise govulncheck review. JSON scanner exit zero is not a clean result:
+the audit gate rejects linked package/symbol findings and reports module-only
+matches. Do not erase the unlinked OpenPGP advisory or describe the full upstream
+module graph as clean. Only macOS arm64 is validated. The real verifier accepts
+binary paths only, creates/removes its own DB, uses generated users and executes
+only a synthetic opt-in insert. Never point it at an existing database. SQL
+writeTools permission allows arbitrary SQL within DB grants, not one statement.
+
+Display the brand as Hstack; package and tool prefixes use hstack.
+
+Hstack is a unified MCP gateway prototype for Hermes. It aggregates configured social providers over stdio using service__tool names.
+Social endpoints are in src/providers.ts. Thirty disabled setup profiles are in
+catalog/services.json and connections.example.json; configured HTTP/stdio
+connections are loaded by src/connections.ts. Do not claim those templates are
+live-verified integrations. Native local OAuth is implemented and fixture-tested;
+vendor OAuth validation remains pending. Writes are disabled by default. Discovery is
+also available as a standalone experiment. Do not recreate the removed Hermes CLI
+wrapper, SSH toolkit or broad workflow catalogue.
+
+The local setup utility has an offline doctor action. It must never spawn a
+program, contact a service, inspect stored credentials or call tools. Passing it
+only checks local prerequisites. urlEnv/commandEnv keep private endpoints and
+executable paths out of JSON; resolve and validate them for runtime and OAuth
+management, without printing their values. Preserve existing configuration.
+
+catalog/plan/prepare are offline onboarding actions. Plans contain only public
+defaults, fingerprints and change-key names, never private source values. Prepare
+creates a new owner-only ignored snapshot, preserving the source and configured
+entries. New/replaced templates stay disabled; only unused legacy placeholders
+may be replaced. Never auto-select, install, sign in or activate a candidate.
+Full candidate contents remain private. Unresolved vendor templates must fail
+instead of being presented as usable integrations. See docs/onboarding.md.
+
+OAuth clientIdEnv/issuerEnv/scopeEnv/clientMetadataUrlEnv are exclusive alternatives
+to literal settings. Resolve them before any OAuth action; missing registered
+client values must never fall back to dynamic registration. Explicit scopes are
+requested in foreground login; preserve the original grant during refresh. The
+BambooHR/Greenhouse profiles are documentation-reviewed, not live-validated.
+
+Xero uses the official hosted endpoint, a registered public PKCE client and
+explicit read scopes, not the older local package. Its underscore tool names
+differ from the local server. The public metadata checker makes only two
+unauthenticated GETs; never turn that evidence or synthetic secret-free OAuth
+tests into an account compatibility claim. Core+ or Starter demo eligibility,
+app registration and exact callback acceptance still need user/vendor setup.
+
+Google Analytics pins the official 0.8.0 runtime with native Google ADC, not
+Hstack HTTP OAuth. Its ADK 1hstack wheel changes only two dependency bounds and
+wheel metadata to admit patched OpenTelemetry 1.45.1. Keep the original hash,
+deterministic output, licences and source bytes intact; never bypass the builder
+or audits. The runtime test uses missing synthetic ADC and a network guard;
+successful schemas and rejected reads do not prove live account access. No
+--allow-write flag belongs in the bundled profile. Quota-project references must
+resolve privately, without opening ADC files during offline doctor checks.
+
+Use the official MCP SDK. Reserve server stdout for protocol messages. Never
+commit .env, account data, Inspector exports, credentials or private paths.
+Preserve all existing local work and external recovery archives.
+
+The official v2 packages are pinned; docs/protocol-compatibility.md records the
+modern/legacy paths and evidence. Never replace strict discovery with a silently
+truncated catalogue, print raw OAuth error bodies, or treat modern local fixtures
+as a live vendor account test. Built-in social adapters keep their prior handshake.
+
+npm test runs local HTTP and stdio fixtures with synthetic credentials.
+npm run smoke:buffer and npm run audit:buffer perform live reads using .env; never run them
+as an automatic CI test. Keep mocked, live gateway and native Hermes discovery
+evidence distinct. Do not claim a model-driven chat or a second integration works
+without actually verifying it. Never enable real writes as part of routine tests.
+All-tool fixture coverage is not live write verification.
+
+Custom connections can allow exact upstream writeTools names while keeping
+allowWrites false. Enforce the same rule in forward and search modes; permitting
+one write must not permit other tools or another provider. Vendor native read-only
+settings remain separate. Hstack does not relay user confirmations or elicitation.
+
+MongoDB has a pinned official npm runtime, a targeted get-uri/basic-ftp override
+with separate compatibility tests, and opt-in real disposable database verification.
+Its tools require connectionId: preconfigured. The native Hermes probe uses a
+temporary home and no model. Never point the verifier at an existing database,
+copy generated credentials into public evidence or claim the other tools/hosted
+features were verified. The manual Linux workflow is unrun.
+
+Mailchimp has a pinned community Python runtime and an opt-in real-process check.
+That check uses a synthetic key and denies network access; it is not live API or
+account validation. Its result policy is explicit and release-specific: reject
+null-total list responses, preserve real empty lists, enforce no vendor retries,
+and keep the broken upstream ping blocked by default. Do not label the other
+advertised Mailchimp operations as verified.
+
+Redis has a separately pinned official runtime and opt-in disposable local database
+verification in integrations/redis and scripts/verify-redis-local.mjs. Its synthetic
+local writes are confined to a newly created test database. Never point that test
+at an existing database or turn real account writes into routine tests. A native
+Hermes registry probe is still distinct from a model-driven conversation.

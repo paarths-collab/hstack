@@ -1,0 +1,16 @@
+{
+  "id": "mailchimp",
+  "label": "Mailchimp Marketing (community MCP)",
+  "enabled": false,
+  "transport": "stdio",
+  "commandEnv": "HSTACK_MAILCHIMP_PYTHON",
+  "resultPolicy": "mailchimp-1.2.0",
+  "args": ["-I", "-m", "mailchimp_mcp_server.server"],
+  "env": {
+    "MAILCHIMP_API_KEY": "MAILCHIMP_API_KEY",
+    "MAILCHIMP_READ_ONLY": "MAILCHIMP_READ_ONLY",
+    "MAILCHIMP_MAX_RETRIES": "MAILCHIMP_MAX_RETRIES"
+  },
+  "readTools": ["list_accounts", "describe_tools", "list_audiences", "list_campaigns"],
+  "allowWrites": false
+}

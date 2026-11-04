@@ -1,0 +1,7 @@
+# Official vendor release; every transitive dependency is hash-locked below.
+# Review the vendor's MCP v2 interfaces and write flag before updating.
+analytics-mcp==0.8.0
+# GHSA-xcq7-p3pf-p88h: reject vulnerable tracestate parser versions.
+opentelemetry-api>=1.45.1
+# Metadata-only compatibility wheel; prepare with prepare-adk.py first.
+.hstack-tools/analytics-wheels/google_adk-2.13.0-1hstack-py3-none-any.whl

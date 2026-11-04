@@ -1,6 +1,0 @@
-{
-  "name": "hstack",
-  "description": "Skill files that let your AI coding agent deploy self-hosted Hermes, connect 71 integrations and 8 messaging platforms, and compose reviewable Agent Blueprints.",
-  "version": "0.3.0",
-  "contextFileName": "GEMINI.md"
-}

@@ -1,0 +1,32 @@
+{
+  "vendor": "damientilman/mailchimp-mcp-server",
+  "vendorVersion": "1.2.0",
+  "community": true,
+  "sourceCommit": "fcc130a3c42a426816711a5c0099331f1f3fa788",
+  "environment": "real vendor MCP process; synthetic key; network denied; no vendor account or model",
+  "checks": {
+    "reviewedReadNames": true,
+    "metadataOnlyReads": true,
+    "gatewaySearchReadAndWriteBlock": true,
+    "swallowedApiFailureMadeExplicit": true,
+    "networkDeniedOperationalReadRejected": true,
+    "liveAccountValidated": false
+  },
+  "pythonMcpVersion": "1.30.0",
+  "sourceBlob": "724ff7b64bd4bc3f1c6f7a0e0a76a572955949b6",
+  "lockSha256": "469a77cd23b15cddc8f24c40f076f4faa8fd78d04360e26609c67a181a32689a",
+  "discoveredTools": 227,
+  "schemaSha256": "f63fd284e2573af21b24f0a5538138f4d1dacd7d07bcd474f34366376f3c9a24",
+  "platform": "macOS; Python 3.12; Node 26.8.1",
+  "audit": {
+    "tool": "pip-audit 2.10.1",
+    "packages": 40,
+    "knownVulnerabilities": 0
+  },
+  "limitations": [
+    "No live Mailchimp account/API request or real credential tested",
+    "No other advertised tool operations or writes verified",
+    "No model-driven Hermes conversation tested",
+    "Windows unverified; manual Ubuntu CI workflow unrun"
+  ]
+}

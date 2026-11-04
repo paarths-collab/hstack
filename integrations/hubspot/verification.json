@@ -1,0 +1,36 @@
+{
+  "vendor": "HubSpot remote CRM MCP",
+  "endpoint": "https://mcp.hubspot.com",
+  "issuer": "https://mcp.hubspot.com",
+  "sdk": "2.4.0",
+  "evidence": "Public unauthenticated OAuth metadata only; no credentials, registration, sign-in, tokens, tool discovery or account operations.",
+  "checks": {
+    "officialSdkDiscovery": true,
+    "registeredSecretPostAndPkceAdvertised": true,
+    "refreshAdvertised": true,
+    "installationSelectedPermissions": true,
+    "noRegistrationOrAccountOperations": true
+  },
+  "metadataSha256": "bb19592b44427065f01dc7596053b8438a79272f06b193af964acdd6d5f3d98d",
+  "requests": [
+    "https://mcp.hubspot.com/.well-known/oauth-protected-resource",
+    "https://mcp.hubspot.com/.well-known/oauth-authorization-server"
+  ],
+  "checkedOn": "2026-11-01",
+  "liveAccountVerified": false,
+  "sources": [
+    "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server.md"
+  ],
+  "localEvidence": [
+    "Registered OAuth secret-post with S256 PKCE, empty advertised scope arrays and installation-selected permissions passes a local synthetic OAuth/MCP login and two reused reads with one refresh and no DCR",
+    "Metadata drift, native issuer validation, no-follow redirects and fixed public GET boundaries have regression coverage",
+    "Private candidate migration preserves source bytes and any customized/active bridge configuration"
+  ],
+  "limitations": [
+    "No actual HubSpot account, dedicated MCP connector, callback approval, consent, token or refresh/revocation tested",
+    "The 17 read names are documentation-reviewed; actual catalogue, schemas, result envelopes, sensitive-data restrictions, quotas and subscription eligibility are unverified",
+    "No fixed OAuth grant is assumed; gateway permissions do not narrow the underlying installation grant",
+    "Mixed read/write manage tools, arbitrary CRM SQL, client-specific render/UI capabilities and feedback are not enabled",
+    "No operational verifier, native Hermes HubSpot account flow, model-driven acceptance or measured setup-time advantage exists yet"
+  ]
+}

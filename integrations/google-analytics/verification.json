@@ -1,0 +1,48 @@
+{
+  "vendor": "googleanalytics/google-analytics-mcp",
+  "vendorVersion": "0.8.0",
+  "sourceCommit": "ce84226bf4cedea7f2910f5afb07a6b9138f6553",
+  "environment": "real vendor process; nonexistent synthetic ADC; network denied; no Google account or model",
+  "checks": {
+    "pinnedSourceAndReadSchemas": true,
+    "nineGatewaySchemasAndWriteBlock": true,
+    "missingAdcFailurePreservedAndVerificationRejected": true,
+    "nativeHermesDiscoveryAndWriteBlock": true,
+    "liveAccountValidated": false
+  },
+  "pythonMcpVersion": "2.3.0",
+  "adkVersion": "2.13.0",
+  "sourceBlobs": {
+    "analytics_mcp.server": "5c587f3e91c8d946b4a182bdb795fa092be1b2f2",
+    "analytics_mcp.coordinator": "a1e7936af5ea66d434c285ae19740bb56a4415e2",
+    "analytics_mcp.tools.client": "6b5cb510c4cb736def3d502da3f7135bed68403e",
+    "analytics_mcp.tools.admin.info": "1753723f0b16a7f37b506f411a78d9ddf9b925ae",
+    "analytics_mcp.tools.reporting.core": "e016d7e121df7440cca170dd2d7b9d1dc319cf89"
+  },
+  "adkBuild": "1hstack: metadata-only OpenTelemetry dependency bounds",
+  "opentelemetryVersion": "1.45.1",
+  "adkWheelSha256": "95dca9f61af66a906ef2a910fa5fb2cdf80bf64b7d97feaeef9a8e22c7c7035e",
+  "lockSha256": "e9466e15fa6e49323f4c649ff8b11a2f2e7356f3544d7d443e7367cfd7d4c53e",
+  "discoveredReadTools": 9,
+  "schemaSha256": "06a08b57941769fd14cc235b97355eb12b042df4962a36733b646fcd9fec49b2",
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "audit": {
+    "packages": 64,
+    "knownVulnerabilities": 0,
+    "skippedPackages": 0,
+    "advisoryRemediated": "GHSA-xcq7-p3pf-p88h"
+  },
+  "compatibilityTests": {
+    "packaging": 3,
+    "tracing": 3,
+    "dependencyConsistency": true
+  },
+  "platform": "macOS arm64; Python 3.12; Node 26.8.1",
+  "limitations": [
+    "No real Google ADC, login, account, API read, report or refresh tested",
+    "Only schema discovery, missing-credential rejection and default write-block tested in actual vendor process",
+    "Native Hermes registry was tested without a model or successful Google read",
+    "ADK compatibility wheel changes dependency metadata; not an official ADK build or proof of other ADK features",
+    "Windows and Linux not verified; no GitHub CI run"
+  ]
+}

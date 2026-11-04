@@ -1,0 +1,34 @@
+{
+  "id": "hubspot",
+  "label": "HubSpot",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.hubspot.com",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://mcp.hubspot.com",
+    "clientIdEnv": "HUBSPOT_MCP_CLIENT_ID",
+    "clientSecretEnv": "HUBSPOT_MCP_CLIENT_SECRET"
+  },
+  "readTools": [
+    "get_user_details",
+    "get_organization_details",
+    "discover_hubspot_schema",
+    "search_crm_objects",
+    "get_crm_objects",
+    "search_properties",
+    "get_properties",
+    "search_owners",
+    "get_campaign_attribution_reports",
+    "read_campaign_data",
+    "search_conversations",
+    "get_conversation_channel_metadata",
+    "search_intent_signals",
+    "get_marketing_email_analytics",
+    "get_content_analytics_report",
+    "get_aeo_metrics",
+    "tool_guidance"
+  ],
+  "allowWrites": false
+}

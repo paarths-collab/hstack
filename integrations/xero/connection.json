@@ -1,0 +1,16 @@
+{
+  "id": "xero",
+  "label": "Xero",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://api.xero.com/mcp/v1",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://identity.xero.com",
+    "clientIdEnv": "XERO_MCP_CLIENT_ID",
+    "scope": "openid offline_access accounting.contacts.read accounting.invoices.read"
+  },
+  "readTools": ["get_connected_tenants", "list_contacts", "list_invoices"],
+  "allowWrites": false
+}

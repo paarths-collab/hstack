@@ -1,0 +1,4 @@
+# v1.2.0 imports mcp.server.fastmcp; MCP 2 removes that module.
+# Review a newer vendor release before changing either pin.
+mailchimp-mcp==1.2.0
+mcp==1.30.0

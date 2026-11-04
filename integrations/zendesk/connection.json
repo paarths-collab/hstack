@@ -1,0 +1,15 @@
+{
+  "id": "zendesk",
+  "label": "Zendesk (community MCP)",
+  "enabled": false,
+  "transport": "stdio",
+  "commandEnv": "HSTACK_ZENDESK_PYTHON",
+  "args": ["-I", "-m", "zendesk_mcp"],
+  "env": {
+    "HOME": "HSTACK_ZENDESK_HOME",
+    "ZENDESK_MCP_READ_ONLY": "ZENDESK_MCP_READ_ONLY"
+  },
+  "resultPolicy": "zendesk-0.1.6",
+  "readTools": ["zendesk_search_tickets", "zendesk_get_tickets", "zendesk_get_ticket", "zendesk_get_comments", "zendesk_list_views", "zendesk_get_view", "zendesk_get_view_tickets", "zendesk_list_macros", "zendesk_search_users", "zendesk_get_groups", "zendesk_get_group_users", "zendesk_get_organization", "zendesk_list_custom_statuses", "zendesk_get_time_tracking"],
+  "allowWrites": false
+}

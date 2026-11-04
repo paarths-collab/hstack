@@ -1,0 +1,11 @@
+{
+  "id": "deel",
+  "label": "Deel (PAT alternative)",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://api.letsdeel.com/mcp",
+  "protocol": "legacy",
+  "headers": {"Authorization": {"env": "DEEL_MCP_TOKEN", "prefix": "Bearer "}},
+  "readTools": [],
+  "allowWrites": false
+}

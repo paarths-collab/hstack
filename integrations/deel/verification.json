@@ -1,0 +1,54 @@
+{
+  "vendor": "Deel native MCP",
+  "endpoint": "https://api.letsdeel.com/mcp",
+  "sdk": "2.4.0",
+  "evidence": "Public anonymous initialize and tools/list plus local gateway metadata/search checks only; no vendor registration, login, tokens, credentials, tools/call or account data.",
+  "sdkEra": "legacy",
+  "toolCount": 8,
+  "compiledSchemas": 8,
+  "requests": [
+    "initialize",
+    "notifications/initialized",
+    "tools/list"
+  ],
+  "catalogueSha256": "edebe4efb483e5251d93a44cc9ff35f6f0334d4e59a7ec357d7ec7277a6de6af",
+  "checks": {
+    "nativeSdkDiscovery": true,
+    "allInputOutputSchemasCompile": true,
+    "credentialFree": true,
+    "noVendorToolInvocation": true,
+    "gatewaySchemasPreserved": true
+  },
+  "discoveryComparison": {
+    "directSdkTools": 8,
+    "directSdkSchemaBytes": 11155,
+    "hstackSearchControls": 2,
+    "hstackSearchSchemaBytes": 843,
+    "limitation": "Serialized SDK catalogue/control counts only; no model, latency, cost, native Hermes or setup-time comparison"
+  },
+  "accountVerified": false,
+  "oauth": {
+    "issuer": "https://api.letsdeel.com",
+    "requestedScopes": "contracts:read people:read organizations:read profile:read",
+    "requests": [
+      "https://api.letsdeel.com/.well-known/oauth-protected-resource/mcp",
+      "https://api.letsdeel.com/.well-known/oauth-authorization-server"
+    ],
+    "checks": {
+      "nativeSdkOAuthDiscovery": true,
+      "publicDcrAndPkceAdvertised": true,
+      "requestedReadScopesAdvertised": true,
+      "refreshAdvertised": true
+    },
+    "metadataSha256": "febc0b43ec627430d831ebc3d0478d61fab33ad63261453076a7f2641047a79c",
+    "limitation": "No DCR request, callback, consent, token, refresh, authenticated catalogue or account operation tested"
+  },
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "Anonymous catalogue only; no real public or protected vendor tool operation tested",
+    "No account credential, registration, callback, consent, token, refresh or authenticated catalogue tested",
+    "The separate input schema snapshot contains publicly returned definitions only, not user data",
+    "Local fixture calls and authentication/catalogue-change tests are synthetic and do not establish vendor result contracts",
+    "No native Hermes/model-driven account acceptance or measured setup-time/cost/latency advantage verified"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "vendor": "Zoho MCP URL-key setup",
+  "checkedOn": "2026-11-01",
+  "sdk": "2.4.0",
+  "profiles": [
+    "zoho-crm",
+    "zoho-desk",
+    "zoho-books"
+  ],
+  "evidence": "Local synthetic HTTP fixtures and official setup documentation/indexed text only; no Zoho account, generated URL or vendor tool execution.",
+  "checks": {
+    "nativeHttpFixtureDiscovery": true,
+    "explicitReadReviewRequired": true,
+    "writeCallsBlocked": true,
+    "privateUrlExcludedFromHealthAndErrors": true,
+    "safeExpiredKeyFailure": true,
+    "batchPreparationPreservesSource": true
+  },
+  "syntheticTools": [
+    "read_fixture",
+    "write_fixture"
+  ],
+  "limitations": [
+    "Actual Zoho transport/authentication, region, plan and tool schemas remain unverified",
+    "No default read names are assumed for account-selected tools",
+    "No live key rotation, native Hermes vendor account or model-driven flow tested",
+    "Official help article bodies were unavailable to public page fetching; URL-key guidance was confirmed through indexed official text and the Books setup page"
+  ]
+}

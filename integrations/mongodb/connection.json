@@ -1,0 +1,11 @@
+{
+  "id": "mongodb",
+  "label": "MongoDB",
+  "enabled": false,
+  "transport": "stdio",
+  "commandEnv": "HSTACK_MONGODB_COMMAND",
+  "args": ["--readOnly", "--telemetry", "disabled", "--loggers", "stderr", "--timeoutMs", "10000"],
+  "env": { "MDB_MCP_CONNECTION_STRING": "MDB_MCP_CONNECTION_STRING" },
+  "readTools": ["list-databases", "list-collections", "count", "find"],
+  "allowWrites": false
+}

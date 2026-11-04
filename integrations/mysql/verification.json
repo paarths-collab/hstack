@@ -1,0 +1,46 @@
+{
+  "vendor": "googleapis/mcp-toolbox",
+  "vendorVersion": "1.15.0",
+  "sourceCommit": "8e8e569594a4a864def8598fd3f4977a8d65e431",
+  "environment": "real disposable authenticated loopback MySQL; synthetic data only; no existing database or model",
+  "checks": {
+    "eightDirectDiagnosticReads": true,
+    "eightGatewayReadsAndSchemas": true,
+    "operationalSchemaReadAndBadPassword": true,
+    "defaultSqlBlockedReadRoleDeniesWriteAndExactOptIn": true,
+    "nativeHermesRegistry": true
+  },
+  "toolboxSha256": "56768bfc7065dc262f647459ed355a198a45216ccbce5dbad28c17836f95f18e",
+  "build": "Hstack MySQL-only compatibility build; native query code unchanged",
+  "databaseVersion": "8.4.13",
+  "discoveredTools": 9,
+  "schemaSha256": "4df669b7c41e2a3f07865ff5bfb7f0e9e96417d3dbe3432a6b62af245e2c2cba",
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "binaryAudit": {
+    "toolboxVersion": "1.15.0",
+    "binarySha256": "56768bfc7065dc262f647459ed355a198a45216ccbce5dbad28c17836f95f18e",
+    "goVersion": "go1.27.3",
+    "linkedAdvisories": [],
+    "moduleOnlyAdvisories": [
+      "GO-2026-5932"
+    ],
+    "extractedSymbols": 35975,
+    "note": "Module-only advisory matches are retained. No affected package/symbol was identified in this exact binary; this is not a zero-advisory module graph claim."
+  },
+  "compatibilityBuildTests": 3,
+  "reproducibleBuildVerified": true,
+  "platform": "macOS arm64; Node 26.8.1; Go 1.27.3",
+  "buildLocks": {
+    "go.mod": "8d81d37aef9205400655747782155ce3815ecddbeda8ab753a396e6dfe05aef2",
+    "go.sum": "cc7484aa659adbc1af8e13d89c3c3c38721286cbee86870113808e5c2b248d48"
+  },
+  "limitations": [
+    "Hosted accounts, TLS/certificate setup and other platforms unverified",
+    "No model-driven Hermes conversation tested",
+    "Only one disposable synthetic insert was executed; arbitrary SQL is not a per-statement permission",
+    "The remaining OpenPGP module advisory is retained; no affected package or symbol is linked in the tested build",
+    "Go binary audit is not a vulnerability-free claim for all upstream source modules",
+    "MySQL compatibility binary is an Hstack build, not an official Google release",
+    "GitHub CI not run"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "snowflake",
+  "label": "Snowflake",
+  "enabled": false,
+  "transport": "http",
+  "urlEnv": "SNOWFLAKE_MCP_URL",
+  "protocol": "legacy",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuerEnv": "SNOWFLAKE_MCP_ISSUER",
+    "clientIdEnv": "SNOWFLAKE_MCP_CLIENT_ID",
+    "clientSecretEnv": "SNOWFLAKE_MCP_CLIENT_SECRET",
+    "scopeEnv": "SNOWFLAKE_MCP_SCOPES"
+  },
+  "readTools": [],
+  "allowWrites": false
+}

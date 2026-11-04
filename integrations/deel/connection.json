@@ -1,0 +1,25 @@
+{
+  "id": "deel",
+  "label": "Deel",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://api.letsdeel.com/mcp",
+  "protocol": "legacy",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://api.letsdeel.com",
+    "scope": "contracts:read people:read organizations:read profile:read"
+  },
+  "readTools": [
+    "eor_employment_cost_batch",
+    "eor_employment_cost_calculate",
+    "hiring_insights_employment_comparison_list",
+    "hiring_insights_eor_cost_calculate",
+    "hiring_insights_salary_calculate",
+    "hiring_insights_summary_get",
+    "hiring_insights_take_home_pay_calculate",
+    "retrieveAtsJobPostingsByOrganization"
+  ],
+  "allowWrites": false
+}

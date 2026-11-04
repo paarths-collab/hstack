@@ -1,0 +1,26 @@
+{
+  "id": "evernote",
+  "label": "Evernote",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.evernote.com/mcp",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://accounts.evernote.com",
+    "scope": "read"
+  },
+  "readTools": [
+    "get_note",
+    "search_notes",
+    "semantic_search",
+    "search_tasks",
+    "search_assigned_tasks",
+    "search_notebooks",
+    "search_spaces",
+    "get_space",
+    "search_tags",
+    "get_task"
+  ],
+  "allowWrites": false
+}

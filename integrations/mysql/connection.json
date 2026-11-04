@@ -1,0 +1,18 @@
+{
+  "id": "mysql",
+  "label": "MySQL via Google Toolbox",
+  "enabled": false,
+  "transport": "stdio",
+  "commandEnv": "HSTACK_MYSQL_TOOLBOX",
+  "args": ["--stdio", "--prebuilt=mysql", "--disable-version-check", "--disable-reload", "--log-level=ERROR"],
+  "env": {
+    "MYSQL_HOST": "MYSQL_HOST",
+    "MYSQL_PORT": "MYSQL_PORT",
+    "MYSQL_DATABASE": "MYSQL_DATABASE",
+    "MYSQL_USER": "MYSQL_USER",
+    "MYSQL_PASSWORD": "MYSQL_PASSWORD",
+    "MYSQL_QUERY_PARAMS": "MYSQL_QUERY_PARAMS"
+  },
+  "readTools": ["list_tables", "get_query_plan", "list_active_queries", "list_tables_missing_unique_indexes", "list_table_fragmentation", "list_all_locks", "show_query_stats", "list_table_stats"],
+  "allowWrites": false
+}

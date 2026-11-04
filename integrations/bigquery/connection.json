@@ -1,0 +1,11 @@
+{
+  "id": "bigquery",
+  "label": "BigQuery",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://bigquery.googleapis.com/mcp",
+  "protocol": "legacy",
+  "googleBigQuery": { "credentialsFileEnv": "BIGQUERY_GOOGLE_CREDENTIALS_FILE" },
+  "readTools": ["list_dataset_ids", "get_dataset_info", "list_table_ids", "get_table_info", "get_job"],
+  "allowWrites": false
+}

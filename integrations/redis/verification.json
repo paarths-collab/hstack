@@ -1,0 +1,49 @@
+{
+  "vendor": "redis/mcp-redis",
+  "version": "0.5.1",
+  "python": "3.12",
+  "environment": "disposable local Redis; no vendor account or model used",
+  "checks": {
+    "dotenvLoadingDisabled": true,
+    "directRead": true,
+    "directVendorAllowsWrite": true,
+    "gatewayReadPreserved": true,
+    "type": true,
+    "scan_keys": true,
+    "dbsize": true,
+    "info": true,
+    "gatewayBlocksUnapprovedWrite": true,
+    "gatewayValidatesInputs": true,
+    "gatewayHealth": true,
+    "operationalVerification": true,
+    "badDatabaseCredentialRejected": true,
+    "explicitDisposableWrite": true,
+    "nativeHermesDiscovery": true,
+    "nativeHermesReadAndWriteBlock": true
+  },
+  "redisVersion": "8.10.1",
+  "discoveredTools": 53,
+  "schemaSha256": "32b02a0621022052f484e20019cc37f3c84d9f7de4f3285dfdde002a0490bff1",
+  "directDiscoveryBytes": 39600,
+  "gatewayInitialDiscoveryBytes": 853,
+  "firstSearchBytes": 5829,
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "limitations": [
+    "Real official MCP package and real local Redis; no hosted Redis account, TLS or cluster tested.",
+    "Comparison uses SDK clients, not model-driven task accuracy, model cost or onboarding time.",
+    "Direct clients can add their own permission policies; default vendor behavior is what was compared.",
+    "Only the five reviewed reads and set were executed; other advertised operations remain unverified."
+  ],
+  "source": {
+    "url": "https://github.com/redis/mcp-redis/releases/tag/0.5.1",
+    "commit": "11e67e44358cd6410d5a7e615a29539ccd71a045",
+    "reviewedFilesMatchInstalledWheel": 6
+  },
+  "dependencyLockSha256": "5bc87d2a8ae3cdf2e3eb13e4a6dfd17c9af577d064ec4cde7bd34607ec4eaf4f",
+  "pythonDependencyAudit": {
+    "tool": "pip-audit 2.10.1",
+    "packages": 54,
+    "knownVulnerabilities": 0
+  },
+  "hstackSdkVersion": "2.4.0"
+}

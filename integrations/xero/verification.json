@@ -1,0 +1,21 @@
+{
+  "vendor": "Xero Developer Remote MCP",
+  "endpoint": "https://api.xero.com/mcp/v1",
+  "issuer": "https://identity.xero.com",
+  "sdk": "2.4.0",
+  "evidence": "public unauthenticated metadata discovery only; no login, tokens, tools or account operations",
+  "checks": {
+    "officialSdkDiscovery": true,
+    "registeredPublicPkcePrerequisites": true,
+    "requestedScopesAdvertised": true,
+    "noAuthenticationOrToolCalls": true
+  },
+  "metadataSha256": "fd6099f8732bc2e1de2181809db29c022007585dd64d2985f0de2de0ab9cd2d3",
+  "officialDocs": "https://developer.xero.com/documentation/guides/remote-mcp/overview/",
+  "limitations": [
+    "No Xero account, app registration, callback acceptance, consent or token exchange was tested",
+    "No live tool discovery, tenant selection, read, write or refresh was tested",
+    "Registered public PKCE login and refresh coverage uses a synthetic local fixture",
+    "No model-driven Hermes conversation was tested"
+  ]
+}

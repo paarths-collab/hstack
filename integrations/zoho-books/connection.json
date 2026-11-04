@@ -1,0 +1,9 @@
+{
+  "id": "zoho-books",
+  "label": "Zoho Books",
+  "enabled": false,
+  "transport": "http",
+  "urlEnv": "ZOHO_BOOKS_MCP_URL",
+  "readTools": [],
+  "allowWrites": false
+}

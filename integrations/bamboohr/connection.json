@@ -1,0 +1,17 @@
+{
+  "id": "bamboohr",
+  "label": "BambooHR",
+  "enabled": false,
+  "transport": "http",
+  "urlEnv": "BAMBOOHR_MCP_URL",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuerEnv": "BAMBOOHR_MCP_ISSUER",
+    "clientIdEnv": "BAMBOOHR_MCP_CLIENT_ID",
+    "clientSecretEnv": "BAMBOOHR_MCP_CLIENT_SECRET",
+    "scopeEnv": "BAMBOOHR_MCP_SCOPES"
+  },
+  "readTools": ["list_fields", "list_list_fields", "list_tabular_fields"],
+  "allowWrites": false
+}

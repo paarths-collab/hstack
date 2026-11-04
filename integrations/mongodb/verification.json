@@ -1,0 +1,32 @@
+{
+  "vendor": "mongodb-js/mongodb-mcp-server",
+  "vendorVersion": "3.2.1",
+  "sourceCommit": "7e4d9ed409905f1dc4304b5e7f1a176af22efe58",
+  "environment": "real disposable authenticated loopback MongoDB; synthetic data only; no hosted account or model",
+  "checks": {
+    "fourDirectAndGatewayReads": true,
+    "schemaAndSearch": true,
+    "retargetingBlocked": true,
+    "operationalReadAndBadPassword": true,
+    "defaultWriteBlockedAndSingleWriteOptIn": true,
+    "preparedCandidateAndSourcePreservation": true,
+    "nativeHermesRegistry": true
+  },
+  "lockSha256": "d6b956175c7301bfa7b1302bcac516053f6ab5f5ce739a229c907bd3e72bc53f",
+  "databaseVersion": "8.2.11",
+  "readOnlyTools": 18,
+  "schemaSha256": "f3029702d1360f4f4f0fb3bb5feb794f213b93e46f54b26d545890235c1287b5",
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "platform": "macOS arm64; Node 26.8.1",
+  "audit": {
+    "packages": 464,
+    "knownVulnerabilities": 0,
+    "override": "get-uri -> basic-ftp 6.2.4"
+  },
+  "limitations": [
+    "Hosted accounts, TLS, replica sets, sharding and other tools unverified",
+    "Only a disposable synthetic insert was executed",
+    "No model-driven conversation tested",
+    "Windows and Linux unverified; manual Ubuntu workflow unrun"
+  ]
+}

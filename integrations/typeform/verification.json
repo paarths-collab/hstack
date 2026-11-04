@@ -1,0 +1,112 @@
+{
+  "vendor": "Typeform native MCP",
+  "sdk": "2.4.0",
+  "evidence": "Public unauthenticated OAuth metadata only; no credentials, registration, sign-in, tokens, tool discovery or account operations.",
+  "sdkCompatible": true,
+  "regions": [
+    {
+      "name": "default",
+      "endpoint": "https://api.typeform.com/mcp",
+      "issuer": "https://api.typeform.com",
+      "sdkCompatible": true,
+      "requests": [
+        {
+          "url": "https://api.typeform.com/.well-known/oauth-protected-resource/mcp",
+          "status": 404
+        },
+        {
+          "url": "https://api.typeform.com/.well-known/oauth-protected-resource",
+          "status": 200
+        },
+        {
+          "url": "https://api.typeform.com/.well-known/oauth-authorization-server",
+          "status": 200
+        }
+      ],
+      "checks": {
+        "officialSdkDiscovery": true,
+        "cimdAndPkceAdvertised": true,
+        "refreshScopeAdvertised": true
+      },
+      "registrationEndpointAdvertised": true,
+      "registrationAttempted": false,
+      "metadataSha256": "53e590e8f0894768f39550cb3397e86deeab5835275183ea9dce1a2bf1cb2dc0"
+    },
+    {
+      "name": "eu-datacenter-1",
+      "endpoint": "https://api.eu.typeform.com/mcp",
+      "issuer": "https://api.typeform.com",
+      "sdkCompatible": true,
+      "requests": [
+        {
+          "url": "https://api.eu.typeform.com/.well-known/oauth-protected-resource/mcp",
+          "status": 404
+        },
+        {
+          "url": "https://api.eu.typeform.com/.well-known/oauth-protected-resource",
+          "status": 200
+        },
+        {
+          "url": "https://api.typeform.com/.well-known/oauth-authorization-server",
+          "status": 200
+        }
+      ],
+      "checks": {
+        "officialSdkDiscovery": true,
+        "cimdAndPkceAdvertised": true,
+        "refreshScopeAdvertised": true
+      },
+      "registrationEndpointAdvertised": true,
+      "registrationAttempted": false,
+      "metadataSha256": "bb654d042070a616646e5fe0b74885d36111fa4d867f357156ebc99c2851c7a1"
+    },
+    {
+      "name": "eu-datacenter-2",
+      "endpoint": "https://api.typeform.eu/mcp",
+      "issuer": "https://api.typeform.eu",
+      "sdkCompatible": true,
+      "requests": [
+        {
+          "url": "https://api.typeform.eu/.well-known/oauth-protected-resource/mcp",
+          "status": 404
+        },
+        {
+          "url": "https://api.typeform.eu/.well-known/oauth-protected-resource",
+          "status": 200
+        },
+        {
+          "url": "https://api.typeform.eu/.well-known/oauth-authorization-server",
+          "status": 200
+        }
+      ],
+      "checks": {
+        "officialSdkDiscovery": true,
+        "cimdAndPkceAdvertised": true,
+        "refreshScopeAdvertised": true
+      },
+      "registrationEndpointAdvertised": true,
+      "registrationAttempted": false,
+      "metadataSha256": "654ee7faca2c6e6db06bd00ebd56578687a3007921c54b2a6945c40403acf4e0"
+    }
+  ],
+  "checkedOn": "2026-11-01",
+  "liveAccountVerified": false,
+  "hostedClientMetadataVerified": false,
+  "localEvidence": [
+    "Official SDK CIMD client selection, PKCE login, token refresh and two reused authenticated reads pass against a local synthetic OAuth/MCP fixture without DCR or a client secret",
+    "Explicit CIMD rejects metadata that removes support before consent, registration or token exchange",
+    "Regional endpoint/issuer pairs, separate auth-store identities, and private candidate/source preservation have regression coverage"
+  ],
+  "limitations": [
+    "No Typeform account, hosted CIMD document, consent, callback acceptance or live refresh tested",
+    "No actual Typeform tool catalogue, schema, account operation, feature eligibility, quota or plan-error envelope tested",
+    "The 28 read names are documentation-reviewed; vendor consent includes write scopes and the gateway allowlist does not narrow that grant",
+    "No native Hermes Typeform account, model-driven comparison, latency, cost or setup-time advantage verified"
+  ],
+  "installedHermesSourceReview": {
+    "commit": "05f548f35dd3242bf2ff74743e9112acde251f77",
+    "file": "tools/mcp_oauth.py",
+    "sha256": "0cf8740181d06f487fba64e52d98590b92f2e4934c2e635be89caa6d5c39a988",
+    "observation": "Native Hermes documents a configurable client_metadata_url for CIMD; this was source inspection, not a live Typeform test"
+  }
+}

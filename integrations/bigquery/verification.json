@@ -1,0 +1,56 @@
+{
+  "vendor": "Google BigQuery remote MCP",
+  "endpoint": "https://bigquery.googleapis.com/mcp",
+  "sdk": "2.4.0",
+  "protocol": "2025-11-25",
+  "evidence": "Public unauthenticated discovery only; no account, tokens, queries or tool calls.",
+  "sdkCompatible": true,
+  "checks": {
+    "publicToolsList": true,
+    "officialSdkLegacyDiscovery": true,
+    "officialSdkModernDiscovery": false,
+    "noAuthenticationOrToolCalls": true
+  },
+  "nativeSdk": {
+    "discoveryOnly": true,
+    "resultRewriting": false,
+    "compiledSchemas": 18,
+    "gatewayDiscovery": true,
+    "authenticatedOperationsVerified": false
+  },
+  "tools": [
+    "list_dataset_ids",
+    "get_dataset_info",
+    "list_table_ids",
+    "get_table_info",
+    "execute_sql_readonly",
+    "execute_sql",
+    "get_query_results",
+    "cancel_job",
+    "get_job"
+  ],
+  "publicSchemaSha256": "aff53595b0f03455ffd6c7122f67628ab9e31d7220985c5d93eead61d9f1d3a1",
+  "requests": [
+    "tools/list",
+    "server/discover",
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "initialize",
+    "notifications/initialized",
+    "tools/list"
+  ],
+  "modernFailure": {
+    "code": "UPSTREAM_ERROR"
+  },
+  "discoveryErrorCode": -32601,
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "Public discovery only: no real credentials, account, project, IAM or queries tested",
+    "Official SDK legacy initialization works and negotiates 2025-11-25; modern server/discover remains unsupported",
+    "No custom Protocol subclass, invented capabilities or result-envelope rewriting is used",
+    "Native Google refresh, HTTP reuse and direct/Hstack installed Hermes registry calls have separate synthetic evidence only",
+    "Current schemas declare no custom parameter headers; future x-mcp-header declarations fail closed until reviewed",
+    "Real account response compatibility, live Hermes/model behavior, Windows ACL support and release/CI validation remain pending"
+  ]
+}

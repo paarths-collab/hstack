@@ -1,0 +1,10 @@
+{
+  "id": "greenhouse",
+  "label": "Greenhouse",
+  "enabled": false,
+  "transport": "http",
+  "urlEnv": "GREENHOUSE_MCP_URL",
+  "oauth": { "type": "oauth", "callbackPort": 8678 },
+  "readTools": [],
+  "allowWrites": false
+}

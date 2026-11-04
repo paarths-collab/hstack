@@ -1,0 +1,23 @@
+{
+  "fixture": "30 services x 12 synthetic tools each",
+  "direct": {
+    "advertisedTools": 360,
+    "discoveryBytes": 155483
+  },
+  "forward": {
+    "advertisedTools": 360,
+    "discoveryBytes": 158963,
+    "firstSearchResponseBytes": 0
+  },
+  "search": {
+    "advertisedTools": 2,
+    "discoveryBytes": 853,
+    "firstSearchResponseBytes": 1490
+  },
+  "initialDiscoveryReductionPercent": 99.45,
+  "limitations": [
+    "Measures JSON bytes, not model tokens, model accuracy, onboarding time or production latency.",
+    "Search mode needs a discovery tool call before execution.",
+    "Synthetic tool schemas do not prove live vendor compatibility."
+  ]
+}

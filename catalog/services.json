@@ -1,0 +1,526 @@
+[
+  {
+    "id": "brand24",
+    "name": "Brand24",
+    "category": "listening",
+    "auth": "oauth",
+    "url": "https://mcp.brand24.com/v1/mcp",
+    "docs": "https://help.brand24.com/en/articles/13011375-brand24-mcp",
+    "evidence": "public native SDK OAuth metadata verified; registration, tool schemas and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Use a subscriber account with active projects. Public SDK metadata advertises DCR, S256 and projects:read; real registration/consent remains unverified.",
+      "No exact tool names have been validated; readTools remains empty until the real catalogue is reviewed."
+    ]
+  },
+  {
+    "id": "brevo",
+    "name": "Brevo",
+    "category": "email",
+    "auth": "bearer",
+    "url": "https://mcp.brevo.com/v1/brevo/mcp",
+    "docs": "https://developers.brevo.com/docs/mcp-protocol",
+    "evidence": "official MCP token/header setup reviewed and synthetic native HTTP route tested; live account not tested",
+    "community": false,
+    "setupRequirements": [
+      "Generate a token with the Brevo MCP option; a normal SMTP/API key is not assumed interchangeable. Supply the bare value as BREVO_MCP_TOKEN.",
+      "No real catalogue or exact read names have been verified. All operations remain blocked pending actual schema review and safe account validation."
+    ],
+    "setupGuide": "integrations/brevo/README.md"
+  },
+  {
+    "id": "kit",
+    "name": "Kit",
+    "category": "email",
+    "auth": "oauth",
+    "url": "https://app.kit.com/mcp",
+    "docs": "https://developers.kit.com/mcp/kit-mcp",
+    "evidence": "public native SDK OAuth metadata and documented read names reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Eligible paid Creator/Creator Pro plan is required for actual tool execution; Free accounts can connect/discover but receive an upgrade prompt when calling tools.",
+      "Native public-client DCR is advertised. The public OAuth scope does not imply a read-only grant; 38 documented read names are allowed by Hstack only."
+    ]
+  },
+  {
+    "id": "mailchimp",
+    "name": "Mailchimp Marketing",
+    "category": "email",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/damientilman/mailchimp-mcp-server",
+    "evidence": "real community MCP runtime and local metadata checked with network denied; live account not tested",
+    "community": true,
+    "setupGuide": "integrations/mailchimp/README.md",
+    "verifiedRuntime": {
+      "vendorVersion": "1.2.0",
+      "pythonMcpVersion": "1.30.0",
+      "sourceCommit": "fcc130a3c42a426816711a5c0099331f1f3fa788",
+      "readTools": [
+        "list_accounts",
+        "describe_tools",
+        "list_audiences",
+        "list_campaigns"
+      ],
+      "limitations": [
+        "No live account or API operation tested",
+        "Other operations and writes unverified",
+        "Known vendor ping bug blocked by default"
+      ]
+    }
+  },
+  {
+    "id": "readwise",
+    "name": "Readwise",
+    "category": "knowledge",
+    "auth": "oauth",
+    "url": "https://mcp2.readwise.io/mcp",
+    "docs": "https://docs.readwise.io/tools/mcp",
+    "evidence": "public native SDK OAuth metadata verified; registration, tool schemas and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Use the current mcp2 endpoint covering Reader and Readwise; public SDK discovery identifies the scoped https://readwise.io/o/ issuer.",
+      "Actual registration, account eligibility and tool names/schemas are unverified. The documentation lists capabilities but not exact tool names, so all operations stay blocked pending catalogue review."
+    ]
+  },
+  {
+    "id": "evernote",
+    "name": "Evernote",
+    "category": "knowledge",
+    "auth": "oauth",
+    "url": "https://mcp.evernote.com/mcp",
+    "docs": "https://dev.evernote.com/mcp/quickstart",
+    "evidence": "public native SDK OAuth metadata and documented read names reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Native DCR is the documented registration route and loopback callbacks are supported. No manual API key or registered app is required by this candidate.",
+      "The candidate requests read scope only and permits 10 documentation-reviewed reads. Individual/Business task availability differs; attachments/downloads and all mutations remain blocked."
+    ]
+  },
+  {
+    "id": "typeform",
+    "name": "Typeform",
+    "category": "forms",
+    "auth": "oauth",
+    "url": "https://api.typeform.com/mcp",
+    "docs": "https://www.typeform.com/developers/mcp/core-concepts/",
+    "evidence": "native SDK OAuth metadata verified in three regions; local CIMD/PKCE/refresh fixtures; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/typeform/README.md",
+    "setupRequirements": [
+      "Use the correct documented regional endpoint and issuer; the two EU stacks are not interchangeable and no fallback is attempted.",
+      "Host a public HTTPS Client ID Metadata Document with an exact matching client_id and Hstack callback. No client secret is used; no metadata document was deployed.",
+      "The vendor requires broad OAuth consent, including write scopes. Hstack permits 28 documentation-reviewed read tools; this does not narrow the underlying grant.",
+      "Resolve accounts-list_accounts first and choose the intended account explicitly. Feature eligibility is checked at call time; discovery does not prove plan access."
+    ]
+  },
+  {
+    "id": "calcom",
+    "name": "Cal.com",
+    "category": "scheduling",
+    "auth": "oauth",
+    "url": "https://mcp.cal.com/mcp",
+    "docs": "https://cal.com/docs/mcp-server",
+    "evidence": "public native SDK OAuth metadata and documented read names reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Native DCR with public-client authentication is advertised. Review broad team/organization consent and account roles; readTools does not narrow the OAuth grant.",
+      "Forty-three documentation-reviewed reads and API-operation descriptions are allowed. Generic call_api_operation, booking changes and every mutation remain blocked."
+    ]
+  },
+  {
+    "id": "trello",
+    "name": "Trello",
+    "category": "planning",
+    "auth": "oauth",
+    "url": "https://mcp.trello.com/v1",
+    "docs": "https://github.com/atlassian/trello-mcp-server",
+    "evidence": "public native SDK OAuth metadata verified; registration, tool schemas and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Public SDK discovery selects a scoped Atlassian issuer and DCR endpoint; do not replace it with generic origin metadata or assume CIMD is mandatory.",
+      "Trello documents one workspace per connection and all plans, with feature/admin restrictions. API-token MCP auth is unsupported. Tool names remain unverified and all calls stay blocked until reviewed."
+    ]
+  },
+  {
+    "id": "pipedrive",
+    "name": "Pipedrive",
+    "category": "crm",
+    "auth": "oauth",
+    "url": "https://mcp.pipedrive.ai/mcp",
+    "docs": "https://support.pipedrive.com/en/article/mcp-chatgpt",
+    "evidence": "public SDK OAuth metadata verified; registered-app callback and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/pipedrive/README.md",
+    "setupRequirements": [
+      "Obtain an MCP-compatible registered client/secret and approval for the exact loopback callback; compatibility of ordinary API apps is unverified.",
+      "Native public DCR is not assumed compatible with the advertised confidential methods.",
+      "Pipedrive account/plan permissions apply; 23 documentation-reviewed read names are not live tool proof."
+    ]
+  },
+  {
+    "id": "zoho-crm",
+    "name": "Zoho CRM",
+    "category": "crm",
+    "auth": "account",
+    "url": null,
+    "docs": "https://www.zoho.com/mcp/services/zoho-services.html",
+    "evidence": "vendor URL-key setup reviewed and local transport/privacy fixtures; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/zoho/README.md",
+    "setupRequirements": [
+      "Create a native Zoho MCP server, authorize the selected apps and copy its complete private generated URL.",
+      "The generated URL contains an API key; use the named URL environment reference, not public JSON or an extra Bearer header.",
+      "No tool names are assumed: inspect the selected catalogue and explicitly allow reviewed reads; real account/region/plan validation remains pending."
+    ]
+  },
+  {
+    "id": "hubspot",
+    "name": "HubSpot",
+    "category": "crm",
+    "auth": "oauth",
+    "url": "https://mcp.hubspot.com",
+    "docs": "https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server",
+    "evidence": "public native SDK OAuth metadata verified; registered PKCE/secret-post/refresh fixtures; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/hubspot/README.md",
+    "setupRequirements": [
+      "Create a dedicated HubSpot MCP connector/auth app; set its client ID/secret and register Hstack's exact loopback callback. Ordinary developer/API apps are not assumed interchangeable.",
+      "Scopes are selected during installation based on current tools and user permissions; empty advertised scope arrays do not mean no permissions or a read-only grant.",
+      "Seventeen documentation-reviewed reads are permitted. Mixed read/write manage tools, arbitrary CRM SQL, client-specific render/UI tools and feedback are blocked by default.",
+      "Run get_user_details first and review the selected account/tool access. Sensitive Data settings, subscriptions, inbox permissions and vendor eligibility still apply."
+    ]
+  },
+  {
+    "id": "helpscout",
+    "name": "Help Scout",
+    "category": "support",
+    "auth": "oauth",
+    "url": "https://mcp.helpscout.net/mcp",
+    "docs": "https://docs.helpscout.com/article/1779-connect-your-ai-agent-with-help-scout-to-search-conversations-and-pull-reports",
+    "evidence": "public native SDK OAuth metadata verified; registration, tool schemas and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "Use an account with API access: Standard/Plus/Pro; reports require Plus/Pro. Light Users cannot connect. DCR is documented; ordinary My Apps API credentials are not the MCP connector credentials.",
+      "New connections are read-only but some beta accounts retain writes. Inspect actual tools and explicitly allow reviewed reads; Docs needs a separate key entered on the vendor authorization page."
+    ]
+  },
+  {
+    "id": "zendesk",
+    "name": "Zendesk",
+    "category": "support",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/michaelrice/zendesk-mcp",
+    "evidence": "tagged community runtime and synthetic OAuth/API/native Hermes paths checked; live account not tested",
+    "community": true,
+    "setupGuide": "integrations/zendesk/README.md",
+    "setupRequirements": [
+      "Install the hash-locked community Zendesk MCP 0.1.6 / Python MCP 2.3.0 runtime. This is not an official Zendesk MCP server.",
+      "Create a dedicated private owner-only HSTACK_ZENDESK_HOME and complete native vendor setup yourself with an admin-created OAuth client. Do not reuse normal HOME.",
+      "Set ZENDESK_MCP_READ_ONLY=true. The native setup still requests read/write OAuth scope; review consent and account permissions independently.",
+      "Fourteen JSON read tools are allowed; attachment downloads, Markdown/export/integration tools and remote writes are not enabled. Windows credential guards are not implemented.",
+      "Keep all Hstack clients sharing this native credential home; standalone vendor clients do not use Hstack's refresh lock. Stop those clients before setup or reauthorization."
+    ]
+  },
+  {
+    "id": "zoho-desk",
+    "name": "Zoho Desk",
+    "category": "support",
+    "auth": "account",
+    "url": null,
+    "docs": "https://www.zoho.com/mcp/services/zoho-services.html",
+    "evidence": "vendor URL-key setup reviewed and local transport/privacy fixtures; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/zoho/README.md",
+    "setupRequirements": [
+      "Create a native Zoho MCP server, authorize the selected apps and copy its complete private generated URL.",
+      "The generated URL contains an API key; use the named URL environment reference, not public JSON or an extra Bearer header.",
+      "No tool names are assumed: inspect the selected catalogue and explicitly allow reviewed reads; real account/region/plan validation remains pending."
+    ]
+  },
+  {
+    "id": "pandadoc",
+    "name": "PandaDoc",
+    "category": "documents",
+    "auth": "oauth",
+    "url": "https://mcp.pandadoc.com/v1/mcp",
+    "docs": "https://developers.pandadoc.com/docs/getting-started-with-mcp",
+    "evidence": "public SDK metadata verified; explicit secret-post DCR fixture passed; real registration and live account not tested",
+    "community": false,
+    "setupGuide": "integrations/oauth-batch/README.md",
+    "setupRequirements": [
+      "The global candidate explicitly requests native SDK DCR client_secret_post, matching advertised token authentication. No registration request or vendor acceptance has been tested.",
+      "Registration must return the requested method and a secret before consent can proceed. Read-only requested scopes do not prove the granted scope or account access.",
+      "No tool names are allowed yet. EU accounts use a different documented endpoint/issuer and need separate metadata/region validation; there is no automatic region fallback."
+    ]
+  },
+  {
+    "id": "docusign",
+    "name": "Docusign",
+    "category": "documents",
+    "auth": "native-oauth",
+    "url": "https://mcp-d.docusign.com/mcp",
+    "docs": "https://developers.docusign.com/platform/mcp-server/",
+    "evidence": "demo public SDK OAuth metadata verified; production issuer mismatch; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/docusign/README.md",
+    "setupRequirements": [
+      "Demo-only profile: create an integration key/client secret and register Hstack's exact loopback callback; callback/app acceptance is unverified.",
+      "Production metadata has a confirmed issuer mismatch and fails SDK validation; no production profile is supplied.",
+      "Vendor production-approval documents conflict. Confirm applicable eligibility and integration-key approval before any production use.",
+      "Only two documentation-reviewed developer reads are allowed. Real schemas, consent, refresh and account/tool operations remain unverified."
+    ]
+  },
+  {
+    "id": "quickbooks",
+    "name": "QuickBooks",
+    "category": "accounting",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/intuit/quickbooks-online-mcp-server",
+    "evidence": "Intuit compatibility build, synthetic OAuth/API and native Hermes registry checks; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/quickbooks/README.md",
+    "setupRequirements": [
+      "Install/build the integrity-locked Intuit compatibility runtime with Node 22.13+ on POSIX.",
+      "Create an Intuit app/company and complete explicit foreground native OAuth; production requires a separate public HTTPS redirect procedure.",
+      "Use an owner-only native token-store directory/file. Stop standalone clients before reauthorization; live account operations and model-driven acceptance remain unverified."
+    ]
+  },
+  {
+    "id": "xero",
+    "name": "Xero",
+    "category": "accounting",
+    "auth": "native-oauth",
+    "url": "https://api.xero.com/mcp/v1",
+    "docs": "https://developer.xero.com/documentation/guides/remote-mcp/overview/",
+    "evidence": "official documentation and public OAuth metadata reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/xero/README.md",
+    "setupRequirements": [
+      "Create your own Xero Commercial PKCE app and register Hstack's exact loopback callback; callback acceptance is not live-tested.",
+      "Core or above for real organisations; Starter can use a demo organisation. Check current vendor eligibility.",
+      "Set XERO_MCP_CLIENT_ID; request only the bundled read scopes plus openid and offline_access. No client secret or vendor subprocess is needed.",
+      "Review discovered tool schemas, explicitly choose the organisation for reads and test refresh. Public metadata is not account-operation evidence."
+    ]
+  },
+  {
+    "id": "zoho-books",
+    "name": "Zoho Books",
+    "category": "accounting",
+    "auth": "account",
+    "url": null,
+    "docs": "https://www.zoho.com/us/books/help/mcp/zoho-books-mcp.html",
+    "evidence": "vendor URL-key setup reviewed and local transport/privacy fixtures; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/zoho/README.md",
+    "setupRequirements": [
+      "Create a native Zoho MCP server, authorize the selected apps and copy its complete private generated URL.",
+      "The generated URL contains an API key; use the named URL environment reference, not public JSON or an extra Bearer header.",
+      "No tool names are assumed: inspect the selected catalogue and explicitly allow reviewed reads; real account/region/plan validation remains pending."
+    ]
+  },
+  {
+    "id": "google-analytics",
+    "name": "Google Analytics",
+    "category": "analytics",
+    "auth": "local",
+    "url": null,
+    "docs": "https://developers.google.com/analytics/devguides/MCP",
+    "evidence": "official runtime/source and network-denied schema/error paths checked; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/google-analytics/README.md",
+    "setupRequirements": [
+      "Prepare the documented metadata-only ADK compatibility wheel, install the hash-locked official Analytics MCP 0.8.0 Python 3.12 runtime and set HSTACK_ANALYTICS_PYTHON.",
+      "Enable Analytics Admin and Data APIs in your project; grant the user or service account Viewer access in Analytics.",
+      "Use your own ADC file with analytics.readonly scope; set GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT. Quota project permissions also apply.",
+      "No --allow-write is passed. Hstack permits only the nine reviewed reads. Native Google ADC handles refresh; Hstack OAuth login is not used."
+    ]
+  },
+  {
+    "id": "mongodb",
+    "name": "MongoDB",
+    "category": "data",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/mongodb-js/mongodb-mcp-server",
+    "evidence": "real local MongoDB MCP 3.2.1 and native Hermes registry checked; hosted account not tested",
+    "community": false,
+    "setupGuide": "integrations/mongodb/README.md",
+    "setupRequirements": [
+      "Install the pinned npm runtime using Node 22.13+ or 24+.",
+      "Use your own private MongoDB connection URI and the preconfigured connection handle.",
+      "The default vendor read-only flag must be removed before an exact write opt-in can execute."
+    ],
+    "verifiedLocal": {
+      "vendorVersion": "3.2.1",
+      "databaseVersion": "8.2.11",
+      "readTools": [
+        "list-databases",
+        "list-collections",
+        "count",
+        "find"
+      ],
+      "writeTools": [
+        "insert-many"
+      ],
+      "limitations": [
+        "Hosted accounts, TLS, replicas and sharding not tested",
+        "Other advertised operations unverified",
+        "No model-driven conversation tested"
+      ]
+    }
+  },
+  {
+    "id": "mysql",
+    "name": "MySQL via Google Toolbox",
+    "category": "data",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/googleapis/mcp-toolbox/blob/v1.15.0/docs/en/integrations/mysql/prebuilt-configs/mysql.md",
+    "evidence": "real disposable MySQL reads, permissions and native Hermes registry checked; hosted account not tested",
+    "community": false,
+    "setupGuide": "integrations/mysql/README.md",
+    "setupRequirements": [
+      "Build the documented MySQL-only Toolbox compatibility variant; the official all-database binary has unresolved dependency findings. macOS arm64 is the only validated build.",
+      "Configure a dedicated least-privilege MySQL account, explicit host/port/database and TLS parameters; never use a root account for the gateway.",
+      "Eight diagnostic reads are allowed. Monitoring needs additional sys/performance_schema SELECT, sys-function EXECUTE and PROCESS privileges; narrow readTools if those are inappropriate.",
+      "Arbitrary execute_sql is blocked by default. Exact writeTools opt-in permits arbitrary SQL within database privileges; it is not a per-statement approval or read-only SQL parser."
+    ]
+  },
+  {
+    "id": "redis",
+    "name": "Redis",
+    "category": "data",
+    "auth": "local",
+    "url": null,
+    "docs": "https://github.com/redis/mcp-redis",
+    "evidence": "real local Redis MCP 0.5.1 verified; hosted account not tested",
+    "community": false,
+    "verifiedLocal": {
+      "vendorVersion": "0.5.1",
+      "redisVersion": "8.10.1",
+      "readTools": [
+        "get",
+        "type",
+        "scan_keys",
+        "dbsize",
+        "info"
+      ],
+      "writeTools": [
+        "set"
+      ],
+      "limitations": [
+        "TLS, cluster and hosted authentication not tested",
+        "Other advertised operations unverified"
+      ]
+    },
+    "setupGuide": "integrations/redis/README.md"
+  },
+  {
+    "id": "bigquery",
+    "name": "BigQuery",
+    "category": "data",
+    "auth": "google-credential-file",
+    "url": "https://bigquery.googleapis.com/mcp",
+    "docs": "https://docs.cloud.google.com/bigquery/docs/use-bigquery-mcp",
+    "evidence": "official SDK legacy public nine-schema discovery passed; native credential refresh, real Hstack process and native Hermes/direct registry paths use synthetic responses only; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/bigquery/README.md",
+    "setupRequirements": [
+      "Keep the native profile disabled until real Google identity, project and IAM validation is completed.",
+      "Use an explicit owner-only authorized_user or service_account credential file; no implicit ADC discovery or background sign-in.",
+      "Five metadata reads are allowed; SQL, query-result retrieval and cancellation require explicit review and may incur charges.",
+      "Official SDK legacy initialization works; modern server/discover is rejected. Do not silently change a pinned modern configuration."
+    ]
+  },
+  {
+    "id": "snowflake",
+    "name": "Snowflake",
+    "category": "data",
+    "auth": "account",
+    "url": null,
+    "docs": "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp",
+    "evidence": "disabled native HTTP candidate; lifecycle negotiation unverified; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/snowflake/README.md",
+    "setupRequirements": [
+      "Use your account/database/schema/MCP-server URL and a registered OAuth client; dynamic registration is unsupported.",
+      "Approve the exact Hstack loopback callback; configure a least-privileged role, default warehouse and underlying tool grants.",
+      "The vendor documents lifecycle/version negotiation as unsupported. Validate SDK initialization before activation; local fixtures are not live compatibility proof.",
+      "Tool names are account-defined. All calls remain blocked until their actual schemas, side effects, privileges and potential charges are reviewed."
+    ]
+  },
+  {
+    "id": "pagerduty",
+    "name": "PagerDuty",
+    "category": "operations",
+    "auth": "header",
+    "url": "https://mcp.pagerduty.com/mcp",
+    "docs": "https://docs.pagerduty.com/developer/mcp-tooling-remote-server",
+    "evidence": "maintained remote setup and documented list_incidents read reviewed; synthetic native header route tested; live account not tested",
+    "community": false,
+    "setupRequirements": [
+      "Use a documented REST API token; prefer appropriate read-only access. Supply the bare value as PAGERDUTY_MCP_TOKEN; the profile adds Token token=.",
+      "Only list_incidents is permitted from the remote reference example. Actual schemas/results, token/account permissions and quotas are unverified.",
+      "The old local MCP repository is archived; its tool lists/proxy instructions do not establish the maintained hosted server catalogue."
+    ],
+    "setupGuide": "integrations/pagerduty/README.md"
+  },
+  {
+    "id": "bamboohr",
+    "name": "BambooHR",
+    "category": "people",
+    "auth": "oauth",
+    "url": null,
+    "docs": "https://documentation.bamboohr.com/docs/mcp-server",
+    "evidence": "documentation-reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/bamboohr/README.md",
+    "setupRequirements": [
+      "Beta access and an admin-enabled BambooHR account are required.",
+      "Create a developer-portal OAuth application and register the exact loopback callback; dynamic registration is unsupported.",
+      "Request mcp plus the needed entity scopes and offline_access for refresh tokens."
+    ]
+  },
+  {
+    "id": "deel",
+    "name": "Deel",
+    "category": "people",
+    "auth": "oauth",
+    "url": "https://api.letsdeel.com/mcp",
+    "docs": "https://developer.deel.com/mcp/authorization",
+    "evidence": "anonymous eight-tool SDK/gateway schema discovery and public OAuth metadata passed; vendor tool operations and live account not tested",
+    "community": false,
+    "setupRequirements": [
+      "The default candidate uses native DCR/PKCE and requests four advertised read scopes; no real registration, callback, consent or refresh has been tested.",
+      "Eight observed anonymous read/noauth tool names are permitted. Protected HR/contract/payroll names remain unverified and blocked until the authenticated catalogue is reviewed.",
+      "Anonymous discovery does not prove account access. Restart/review after an authenticated catalogue changes. Existing PAT entries are preserved and a separate disabled PAT alternative is available."
+    ],
+    "setupGuide": "integrations/deel/README.md"
+  },
+  {
+    "id": "greenhouse",
+    "name": "Greenhouse",
+    "category": "hiring",
+    "auth": "oauth",
+    "url": null,
+    "docs": "https://support.greenhouse.io/hc/en-us/articles/52096319906971",
+    "evidence": "documentation-reviewed; live account not tested",
+    "community": false,
+    "setupGuide": "integrations/greenhouse/README.md",
+    "setupRequirements": [
+      "An eligible Greenhouse account and enabled MCP beta are required.",
+      "A Site Admin must approve Hstack as a client and allow its exact loopback callback before users connect.",
+      "Review the organization scope ceiling and exact discovered tool names before adding reads."
+    ]
+  }
+]

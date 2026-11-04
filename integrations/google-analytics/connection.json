@@ -1,0 +1,25 @@
+{
+  "id": "google-analytics",
+  "label": "Google Analytics",
+  "enabled": false,
+  "transport": "stdio",
+  "commandEnv": "HSTACK_ANALYTICS_PYTHON",
+  "args": ["-I", "-m", "analytics_mcp.server"],
+  "env": {
+    "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS",
+    "GOOGLE_CLOUD_PROJECT": "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_QUOTA_PROJECT": "GOOGLE_CLOUD_PROJECT"
+  },
+  "readTools": [
+    "get_account_summaries",
+    "get_property_details",
+    "list_google_ads_links",
+    "list_property_annotations",
+    "get_custom_dimensions_and_metrics",
+    "run_report",
+    "run_realtime_report",
+    "run_funnel_report",
+    "run_conversions_report"
+  ],
+  "allowWrites": false
+}

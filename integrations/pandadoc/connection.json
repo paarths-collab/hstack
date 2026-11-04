@@ -1,0 +1,16 @@
+{
+  "id": "pandadoc",
+  "label": "PandaDoc",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.pandadoc.com/v1/mcp",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://mcp.pandadoc.com/",
+    "dcrAuthMethod": "client_secret_post",
+    "scope": "read documents:read"
+  },
+  "readTools": [],
+  "allowWrites": false
+}

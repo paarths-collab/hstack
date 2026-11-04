@@ -1,0 +1,17 @@
+{
+  "id": "redis",
+  "label": "Redis",
+  "enabled": false,
+  "transport": "stdio",
+  "command": "/absolute/path/to/redis-venv/bin/python",
+  "args": ["-I", "-m", "src.main"],
+  "env": {
+    "REDIS_HOST": "REDIS_HOST",
+    "REDIS_PORT": "REDIS_PORT",
+    "REDIS_DB": "REDIS_DB",
+    "REDIS_PWD": "REDIS_PWD",
+    "REDIS_SSL": "REDIS_SSL"
+  },
+  "readTools": ["get", "type", "scan_keys", "dbsize", "info"],
+  "allowWrites": false
+}

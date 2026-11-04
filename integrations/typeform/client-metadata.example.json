@@ -1,0 +1,6 @@
+{
+  "client_id": "https://your-public-host.example/oauth/client-metadata.json",
+  "client_name": "Hstack",
+  "redirect_uris": ["http://127.0.0.1:8678/callback"],
+  "token_endpoint_auth_method": "none"
+}

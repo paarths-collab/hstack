@@ -1,0 +1,17 @@
+{
+  "name": "hstack-quickbooks-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": {
+    "@qboapi/qbo-mcp-server": "https://codeload.github.com/intuit/quickbooks-online-mcp-server/tar.gz/31a1dd5c3e170e368dbff651abbaf61aabde6ed9"
+  },
+  "devDependencies": { "@types/node": "22.20.5", "typescript": "5.9.3" },
+  "overrides": {
+    "zod": "4.6.7",
+    "decode-uri-component": "0.5.1",
+    "node-quickbooks": { "fast-xml-parser": "5.10.1", "underscore": "1.13.8", "uuid": "11.1.1" }
+  }
+}

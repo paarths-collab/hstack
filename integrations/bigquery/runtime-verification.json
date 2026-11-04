@@ -1,0 +1,58 @@
+{
+  "vendor": "Google BigQuery MCP",
+  "sdk": "2.4.0",
+  "googleAuthLibrary": "11.3.2",
+  "evidence": "Real Hstack stdio process with synthetic Google OAuth/API only. No real account, credentials, query or model.",
+  "testedRuntime": {
+    "node": "v26.8.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "checks": {
+    "realStdioSearchReadAndSqlBlock": true,
+    "healthDoesNotExposeAccountContent": true,
+    "oneRefreshForTwoReads": true,
+    "noNetworkOrSql": true,
+    "privateSourceFilesUnchanged": true,
+    "oneSdkClientForDiscoveryAndTwoReads": true
+  },
+  "nativeHermes": {
+    "directHermesLegacyRead": true,
+    "gatewayHermesSearchReadAndSqlBlock": true,
+    "directProtocolMode": "auto",
+    "directMethods": [
+      "initialize",
+      "notifications/initialized",
+      "tools/list",
+      "tools/call",
+      "tools/call"
+    ],
+    "python": "3.11.16",
+    "mcp": "2.0.0"
+  },
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "counts": {
+    "refreshes": 2,
+    "reads": 4,
+    "sql": 0,
+    "initializations": 2,
+    "discovery": 2,
+    "mcpPosts": 10
+  },
+  "requestComparison": {
+    "readsPerPath": 2,
+    "directHermesMcpPosts": 5,
+    "hstackMcpPostsPerProcess": 5,
+    "limitation": "Synthetic request count only; direct path uses a static synthetic header. No equal auth/setup, latency, model or cost comparison."
+  },
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "Synthetic Google transport and credential file only; no real Google identity, IAM, quota, refresh or account response validation",
+    "Native Hermes registry was invoked without a model using a temporary home; normal configuration and credentials were not read",
+    "Direct Hermes used a static synthetic Bearer header; no equal native OAuth/setup or refresh benchmark is claimed",
+    "Two-read fixture uses five MCP POSTs through either path; no latency, billing or model-cost improvement is inferred",
+    "Native HTTP OAuth now reuses SDK clients under shared credential locks; its warm-session lifecycle evidence comes from separate local OAuth fixtures, not this BigQuery verifier",
+    "Only the recorded macOS arm64/Node/Python/MCP combination was executed; Linux/Node22 CI and Windows ACL support remain pending"
+  ],
+  "previousMeasuredMcpPostsPerProcess": 9
+}

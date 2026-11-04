@@ -1,0 +1,30 @@
+{
+  "vendor": "Snowflake-managed MCP",
+  "reviewedOn": "2026-11-01",
+  "status": "disabled-native-http-candidate",
+  "sdk": "2.4.0",
+  "protocolSelection": "legacy",
+  "liveAccountVerified": false,
+  "liveHandshakeVerified": false,
+  "publicEndpointProbed": false,
+  "sources": [
+    "https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-agents-mcp",
+    "https://docs.snowflake.com/en/user-guide/oauth-custom",
+    "https://docs.snowflake.com/en/sql-reference/sql/create-security-integration-oauth-snowflake",
+    "https://docs.snowflake.com/en/release-notes/2026/other/2026-07-22-mcp-external-oauth",
+    "https://docs.snowflake.com/en/release-notes/bcr-bundles/un-bundled/bcr-2405"
+  ],
+  "localEvidence": [
+    "Offline reference checks report registration, lifecycle, warehouse and grant prerequisites without reflecting private values",
+    "Private candidate preparation preserves source/customized settings and enables no connection or operation",
+    "The official SDK rejects a synthetic lifecycle-free upstream before tools/list or tools/call; no fake initialization is injected",
+    "The native SDK preserves a synthetic tool result over split UTF-8/SSE chunks with application/json and text/event-stream Accept headers"
+  ],
+  "limitations": [
+    "Vendor documents lifecycle/version negotiation as unsupported; actual account handshake remains unresolved",
+    "No account/server object, registration, callback approval, OAuth metadata, consent, tokens or refresh verified",
+    "No tool names permitted until actual schemas, grants, side effects and possible charges are reviewed",
+    "No warehouse/Cortex use, real tool response, rate limit, native Hermes Snowflake integration or model call tested",
+    "Local fixtures describe SDK behavior only and are not Snowflake compatibility proof"
+  ]
+}

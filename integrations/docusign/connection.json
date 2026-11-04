@@ -1,0 +1,20 @@
+{
+  "id": "docusign",
+  "label": "Docusign (demo)",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp-d.docusign.com/mcp",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://mcp-d.docusign.com",
+    "clientIdEnv": "DOCUSIGN_DEMO_CLIENT_ID",
+    "clientSecretEnv": "DOCUSIGN_DEMO_CLIENT_SECRET",
+    "scope": "signature"
+  },
+  "readTools": [
+    "getUserInfo",
+    "searchDocusignDocs"
+  ],
+  "allowWrites": false
+}

@@ -1,0 +1,41 @@
+{
+  "id": "pipedrive",
+  "label": "Pipedrive",
+  "enabled": false,
+  "transport": "http",
+  "url": "https://mcp.pipedrive.ai/mcp",
+  "oauth": {
+    "type": "oauth",
+    "callbackPort": 8678,
+    "issuer": "https://oauth.pipedrive.com",
+    "clientIdEnv": "PIPEDRIVE_MCP_CLIENT_ID",
+    "clientSecretEnv": "PIPEDRIVE_MCP_CLIENT_SECRET",
+    "scope": "base deals:full contacts:full activities:full leads:full search:read users:read products:full"
+  },
+  "readTools": [
+    "getActivities",
+    "getActivity",
+    "getDeals",
+    "getDeal",
+    "searchDeals",
+    "getPersons",
+    "getPerson",
+    "searchPersons",
+    "getOrganizations",
+    "getOrganization",
+    "searchOrganization",
+    "getLeads",
+    "getLead",
+    "searchLeads",
+    "getLeadConversionStatus",
+    "getProducts",
+    "getProduct",
+    "searchProduct",
+    "getStages",
+    "getStage",
+    "getNotes",
+    "getNote",
+    "getAccountContext"
+  ],
+  "allowWrites": false
+}

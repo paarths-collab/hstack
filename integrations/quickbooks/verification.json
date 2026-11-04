@@ -1,0 +1,51 @@
+{
+  "vendor": "Intuit QuickBooks MCP",
+  "commit": "31a1dd5c3e170e368dbff651abbaf61aabde6ed9",
+  "build": "hstack-compat-1",
+  "testedRuntime": {
+    "node": "v26.8.1",
+    "platform": "darwin",
+    "arch": "arm64"
+  },
+  "evidence": "Installed vendor process and synthetic loopback OAuth/API only; no live account or financial data.",
+  "checks": {
+    "all70ReadSchemasAndMissingAuthErrors": true,
+    "privateFileCannotDisableLaunchPolicy": true,
+    "nativeRefreshAndPrivatePersistence": true,
+    "directGatewayCompanyEquality": true,
+    "reportLabelsAndGenuineEmptyLists": true,
+    "operationalCompanyVerifier": true,
+    "searchModeSchemaAndRead": true,
+    "nativeHermesRegistrySearchReadAndWriteBlock": true,
+    "nativeApiErrorsAreSafeFailures": true,
+    "writesAndPdfDownloadBlocked": true,
+    "networkAndBrowserIsolation": true
+  },
+  "readonlyNativeToolCount": 71,
+  "reviewedReadCount": 70,
+  "allNativeToolCount": 142,
+  "originalSchemaComparison": {
+    "compared": 142,
+    "changed": []
+  },
+  "schemaSha256": "ade19eec17d12c37f081c24d2107137c98b876b3f2d29b375addc99e17a4aea0",
+  "discoveryComparison": {
+    "directCatalogueJsonBytes": 42773,
+    "initialSearchCatalogueJsonBytes": 853,
+    "firstSearchResultJsonBytes": 575,
+    "limitation": "Installed schemas and local fixture read only; no model cost, accuracy, latency or setup-time claim."
+  },
+  "hermesMcpSourceSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+  "fixtureRequests": {
+    "refreshes": 3,
+    "reads": 10,
+    "mutations": 0
+  },
+  "checkedOn": "2026-11-01",
+  "limitations": [
+    "Synthetic local OAuth/API evidence only; no live account, real browser consent or production eligibility tested",
+    "All 142 schema constraints compared with original-process fingerprints, but write operations and most successful read operations remain unverified",
+    "Native Hermes registry fixture checks passed without a model; model-driven acceptance remains incomplete",
+    "Tested on Node 26.8.1/macOS arm64; Node 22 Linux manual CI, Windows and encrypted credentials remain unverified"
+  ]
+}
