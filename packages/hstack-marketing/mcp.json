@@ -1,0 +1,30 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "buffer": {
+      "type": "streamable-http",
+      "url": "https://mcp.buffer.com/mcp",
+      "headers": {
+        "Authorization": "Bearer ${BUFFER_API_KEY}"
+      }
+    },
+    "mailchimp": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": [
+        "--python",
+        "3.12",
+        "--with",
+        "mcp==1.30.0",
+        "--from",
+        "mailchimp-mcp==1.2.0",
+        "mailchimp-mcp"
+      ],
+      "env": {
+        "MAILCHIMP_API_KEY": "${MAILCHIMP_API_KEY}",
+        "MAILCHIMP_READ_ONLY": "true",
+        "MAILCHIMP_MAX_RETRIES": "0"
+      }
+    }
+  }
+}

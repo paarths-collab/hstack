@@ -1,0 +1,28 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "hstack-marketing",
+  "version": "0.1.0",
+  "description": "Marketing assistant for Hermes: read Buffer social posts and Mailchimp email results, review what worked, and draft posts and newsletters for you to approve. Buffer's official hosted MCP plus the pinned community Mailchimp MCP (read-only), with four workflow skills bundled.",
+  "author": {
+    "name": "Hstack"
+  },
+  "license": "MIT",
+  "keywords": [
+    "marketing",
+    "buffer",
+    "mailchimp",
+    "social-media",
+    "email",
+    "newsletter",
+    "analytics",
+    "mcp"
+  ],
+  "extensions": {
+    "com.nousresearch.hermes": {
+      "servers": {
+        "buffer": { "trust": "untrusted" },
+        "mailchimp": { "trust": "untrusted" }
+      }
+    }
+  }
+}
