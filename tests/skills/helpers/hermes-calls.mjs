@@ -1,5 +1,5 @@
 // Extract every `hermes ...` invocation from the fenced bash blocks of a markdown skill and check it against the
-// REAL Hermes v0.22.5 argparse builders vendored in tests/skills/fixtures (syntax only; see native-parser.py).
+// REAL Hermes v0.23.2 argparse builders vendored in tests/skills/fixtures (syntax only; see native-parser.py).
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { extractBlocks } from "./blocks.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.join(here, "..", "fixtures", "hermes-v0.22.5");
+const FIXTURE = path.join(here, "..", "fixtures", "hermes-v0.23.2");
 const PARSER = path.join(here, "native-parser.py");
 
 const TERMINATORS = new Set([";", "|", "&", ">", "<", ")", "`"]);
@@ -122,8 +122,8 @@ export function hermesInvocations(markdown) {
   return out;
 }
 
-/** Run the invocations through the vendored v0.22.5 parser. Returns [{...inv, code, output}]. */
-export function checkAgainstV0225(invocations) {
+/** Run the invocations through the vendored v0.23.2 parser. Returns [{...inv, code, output}]. */
+export function checkAgainstTarget(invocations) {
   if (!invocations.length) return [];
   const r = spawnSync("python3", ["-I", PARSER, FIXTURE, JSON.stringify(invocations.map((i) => i.argv))], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`native parser failed: ${r.stderr || r.stdout}`);

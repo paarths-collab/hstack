@@ -1,6 +1,6 @@
 ---
 name: platform-telegram
-description: Wire a remote Hermes Agent v0.22.5 to Telegram (BotFather token + numeric user-ID allowlist) over SSH. Long polling, pure env vars, no QR or OAuth. Enforces a hard allowlist gate and a live Telegram getMe check before anything is written, reloads the gateway once natively, and rolls back to the previous values on any failure. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Wire a remote Hermes Agent v0.23.2 to Telegram (BotFather token + numeric user-ID allowlist) over SSH. Long polling, pure env vars, no QR or OAuth. Enforces a hard allowlist gate and a live Telegram getMe check before anything is written, reloads the gateway once natively, and rolls back to the previous values on any failure. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
 # /platform-telegram — wire Telegram to a remote Hermes (SSH-first, the reliable wedge)
@@ -21,10 +21,10 @@ ONE shell session: later steps call `remote`, `snapshot`, `rollback`, `finish` a
 `tg_username`. The bot token only ever travels over ssh **stdin**, never in an ssh argument,
 a URL on a command line, or a quoted remote string.
 
-**Honest picture (source-verified against Hermes v0.22.5, not run live).** Telegram is the most reliable headless platform for
+**Honest picture (source-verified against Hermes v0.23.2, not run live).** Telegram is the most reliable headless platform for
 Hermes: no QR pairing, no Meta dev account, no OAuth dance. It is long polling driven by two env vars plus one gateway reload. The
 common failure modes are operator mistakes (allowlist using @handle instead of numeric ID, token truncated at the colon, group IDs
-without the leading negative sign) and a second process polling the same bot token. See "Verified against Hermes v0.22.5" at the
+without the leading negative sign) and a second process polling the same bot token. See "Verified against Hermes v0.23.2" at the
 end for what was read in source and what is still unverified.
 
 **Why the hard allowlist matters.** Upstream turns Telegram on as soon as `TELEGRAM_BOT_TOKEN` is present (there is no
@@ -37,7 +37,7 @@ without it. The same allowlist logic honours a `*` entry in `TELEGRAM_ALLOWED_US
 (`:670-671`), so the gate refuses all of those and never sets any of them.
 
 **One reload, no nudge.** Earlier revisions of this skill ran a second reload cycle ("post-setup nudge") because first-time setup
-was believed to need one. That is dropped: the v0.22.5 adapter only reports `Connected to Telegram (polling mode)` after its cold-start
+was believed to need one. That is dropped: the v0.23.2 adapter only reports `Connected to Telegram (polling mode)` after its cold-start
 readiness gate has seen a successful `getUpdates` round-trip (`plugins/platforms/telegram/adapter.py:1941-2027`, `:3231`), so a second
 cycle proves nothing the log line does not, and it cannot recover a message sent before startup: on a cold boot the adapter discards
 updates Telegram queued while the gateway was offline by default (`platforms.telegram.extra.drop_pending_on_cold_boot`, default
@@ -254,7 +254,7 @@ Rules used below: failures BEFORE `snapshot` (Steps 1–4) just `exit 1` with
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -277,7 +277,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host
 (not only inside a container).
@@ -286,14 +286,14 @@ This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on 
 HERMES_BANNER=$(remote 'command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version') \
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 echo "Using: $HERMES_BANNER"
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the
-v0.22.5 source; it has not been run against a live host.
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the
+v0.23.2 source; it has not been run against a live host.
 
 ---
 
@@ -487,7 +487,7 @@ Wait for confirmation (or `AUTO_APPROVE=1`). If the user declines: `echo "ABORT:
 
 The allowlist goes in before the token, because the token is what makes Hermes turn Telegram
 on. Each value travels as ONE line on ssh stdin and is read by `read -r` on the VPS. The `--`
-keeps values that start with `-` (negative chat IDs) from being parsed as options; the vendored v0.22.5 argparse
+keeps values that start with `-` (negative chat IDs) from being parsed as options; the vendored v0.23.2 argparse
 accepts `config set KEY -- -1001234` and `config set KEY -1001234` alike and yields the same value, so `--` is cheap insurance, not a
 requirement. `config set` routes UPPER_SNAKE names to `~/.hermes/.env` (`TELEGRAM_BOT_TOKEN` through the credential lifecycle because
 of its `_TOKEN` suffix, the allowlist and home channel as plain env settings) and never to `config.yaml`
@@ -743,7 +743,7 @@ remote "hermes -p default config set platforms.telegram.enabled false" && gw_rel
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version banner names 0.22.5 on the VPS host (ABORT otherwise)
+- [ ] Hermes version banner names 0.23.2 on the VPS host (ABORT otherwise)
 - [ ] Idempotency check ran (skipped if token + allowlist already present, unless `FORCE=1`)
 - [ ] HARD GATE passed with nothing written: allowlist non-empty, no `*` anywhere in it, every user ID matches `^[0-9]+$`; no allow-all switch (`TELEGRAM_ALLOW_ALL_USERS` / `GATEWAY_ALLOW_ALL_USERS`), group-wide grant (`TELEGRAM_GROUP_ALLOWED_CHATS`) or `*` in `GATEWAY_ALLOWED_USERS` / `TELEGRAM_GROUP_ALLOWED_USERS` in the VPS `.env`; token matches `^[0-9]+:[A-Za-z0-9_-]{30,}$`
 - [ ] Live Telegram `getMe` (run from the VPS, token sent over ssh stdin) returned the bot's `@username`
@@ -760,9 +760,9 @@ remote "hermes -p default config set platforms.telegram.enabled false" && gw_rel
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repository root.
+Read in the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repository root.
 
 | Claim used by this skill | Source |
 |---|---|
@@ -780,7 +780,7 @@ Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab90
 | `hermes logs gateway -n N --since Ns` | `hermes_cli/subcommands/logs.py:36-48`, `hermes_cli/logs.py:81-87` |
 | Gateway restart / ensure / instance semantics | the "Gateway lifecycle" list in Step 0 |
 
-Every `hermes ...` invocation in this file is also checked by `tests/skills/static.test.mjs` against the vendored v0.22.5 argparse
+Every `hermes ...` invocation in this file is also checked by `tests/skills/static.test.mjs` against the vendored v0.23.2 argparse
 builders (syntax only).
 
 **Unverified.** Nothing here was run against a real Hermes host, a real bot or a real Telegram account. Not checked by this skill:

@@ -1,6 +1,6 @@
 ---
 name: hermes-status
-description: "Read-only dashboard for a self-hosted Hermes v0.22.5 over SSH: version, hermes status, gateway status, memory provider, cron jobs, sessions, pairing and recent logs, shown as the native commands print them. Use when the user asks if their agent is ok. It starts, stops and writes nothing. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
+description: "Read-only dashboard for a self-hosted Hermes v0.23.2 over SSH: version, hermes status, gateway status, memory provider, cron jobs, sessions, pairing and recent logs, shown as the native commands print them. Use when the user asks if their agent is ok. It starts, stops and writes nothing. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
 ---
 
 # /hermes-status — read-only dashboard for a remote Hermes (SSH-first)
@@ -25,8 +25,8 @@ pass/fail verdict. In particular:
 through the `remote` helper from Step 0, which wraps `ssh` and puts `~/.local/bin` (where `hermes` lives) on the remote PATH. Run all
 blocks in ONE shell session.
 
-**Honest picture.** Checked against the Hermes v0.22.5 source (see "Verified against Hermes v0.22.5"). Not run against a real host: the
-offline tests drive these blocks against a stub whose command syntax is the real v0.22.5 argparse and whose output is invented.
+**Honest picture.** Checked against the Hermes v0.23.2 source (see "Verified against Hermes v0.23.2"). Not run against a real host: the
+offline tests drive these blocks against a stub whose command syntax is the real v0.23.2 argparse and whose output is invented.
 
 ---
 
@@ -100,7 +100,7 @@ gateway. This skill has no `snapshot`/`rollback`/`finish` because it writes noth
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -109,15 +109,15 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was changed."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was changed."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was changed."; exit 1;
 }
 echo "--- version ---"
 echo "$HERMES_BANNER"
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). If it names another version, stop: the output formats below
-are only checked for 0.22.5.
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). If it names another version, stop: the output formats below
+are only checked for 0.23.2.
 
 ---
 
@@ -128,7 +128,7 @@ file; the old copy of this skill did, and a read-only skill must not.
 
 ```bash
 cat <<EOF
-READ-ONLY checks on $VPS_USER@$VPS_IP (Hermes 0.22.5):
+READ-ONLY checks on $VPS_USER@$VPS_IP (Hermes 0.23.2):
   1. hermes status --full             (every section, keys redacted)
   2. hermes gateway status            (informational text)
   3. hermes gateway list              (which profiles have a gateway process)
@@ -277,14 +277,14 @@ the next step is `/hermes-fix` (diagnose, then repair with consent) or `/hermes-
 | 9 | Using `ps -ef`/`ps ... cmd` | the command line of a process can contain a secret passed as an argument | the block prints `comm` only |
 | 10 | Container vs host confusion | `hermes` inside a container is invisible to the host | Step 1 detects both; check `whoami; hostname` |
 | 11 | Fresh shell per command | Step 0's `remote` is undefined later | re-run the Step 0 block first |
-| 12 | Assuming old flags | `hermes status --all` was the older spelling; at 0.22.5 `--full` is primary and `--all` an alias | use `--full` |
+| 12 | Assuming old flags | `hermes status --all` was the older spelling; at 0.23.2 `--full` is primary and `--all` an alias | use `--full` |
 
 ---
 
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (`0.22.5`)
+- [ ] Hermes version verified on the VPS (`0.23.2`)
 - [ ] Preview shown (Step 2); no marker or state file written
 - [ ] `status --full`, `gateway status` and `gateway list` output shown verbatim
 - [ ] Memory, cron, sessions and pairing output shown; no memory backend, usage or limit claimed
@@ -295,9 +295,9 @@ the next step is `/hermes-fix` (diagnose, then repair with consent) or `/hermes-
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the tagged source (`NousResearch/hermes-agent` at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`), paths relative to the repo root:
+Read in the tagged source (`NousResearch/hermes-agent` at `ae2a81ccc00e9b7c06301523e5bb09608397149c`), paths relative to the repo root:
 
 - `hermes_cli/subcommands/status.py:13-17`: `status [--full|--all] [--deep]` (`--all` is an alias of `--full`; `--deep` implies it).
   `hermes_cli/status.py:213-243,322-342,373-407`: the gateway section and row, the deep section, the one-screen summary.
@@ -311,7 +311,7 @@ Read in the tagged source (`NousResearch/hermes-agent` at `bf0203a794a07aac3ff76
 - `hermes_cli/gateway_runtime.py:390-495` (why `ensure` is not a read: it spawns or starts a gateway when none is running).
 
 Not verified: nothing was run against a real Hermes host, so the exact printed layouts are read from source, not observed. No non-mutating,
-machine-readable gateway readiness probe exists as a CLI command at v0.22.5 (`discover_gateway_endpoint` is a Python API,
+machine-readable gateway readiness probe exists as a CLI command at v0.23.2 (`discover_gateway_endpoint` is a Python API,
 `gateway_state.json` can outlive a dead process), which is why this skill reports text and makes no pass/fail verdict.
 
 See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway, memory and platform failure modes.

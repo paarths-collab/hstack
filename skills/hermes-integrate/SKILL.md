@@ -1,6 +1,6 @@
 ---
 name: hermes-integrate
-description: Wire several apps into a self-hosted Hermes v0.22.5 in one sitting. Presents the integration catalog, validates the picks, refuses specialists that are still legacy procedures, runs each /integration-NAME skill one at a time with the credentials collected up front, then verifies every MCP server with `mcp test` and the gateway with `gateway ensure`. Use when the user wants to connect more than one app. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Wire several apps into a self-hosted Hermes v0.23.2 in one sitting. Presents the integration catalog, validates the picks, refuses specialists that are still legacy procedures, runs each /integration-NAME skill one at a time with the credentials collected up front, then verifies every MCP server with `mcp test` and the gateway with `gateway ensure`. Use when the user wants to connect more than one app. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
 # /hermes-integrate — connect several apps to a remote Hermes (SSH-first orchestrator)
@@ -10,7 +10,7 @@ Claude Code, Cursor, Gemini CLI — whichever ran you) is talking to a remote VP
 
 Each integration has its own skill (`/integration-NAME`) that knows the vendor's endpoint, auth shape, MCP availability and
 pitfalls, runs a live vendor check before it writes anything, and rolls itself back on failure. This skill is only the
-**orchestrator**: it helps the user choose, checks that every chosen specialist can run safely on Hermes 0.22.5, collects the
+**orchestrator**: it helps the user choose, checks that every chosen specialist can run safely on Hermes 0.23.2, collects the
 credentials in one batch, runs the specialists strictly one after another, and verifies the result natively.
 
 **Where commands run.** Every `bash` block below runs on the agent's LOCAL machine (possibly macOS, bash 3.2) and reaches the
@@ -35,9 +35,9 @@ approving an OAuth sign-in.
   acceptable. This skill ends with a readiness check, not another reload.
 - **It never removes an earlier integration after a later failure.** The failing specialist restores its own pre-run
   `.env`/`config.yaml`; the ones that finished stay. Undo one with that specialist's own Rollback section.
-- **It does not run legacy specialists by default.** Only the integrations that have been re-verified for Hermes 0.22.5
+- **It does not run legacy specialists by default.** Only the integrations that have been re-verified for Hermes 0.23.2
   are safe to run. The others still carry the marker `> **Compatibility:** legacy procedure written for Hermes 0.15.x` and may
-  use commands that do not exist on 0.22.5 (their old gateway reload recipe in particular).
+  use commands that do not exist on 0.23.2 (their old gateway reload recipe in particular).
 
 ---
 
@@ -108,7 +108,7 @@ gw_reload() {
 This skill writes nothing to Hermes, so it carries no `snapshot`/`rollback`: the specialists own those. `gw_ready` is used in
 Step 5; `gw_reload` is defined with the other shared helpers and is not called here.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -130,7 +130,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -139,13 +139,13 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
-against the v0.22.5 source; it has not been run against a live host.
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
+against the v0.23.2 source; it has not been run against a live host.
 
 ---
 
@@ -215,7 +215,7 @@ for n in $PLAN; do
 done
 LEGACY=$(printf '%s' "$LEGACY" | sed 's/^ *//')
 if [ -n "$LEGACY" ] && [ "${ALLOW_LEGACY:-0}" != 1 ]; then
-  echo "ABORT: still legacy procedures, not re-verified for Hermes 0.22.5 (their reload step may call commands that do not exist): $LEGACY."
+  echo "ABORT: still legacy procedures, not re-verified for Hermes 0.23.2 (their reload step may call commands that do not exist): $LEGACY."
   echo "       Drop them from CHOSEN, or set ALLOW_LEGACY=1 only if the user accepts running an unverified procedure. Nothing was written."
   exit 1
 fi
@@ -338,7 +338,7 @@ be what created them.
 | 3 | Expecting a single gateway reload | Every specialist reloads itself | Say so in the dry run; quiet window or deliberate `GW_INTERRUPT=1` |
 | 4 | A live-session refusal in the middle of a batch | `gateway restart` refuses without a terminal while chats are live | Stop, tell the user, resume with `next_specialist` |
 | 5 | Parallel specialists | Two writers on `config.yaml` and two restarts | One at a time |
-| 6 | Running a legacy specialist | Its reload or `mcp add` form may not exist on 0.22.5 | Step 2 refuses unless `ALLOW_LEGACY=1` |
+| 6 | Running a legacy specialist | Its reload or `mcp add` form may not exist on 0.23.2 | Step 2 refuses unless `ALLOW_LEGACY=1` |
 | 7 | Removing everything after a late failure | Deletes integrations this run did not create | Never; the failing specialist rolls only itself back |
 | 8 | Matching `mcp list` by substring | `git` matches `github` | Match the exact first column (Step 5) |
 | 9 | Treating "no MCP row" as failure | REST-only integrations have no server | Reported as a NOTE |
@@ -350,7 +350,7 @@ be what created them.
 
 ## Definition of done
 
-- [ ] SSH confirmed; Hermes banner names `0.22.5`
+- [ ] SSH confirmed; Hermes banner names `0.23.2`
 - [ ] `CHOSEN` validated against the catalog; no extra integration was added
 - [ ] Every specialist checked for the legacy marker; legacy ones dropped (or `ALLOW_LEGACY=1` accepted by the user)
 - [ ] Dry run shown (including the restart count); user approved (or `AUTO_APPROVE=1`)
@@ -361,9 +361,9 @@ be what created them.
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read from the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the
+Read from the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the
 repository root of that tag, except `skills/` and `install.sh`, which are this repository.
 
 - `mcp list` (one row per server, first column the name) and `mcp test` (exit 0/1/3): `hermes_cli/mcp_config.py:744-805,836-880`.

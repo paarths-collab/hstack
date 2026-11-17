@@ -36,7 +36,7 @@ for(const n of all) it(`${n}: all actual bash snippets parse on stock bash`,()=>
  }
  const md=readFileSync(skillPath(`integration-${n}`),'utf8');
  assert.doesNotMatch(md,/legacy procedure|gateway run --daemon|--auth-header|--args '-y,/);
- assert.ok(md.includes("v?0[.]22[.]5([[:space:]]|$)"));
+ assert.ok(md.includes("v?0[.]23[.]2([[:space:]]|$)"));
 });
 
 for(const n of [...catalog,...stdio,...http,...local]) describe(`${n}: actual registration`,()=>{

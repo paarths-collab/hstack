@@ -1,8 +1,8 @@
 // platform-signal: the real SKILL.md blocks against a simulated VPS (helpers/sandbox.mjs).
 //
-// What is real here: the bash of the skill, and the SYNTAX of every `hermes ...` call (the stub runs the vendored v0.22.5 argparse).
+// What is real here: the bash of the skill, and the SYNTAX of every `hermes ...` call (the stub runs the vendored v0.23.2 argparse).
 // What is assumed: what the stubs print and do (a signal-cli daemon answering /api/v1/check, the gateway log lines, `hermes send`).
-// The log strings are the ones the v0.22.5 Signal adapter and gateway really log (see the skill's "Verified against" section).
+// The log strings are the ones the v0.23.2 Signal adapter and gateway really log (see the skill's "Verified against" section).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -462,7 +462,7 @@ describe("platform-signal: text and structure", () => {
     assert.ok(!/>>\s*\S*\.env\b/.test(code), "no appending to .env by redirection");
   });
   it("states plainly that nothing here was run against a real Signal account", () => {
-    assert.match(text, /Verified against Hermes v0\.22\.5/);
+    assert.match(text, /Verified against Hermes v0\.23\.2/);
     assert.match(text, /not\s+(been\s+)?(run|exercised|tested)\s+against\s+a\s+real/i);
   });
   it("treats SIGNAL_GROUP_ALLOWED_USERS as group IDs, not phone numbers (upstream plugin.yaml)", () => {

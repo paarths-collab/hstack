@@ -2,7 +2,7 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by the hermes stub: H, K, event, inject and gw_state come from it)
 # Test behaviour of `hermes cron ...`, sourced by the hermes stub ($@ starts at "cron"; -p already removed).
-# SYNTAX is checked by the real vendored v0.22.5 argparse before this runs. BEHAVIOUR is an assumption written from the source's output
+# SYNTAX is checked by the real vendored v0.23.2 argparse before this runs. BEHAVIOUR is an assumption written from the source's output
 # strings and checks (hstack hermes-cron rewrite), NOT evidence about a running Hermes:
 #   create   hermes_cli/cron.py:790-812 prints "Created job: <id>" then "  Name: ..", "  Schedule: ..", optional "  Script:" /
 #            "  Mode: no-agent (script stdout delivered directly)", then "  Next run: ..". Failure prints "Failed to create job: <error>" and

@@ -1,6 +1,6 @@
 // hermes-memory: input validation before any remote call, read-only inspection, `builtin` (memory off + snapshot + gateway reload + rollback),
 // `external` (backup, catalog install with explicit consent, never an unattended wizard) and `verify`. Native behaviour is the stub's
-// ASSUMPTION (tests/skills/stub-commands/{memory,plugins}.sh, strings from the v0.22.5 source); the call shapes are checked by the real argparse.
+// ASSUMPTION (tests/skills/stub-commands/{memory,plugins}.sh, strings from the v0.23.2 source); the call shapes are checked by the real argparse.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -27,7 +27,7 @@ describe("hermes-memory: Step 0 validation (before any remote call)", { concurre
     ["a PROVIDER with a command", { MODE: "external", PROVIDER: "mem0; touch pwned" }, /choose an available/],
     ["a PROVIDER with command substitution", { MODE: "verify", PROVIDER: "$(touch pwned)" }, /choose an available/],
     ["a catalog provider without DEPS_CONSENT", { MODE: "external", PROVIDER: "mem0" }, /DEPS_CONSENT=1/],
-    ["a wrong HERMES_VERSION", { MODE: "inspect", HERMES_VERSION: "0.15.2" }, /0\.22\.5/],
+    ["a wrong HERMES_VERSION", { MODE: "inspect", HERMES_VERSION: "0.15.2" }, /0\.23\.2/],
     ["a malformed target", { MODE: "inspect", VPS_IP: "1.2.3.4;id" }, /malformed SSH target/],
   ];
   for (const [label, env, msg] of cases) {
@@ -61,11 +61,11 @@ describe("hermes-memory: inspect (default) is read-only", { concurrency: 6 }, ()
       assertStateIdentical(r);
     });
   });
-  for (const banner of ["hermes 0.15.2", "Hermes Agent v0.21.6", "Hermes Agent v0.22.50"]) {
+  for (const banner of ["hermes 0.15.2", "Hermes Agent v0.21.6", "Hermes Agent v0.23.20"]) {
     it(`a ${JSON.stringify(banner)} banner is refused before memory status`, async () => {
       await scenario({ name: "mem-banner", seed: withProvider, script: script(), env: {}, files: { "hermes.version": `${banner}\n` } }, async (r) => {
         assert.equal(r.code, 1, r.out);
-        assert.match(r.out, /ABORT: .*0\.22\.5/);
+        assert.match(r.out, /ABORT: .*0\.23\.2/);
         assert.deepEqual(calls(r), ["--version"]);
         assertStateIdentical(r);
       });
@@ -289,7 +289,7 @@ describe("hermes-memory: text invariants", () => {
   });
   it("lists the verified provider credentials and has a Verified section with citations", () => {
     for (const v of ["RETAINDB_API_KEY", "BRV_API_KEY", "HONCHO_API_KEY", "SUPERMEMORY_API_KEY"]) assert.ok(text.includes(v), v);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     for (const cite of ["hermes_cli/memory_setup.py", "hermes_cli/main_agent_cmds.py", "hermes_cli/plugins_cmd_install.py", "plugin-catalog/"]) assert.ok(text.includes(cite), cite);
     assert.match(text, /Not verified:/);
   });

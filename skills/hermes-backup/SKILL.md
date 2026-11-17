@@ -1,6 +1,6 @@
 ---
 name: hermes-backup
-description: Back up a self-hosted Hermes v0.22.5 agent over SSH with the native `hermes backup` (full zip or quick state snapshot), verify the archive, and restore it only behind an explicit gate. Use before risky changes; schedule recurring runs with /hermes-cron. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Back up a self-hosted Hermes v0.23.2 agent over SSH with the native `hermes backup` (full zip or quick state snapshot), verify the archive, and restore it only behind an explicit gate. Use before risky changes; schedule recurring runs with /hermes-cron. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
 # /hermes-backup — back up (and, behind a gate, restore) a remote Hermes (SSH-first)
@@ -17,7 +17,7 @@ session: later steps call the Step 0 functions.
 Do everything autonomously; stop only for what a machine cannot do: choose where backups
 live, and say yes to a restore.
 
-**What Hermes backs up for you, and what it does not (v0.22.5, read from source).**
+**What Hermes backs up for you, and what it does not (v0.23.2, read from source).**
 
 - `hermes update` takes a **pre-update quick snapshot by default** (`updates.pre_update_backup: quick`, keeps the
   newest one); `hermes update --backup` adds a full zip in `~/.hermes/backups/` (`updates.backup_keep`, default 5) and
@@ -112,7 +112,7 @@ This skill never writes `.env` or `config.yaml`, so it carries no `snapshot`/`ro
 and a restore is undone from the safety backup it takes first (Restore 3). `gw_reload` is defined with the other shared
 helpers and is not used here: the restore path only needs `gw_ready`.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -185,7 +185,7 @@ REMOTE
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -194,13 +194,13 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
-against the v0.22.5 source; it has not been run against a live host. If you are inside a container, `whoami; hostname`
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
+against the v0.23.2 source; it has not been run against a live host. If you are inside a container, `whoami; hostname`
 shows a hex hostname: run the commands on the Docker host instead (the Hermes home is a volume there).
 
 ---
@@ -260,7 +260,7 @@ The native name is `hermes-backup-YYYY-MM-DD-HHMMSS.zip`, so the date match need
 ```bash
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  0. (already passed) inputs validated, Hermes 0.22.5 confirmed, nothing written yet
+  0. (already passed) inputs validated, Hermes 0.23.2 confirmed, nothing written yet
   1. Mode: $BACKUP_MODE
   2. full : umask 077, mkdir -p $BACKUP_DIR (0700), then
             hermes -p default backup -o $BACKUP_DIR -k $KEEP
@@ -518,7 +518,7 @@ back. What can be left over:
 
 Backup:
 
-- [ ] SSH confirmed; Hermes banner names `0.22.5`
+- [ ] SSH confirmed; Hermes banner names `0.23.2`
 - [ ] Inputs validated locally (`BACKUP_MODE`, `KEEP`, `LABEL`, `BACKUP_DIR`, `OFFBOX_TARGET`) before any remote write
 - [ ] Dry run shown; user approved (or `AUTO_APPROVE=1`)
 - [ ] Full: `hermes -p default backup -o DIR -k N` exited 0 and reported `Backup complete`; archive `0600` in a `0700` directory
@@ -536,9 +536,9 @@ Restore (only when asked):
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read from the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the
+Read from the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the
 repository root of that tag.
 
 - `hermes backup` flags `-o/--output`, `-q/--quick`, `-l/--label` (quick only), `-k/--keep N` (default 3, `0` keeps all,

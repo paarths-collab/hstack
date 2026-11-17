@@ -1,8 +1,8 @@
 #!/bin/bash
 # Test double of the Hermes CLI the skills call. It is NOT Hermes and is not evidence about the real CLI.
 #
-# 1. SYNTAX is real: every invocation is first checked against the actual Hermes v0.22.5 argparse
-#    builders vendored in tests/skills/fixtures/hermes-v0.22.5 (syntax-only harness
+# 1. SYNTAX is real: every invocation is first checked against the actual Hermes v0.23.2 argparse
+#    builders vendored in tests/skills/fixtures/hermes-v0.23.2 (syntax-only harness
 #    tests/skills/helpers/native-parser.py). An unknown flag or subcommand fails exactly like argparse
 #    (usage on stderr, exit 2), so a skill that calls `gateway run --daemon` or `mcp add --auth-header`
 #    cannot pass these tests.
@@ -60,19 +60,20 @@ mkdir -p "$HOME/logs"
 _first=${1:-}; if [ "$_first" = -p ] && [ "${2:-}" = default ]; then _first=${3:-}; fi
 # The parse is a pure function of argv and the vendored fixtures, so its verdict (status + argparse's message) is cached in the directory named by
 # $HOME/.hstack-native/cache (set by helpers/sandbox.mjs; under os.tmpdir(), shared by all sandboxes). The key covers argv, the harness and
-# fixtures/hermes-v0.22.5/provenance.json, so a changed fixture or harness is never answered from a stale entry. No directory = no cache.
+# fixtures/hermes-v0.23.2/provenance.json, so a changed fixture or harness is never answered from a stale entry. No directory = no cache.
 nat_parse_check() {
-  local parser fixture cdir key out rc
+  local parser fixture cdir key out rc parser_python
   parser=$(cat "$HOME/.hstack-native/parser"); fixture=$(cat "$HOME/.hstack-native/fixture")
+  parser_python=$(cat "$HOME/.hstack-native/python" 2>/dev/null || printf python3)
   cdir=$(cat "$HOME/.hstack-native/cache" 2>/dev/null || true)
   key=""
   if [ -n "$cdir" ]; then
-    key=$( { cksum < "$parser"; cksum < "$fixture/provenance.json"; printf '%s\0' "$@"; } | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null; } | cut -d' ' -f1)
+    key=$( { cksum < "$parser"; cksum < "$fixture/provenance.json"; printf '%s\0' "$parser_python" "$@"; } | { sha256sum 2>/dev/null || shasum -a 256 2>/dev/null; } | cut -d' ' -f1)
     if [ -n "$key" ] && [ -f "$cdir/$key" ]; then
       rc=$(sed -n 1p "$cdir/$key"); sed 1d "$cdir/$key" >&2; return "${rc:-2}"
     fi
   fi
-  out=$(python3 -I "$parser" "$fixture" -- "$@" 2>&1 >/dev/null); rc=$?
+  out=$("$parser_python" -I "$parser" "$fixture" -- "$@" 2>&1 >/dev/null); rc=$?
   [ -z "$out" ] || printf '%s\n' "$out" >&2
   if [ -n "$key" ] && mkdir -p "$cdir" 2>/dev/null; then
     { echo "$rc"; [ -z "$out" ] || printf '%s\n' "$out"; } > "$cdir/$key.$$" 2>/dev/null && mv -f "$cdir/$key.$$" "$cdir/$key" 2>/dev/null || true
@@ -133,7 +134,7 @@ gw_state() { cat "$H/gateway.state" 2>/dev/null || echo stopped; }
 case "${1:-}" in
   --version)
     event --version; inject version
-    if [ -f "$HOME/hermes.version" ]; then cat "$HOME/hermes.version"; else echo "hermes 0.22.5"; fi ;;
+    if [ -f "$HOME/hermes.version" ]; then cat "$HOME/hermes.version"; else echo "hermes 0.23.2"; fi ;;
   config)
     case "${2:-}" in
       set)
@@ -198,7 +199,7 @@ p.write_text("\n".join(lines) + "\n")
           fi
         fi ;;
       get)
-        # config get KEY [--json] [--raw]. BEHAVIOUR is an assumption written from hermes_cli/config.py:3536-3581 (v0.22.5): an unset key
+        # config get KEY [--json] [--raw]. BEHAVIOUR is an assumption written from hermes_cli/config.py:3536-3581 (v0.23.2): an unset key
         # exits 1 with "Config key not set: KEY" on stderr; an UPPER_SNAKE name reads ~/.hermes/.env, a dotted name reads the (flat
         # "a.b.c: v" test) config.yaml merged over the default security.allow_lazy_installs=true; a mapping prints as one JSON object with
         # --json; credential-shaped env names (*_API_KEY, *_TOKEN, *_SECRET) are masked unless --raw. Knob: fail.get.
@@ -257,7 +258,7 @@ PY
         event config show
         cat "$CFG" 2>/dev/null || true ;;
       unset)
-        # config unset KEY. BEHAVIOUR is an assumption written from hermes_cli/config.py:3584-3626 (v0.22.5): an UPPER_SNAKE name
+        # config unset KEY. BEHAVIOUR is an assumption written from hermes_cli/config.py:3584-3626 (v0.23.2): an UPPER_SNAKE name
         # is removed from ~/.hermes/.env, any other name is a flat "a.b: v" line of config.yaml; a key that was not set exits 1
         # with "Config key not set: KEY" on stderr, otherwise it prints "Unset KEY from <file>" and exits 0 (the real line has a
         # check-mark prefix). Knob: fail.unset.
@@ -275,7 +276,7 @@ PY
       *) event unknown "$@"; echo "hermes: unknown: $*" >&2; exit 99 ;;
     esac ;;
   mcp)
-    # --- hermes mcp {add,remove,list,test}: BEHAVIOUR is an assumption modelled on hermes_cli/mcp_config.py (v0.22.5). ---
+    # --- hermes mcp {add,remove,list,test}: BEHAVIOUR is an assumption modelled on hermes_cli/mcp_config.py (v0.23.2). ---
     # add:    [exists -> "Overwrite? [y/N]" default NO] ; HTTP: "Does this server require authentication? [Y/n]" (default YES, so a
     #         closed stdin answers yes) ; --auth header uses MCP_<NAME>_API_KEY from .env when set (headers: Authorization:
     #         Bearer ${MCP_<NAME>_API_KEY}) ; probe (3 tools) ; "Enable all 3 tools? [Y/n/select]" - a closed stdin or n CANCELS and

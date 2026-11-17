@@ -2,10 +2,10 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by ../hermes, which defines H, K, CFG, ENVF, event, inject, upsert_env, gw_state, mcp_names and mcp_field)
 # Test behaviour of `hermes backup [-o PATH] [-q] [-l LABEL] [-k N]`. NOT Hermes. Sourced by the hermes stub for the `backup`
-# command ($@ starts at `backup`; the global `-p default` is removed and the real v0.22.5 argparse has accepted the argv).
+# command ($@ starts at `backup`; the global `-p default` is removed and the real v0.23.2 argparse has accepted the argv).
 #
 # What it prints, which files it skips, how it names the archive and when it prunes are copied from hermes_cli/backup.py at
-# v0.22.5 (cited per rule below); the archive itself is a real zip built with python3 so a skill can verify it. Assumptions
+# v0.23.2 (cited per rule below); the archive itself is a real zip built with python3 so a skill can verify it. Assumptions
 # (steered by knobs under $HOME/knobs):
 #   backup_locked      another backup holds .backup.lock: "Error: another Hermes backup is already running", exit 2
 #   backup_incomplete  one file cannot be added: the archive is KEPT, "Backup incomplete", exit 1, nothing is pruned

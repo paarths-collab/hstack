@@ -1,10 +1,10 @@
 #!/bin/bash
 # shellcheck shell=bash disable=SC2154
 # Test behaviour of `hermes plugins install IDENT [--yes-deps|--no-deps] [--enable|--no-enable] [--force] [--ref SHA]`. NOT Hermes. Sourced by
-# the hermes stub ($@ starts at `plugins`; `-p default` removed; the real v0.22.5 argparse, hermes_cli/subcommands/plugins.py:18-47, has accepted
+# the hermes stub ($@ starts at `plugins`; `-p default` removed; the real v0.23.2 argparse, hermes_cli/subcommands/plugins.py:18-47, has accepted
 # the argv). Only `install` of a MEMORY catalog entry is modelled; everything else exits 99.
 #
-# Rules copied from hermes_cli/plugins_cmd_install.py (v0.22.5):
+# Rules copied from hermes_cli/plugins_cmd_install.py (v0.23.2):
 #   * without --yes-deps / --no-deps a non-interactive session is REFUSED at the dependency-consent question ("fail-closed", :592-598)
 #   * --no-enable leaves a memory provider installed but NOT active and prints "Memory provider installed but not active ..." (:724-731)
 #   * --enable on a memory provider sets memory.provider (:732-761); plugins.enabled is never consulted for memory providers

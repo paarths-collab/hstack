@@ -1,6 +1,6 @@
 ---
 name: platform-slack
-description: "Wire a remote Hermes Agent v0.22.5 to Slack through Socket Mode (bot token xoxb- plus app-level token xapp-, no public endpoint) over SSH. Checks both tokens against Slack from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
+description: "Wire a remote Hermes Agent v0.23.2 to Slack through Socket Mode (bot token xoxb- plus app-level token xapp-, no public endpoint) over SSH. Checks both tokens against Slack from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
 ---
 
 # /platform-slack — wire Slack to a remote Hermes (SSH-first, Socket Mode)
@@ -25,7 +25,7 @@ the remote PATH. Both tokens are pasted locally, format-checked locally, and tra
 curl `--config -` for the Slack checks, a `read -r` for the writes), never in an ssh argument, a URL on a command
 line or a quoted remote string. Run all blocks in ONE shell session.
 
-**Honest picture (source-verified against Hermes v0.22.5, not run against a live Hermes or Slack).**
+**Honest picture (source-verified against Hermes v0.23.2, not run against a live Hermes or Slack).**
 
 - **Two tokens, one of them enables.** `SLACK_BOT_TOKEN` alone enables the platform; there is no `SLACK_ENABLED`
   (`plugins/platforms/slack/gateway_env.py:22-23`). But the adapter also needs `SLACK_APP_TOKEN` and, without it, logs a
@@ -37,7 +37,7 @@ line or a quoted remote string. Run all blocks in ONE shell session.
 - **One workspace per bot token here.** Hermes can serve several workspaces (a comma-separated `SLACK_BOT_TOKEN`, plus
   tokens saved in `~/.hermes/slack_tokens.json`, `adapter.py:6523-6554`) and one allowlist then applies to all of them.
   This skill takes a single `xoxb-` token and warns if `slack_tokens.json` exists.
-- **An empty allowlist is not fail-open at v0.22.5, but this skill still refuses it.** With no allowlist and no allow-all
+- **An empty allowlist is not fail-open at v0.23.2, but this skill still refuses it.** With no allowlist and no allow-all
   switch, Slack senders are denied; an unknown DM sender is offered a pairing code instead
   (`gateway/authz_mixin.py:687-694,716-759`). A configured allowlist turns the pairing offer off
   (`allowlist_suppresses_pairing`, `gateway_env.py:31`). `*`, `SLACK_ALLOW_ALL_USERS`, `GATEWAY_ALLOW_ALL_USERS`,
@@ -317,7 +317,7 @@ Rules for calling them: a failure BEFORE `snapshot` (Steps 1-4) is `exit 1` with
 previous `~/.hermes/.env` and `config.yaml` byte for byte (a file that did not exist is removed again), reloads the
 gateway with `gw_reload`, and only then retires the snapshot.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
 `gw_ready`, which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id`
 than before. Why this shape (source-verified, not live-verified):
 
@@ -340,7 +340,7 @@ than before. Why this shape (source-verified, not live-verified):
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS host
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host (a container-only install is not supported).
 
@@ -349,12 +349,12 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version') \
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -770,7 +770,7 @@ this skill does not ship a wipe.
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded and the Step 0 helpers are defined in this shell
-- [ ] Hermes on the VPS host reports `0.22.5`
+- [ ] Hermes on the VPS host reports `0.23.2`
 - [ ] Idempotency check ran (skipped only for a safe stored setup, unless `FORCE=1`)
 - [ ] Hard gate passed with nothing written: member-ID allowlist (no `*`), `xoxb-` and `xapp-` prefixes, no open-access setting in `.env` or `config.yaml`
 - [ ] Live Slack checks from the VPS accepted the bot token (`auth.test`) and the app token (`apps.connections.open`)
@@ -788,9 +788,9 @@ See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md)
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository.
+Read in the Hermes source at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository.
 
 - Env names and enabling: `plugins/platforms/slack/gateway_env.py:6-32` (`SLACK_BOT_TOKEN` enables; `SLACK_HOME_CHANNEL`; allowlist
   `SLACK_ALLOWED_USERS`, allow-all `SLACK_ALLOW_ALL_USERS`, `SLACK_ALLOW_BOTS`), `plugins/platforms/slack/plugin.yaml`,
@@ -811,7 +811,7 @@ Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab908
 - Gateway lifecycle: the sources listed in the lifecycle note under Step 0.
 
 Not verified, and not claimed: nothing in this skill was run against a real Hermes, a real VPS, or Slack (the tests use a stub whose
-command syntax is the real v0.22.5 argparse and whose behaviour is an assumption). The Slack calls `auth.test` and
+command syntax is the real v0.23.2 argparse and whose behaviour is an assumption). The Slack calls `auth.test` and
 `apps.connections.open` and their `{"ok":...}` answers come from Slack's published Web API, not from Hermes (Hermes' adapter calls
 `auth.test` through slack_sdk at `adapter.py:1766`, and Socket Mode opens its own connection through slack_bolt); no call was
 made here. Whether Slack counts a preflight `apps.connections.open` against any limit was not checked. The exact text and timestamps of a

@@ -1,14 +1,14 @@
 ---
 name: platform-teams
-description: "Wire a remote Hermes 0.22.5 agent to Microsoft Teams over SSH: Azure AD bot credentials plus an AAD object-ID allowlist, a live Microsoft token preflight before any write, rollback, and log/health verification. A human must provide the public HTTPS endpoint, the bot registration and the first Teams message."
+description: "Wire a remote Hermes 0.23.2 agent to Microsoft Teams over SSH: Azure AD bot credentials plus an AAD object-ID allowlist, a live Microsoft token preflight before any write, rollback, and log/health verification. A human must provide the public HTTPS endpoint, the bot registration and the first Teams message."
 ---
 
 # /platform-teams — wire Microsoft Teams to a remote Hermes (SSH-first, Bot Framework webhook)
 
 You are the engineer connecting Microsoft Teams to a self-hosted Hermes agent on the user's VPS.
 The agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI — whichever ran you) works over SSH as
-root. This skill is **source-verified against Hermes v0.22.5 only** (see "Verified against Hermes
-v0.22.5" at the end); nothing here was run against a live Hermes, Azure tenant or Teams client.
+root. This skill is **source-verified against Hermes v0.23.2 only** (see "Verified against Hermes
+v0.23.2" at the end); nothing here was run against a live Hermes, Azure tenant or Teams client.
 
 **Where commands run.** Every `bash` block below runs on the agent's LOCAL machine (possibly macOS,
 bash 3.2) and reaches the VPS through the `remote` helper from Step 0. Run all blocks in ONE shell
@@ -27,7 +27,7 @@ Teams is not headless the way Telegram is. Be explicit with the user about this 
 | The AAD object IDs for the allowlist | **Human** supplies | GUIDs from Entra ID, not e-mails or UPNs. |
 | Credential preflight (a real Microsoft token request from the VPS), writes, reload, log and health verification, optional home-channel send | **This skill** | Everything before the first write is read-only. |
 
-**What Hermes v0.22.5 does (source-verified):**
+**What Hermes v0.23.2 does (source-verified):**
 
 - Teams is a bundled platform plugin. It is enabled by credentials alone: `TEAMS_CLIENT_ID`,
   `TEAMS_CLIENT_SECRET` and `TEAMS_TENANT_ID` all set. There is **no `TEAMS_ENABLED` variable**
@@ -235,7 +235,7 @@ written.` and never calls `rollback`. Every failure AFTER `snapshot` (Steps 5-7)
 completion marker and checksums; rollback validates the whole recovery point before changing live
 files and keeps it active if restoration fails.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -258,7 +258,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 on the VPS host
+## Step 1 — verify Hermes v0.23.2 on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host, not only inside a container.
 
@@ -267,8 +267,8 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
@@ -759,7 +759,7 @@ Also delete the app registration and rotate the client secret in Entra if the cr
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Looking for a `TEAMS_ENABLED` switch | It does not exist in v0.22.5: credentials alone enable Teams, and only `platforms.teams.enabled: false` blocks it | Step 3b refuses over an explicit disable; the skill never writes `TEAMS_ENABLED` |
+| 1 | Looking for a `TEAMS_ENABLED` switch | It does not exist in v0.23.2: credentials alone enable Teams, and only `platforms.teams.enabled: false` blocks it | Step 3b refuses over an explicit disable; the skill never writes `TEAMS_ENABLED` |
 | 2 | `TEAMS_ALLOW_ALL_USERS`, `GATEWAY_ALLOW_ALL_USERS` or a `*` in `TEAMS_ALLOWED_USERS` / `GATEWAY_ALLOWED_USERS` | Anyone who can message the bot can drive it | Step 3 refuses before any write and Step 5 re-checks after it (names only) |
 | 3 | Allowlist of e-mails or UPNs | The match is an exact string compare against the sender's AAD object ID | Step 3a requires GUIDs |
 | 4 | No public HTTPS endpoint, self-signed certificate, or the proxy forwarding HTTPS to Hermes | Teams cannot deliver; the log shows `"UNKNOWN / HTTP/1.0" 400` | Human step; Step 7's URL probe is only a hint from the VPS |
@@ -782,7 +782,7 @@ Also delete the app registration and rotate the client secret in Entra if the cr
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes `0.22.5` verified on the VPS host
+- [ ] Hermes `0.23.2` verified on the VPS host
 - [ ] Idempotency scan ran (stored setup safe, or `FORCE=1`), and an unsafe stored setup aborted
 - [ ] HARD GATE passed with nothing written: GUID-only allowlist (no `*`), GUID client and tenant IDs, well-formed secret, no open-access switch, no overriding or disabling `platforms.teams` block, lazy installs allowed (or `TEAMS_SDK_PREINSTALLED=1`)
 - [ ] The live Microsoft token request from the VPS succeeded BEFORE the snapshot
@@ -794,9 +794,9 @@ Also delete the app registration and rotate the client secret in Entra if the cr
 - [ ] Any failure after the snapshot ran `rollback` and restored the prior `.env` and `config.yaml`
 - [ ] Human, outside this skill: the app is registered with the public HTTPS endpoint, installed in Teams, and an allowlisted user got a reply
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repo root.
+Read in the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repo root.
 
 - Env names and enablement: `plugins/platforms/teams/plugin.yaml` (`requires_env`, `optional_env`), `adapter.py:152-186` (`_credentials`, `validate_config`, `_env_enablement`), `adapter.py:839-858` (`register`: `required_env`, `cron_deliver_env_var="TEAMS_HOME_CHANNEL"`, `allowed_users_env="TEAMS_ALLOWED_USERS"`, `allow_all_env="TEAMS_ALLOW_ALL_USERS"`). No `TEAMS_ENABLED` anywhere. Enablement pass: `gateway/config_env.py:164-225`, `:286-297`, activation evidence `gateway/platform_activation.py:98-133`; explicit disable `gateway/config_env.py:192-194`. `extra` credentials win: `adapter.py:152-164`.
 - Transport: port 3978 and `/api/messages` `adapter.py:71,76`; `/health` route `:410`; connect and log lines `:390-441`, `"[teams] Webhook server listening"` `:436`, `"[teams] Failed to connect"` `:441`, `MISSING_SDK` / `MISSING_CREDENTIALS` `:395-398`. Plain-HTTP listener behind a TLS proxy: `website/docs/user-guide/messaging/teams.md:76,243-259`.

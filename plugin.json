@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "hstack",
   "version": "0.4.0",
-  "description": "97 SSH-first setup and operations skills for Hermes 0.22.5, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
+  "description": "97 SSH-first setup and operations skills for Hermes 0.23.2, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
   "author": {
     "name": "Paarth",
     "url": "https://github.com/paarths-collab"
@@ -27,7 +27,7 @@
       "interface": {
         "displayName": "hstack",
         "shortDescription": "Set up self-hosted Hermes",
-        "longDescription": "hstack provides 97 agent-readable procedures for installing and operating Hermes 0.22.5 over SSH, including 71 integration procedures, 8 messaging platforms and reviewable blueprints. Procedures document credential preflights, native gateway checks and scoped recovery. Source and isolated regression checks are not live vendor or gateway verification; recovery cannot undo external side effects.",
+        "longDescription": "hstack provides 97 agent-readable procedures for installing and operating Hermes 0.23.2 over SSH, including 71 integration procedures, 8 messaging platforms and reviewable blueprints. Procedures document credential preflights, native gateway checks and scoped recovery. Source and isolated regression checks are not live vendor or gateway verification; recovery cannot undo external side effects.",
         "developerName": "Paarth",
         "category": "Developer Tools",
         "capabilities": [

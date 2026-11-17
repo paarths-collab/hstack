@@ -63,12 +63,12 @@ printf 'bash %s, repo %s\n\n' "${BASH_VERSION:-?}" "$ROOT"
 # ===========================================================================
 # validate-skills.sh on generated fixtures
 # ===========================================================================
-MARKER='> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.22.5. Commands such as `gateway run --daemon` in older copies do not exist on 0.22.5; prefer /hermes-restart for reloads.'
+MARKER='> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.23.2. Commands such as `gateway run --daemon` in older copies do not exist on 0.23.2; prefer /hermes-restart for reloads.'
 VR="$TMP_BASE/vrepo"
 mkdir -p "$VR/scripts" "$VR/skills"
 cp "$VALIDATE" "$VR/scripts/validate-skills.sh"
 cat >"$VR/VERSIONS.txt" <<'EOF'
-HERMES_VERSION=0.22.5
+HERMES_VERSION=0.23.2
 SKILL_MIN_LINE_COUNT=200
 SKILL_MAX_LINE_COUNT=900
 SKILL_MIN_PITFALLS=6
@@ -165,9 +165,9 @@ mkskill fx-old-marked intro="Written for Hermes 0.15.2 only." marker=1
 v fx-old-marked
 assert_eq "(pin) the same skill WITH the exact legacy marker line passes" 0 "$RC"
 
-mkskill fx-pin-named intro="Targets Hermes 0.22.5; older copies used 0.15.2."
+mkskill fx-pin-named intro="Targets Hermes 0.23.2; older copies used 0.15.2."
 v fx-pin-named
-assert_eq "(pin) a skill that names HERMES_VERSION (0.22.5) passes" 0 "$RC"
+assert_eq "(pin) a skill that names HERMES_VERSION (0.23.2) passes" 0 "$RC"
 
 mkskill fx-other-0x intro="Works with Hermes 0.20.1."
 v fx-other-0x

@@ -2,9 +2,9 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by ../hermes, which defines H, K, CFG, ENVF, event, inject, upsert_env, gw_state, mcp_names and mcp_field)
 # Test behaviour of `hermes import ZIPFILE [--force|-f]`. NOT Hermes. Sourced by the hermes stub for the `import` command
-# ($@ starts at `import`; the global `-p default` is removed and the real v0.22.5 argparse has accepted the argv).
+# ($@ starts at `import`; the global `-p default` is removed and the real v0.23.2 argparse has accepted the argv).
 #
-# Order of checks, messages and exit codes are copied from hermes_cli/backup.py:732-912 at v0.22.5; the restore itself is a
+# Order of checks, messages and exit codes are copied from hermes_cli/backup.py:732-912 at v0.23.2; the restore itself is a
 # real extraction (python3 zipfile) over the simulated home. Assumptions (knobs under $HOME/knobs):
 #   import_corrupt   the archive is damaged: "Error: backup archive is damaged ... nothing was restored", exit 1
 #

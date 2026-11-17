@@ -8,7 +8,7 @@
 //   <root>/home/logs, knobs         what the stubs recorded / how a test makes them misbehave
 //
 // Nothing here touches the network or anything outside os.tmpdir().
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -20,6 +20,9 @@ const STUBS = path.join(here, "..", "stubs");
 export const BASH = "/bin/bash";
 
 const sha = (buf) => createHash("sha256").update(buf).digest("hex").slice(0, 16);
+// Preserve the test runner's interpreter across the simulated SSH environment's clean PATH.
+const pythonProbe = spawnSync("python3", ["-c", "import sys; print(sys.executable)"], { encoding: "utf8" });
+const parserPython = pythonProbe.status === 0 ? pythonProbe.stdout.trim() : "python3";
 
 export function installStubs(home) {
   const put = (dir, stub, as = stub) => {
@@ -41,12 +44,13 @@ export function installStubs(home) {
   // process killer: the attempt is logged (logs/local-forbidden.log) and fails.
   for (const tool of ["pkill", "killall", "pgrep"]) put(path.join(home, "remote_bin"), "forbidden", tool);
   put(path.join(home, ".local", "bin"), "hermes");
-  // The hermes stub rejects invalid invocations with the REAL v0.22.5 argparse (vendored fixture + syntax-only
+  // The hermes stub rejects invalid invocations with the REAL v0.23.2 argparse (vendored fixture + syntax-only
   // harness), so it needs to find them from the clean environment of the simulated VPS. It also sources
   // $HOME/.local/hermes.d/<command>.sh for per-command behaviour.
   mkdirSync(path.join(home, ".hstack-native"), { recursive: true });
   writeFileSync(path.join(home, ".hstack-native", "parser"), path.join(here, "native-parser.py"));
-  writeFileSync(path.join(home, ".hstack-native", "fixture"), path.join(here, "..", "fixtures", "hermes-v0.22.5"));
+  writeFileSync(path.join(home, ".hstack-native", "python"), parserPython);
+  writeFileSync(path.join(home, ".hstack-native", "fixture"), path.join(here, "..", "fixtures", "hermes-v0.23.2"));
   // Cross-sandbox cache of the (pure) argparse verdicts; see nat_parse_check in stubs/hermes.
   writeFileSync(path.join(home, ".hstack-native", "cache"), path.join(os.tmpdir(), "hstack-native-parse-cache"));
   const hd = path.join(here, "..", "stub-commands");

@@ -1,6 +1,6 @@
 ---
 name: hermes-restart
-description: "Reload or restart the Hermes gateway on a remote VPS over SSH with the native v0.22.5 lifecycle: gateway restart --detach, then gateway ensure --json until it reports a ready gateway with a new instance. Use after a config or .env change, or when the gateway is stuck or down. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
+description: "Reload or restart the Hermes gateway on a remote VPS over SSH with the native v0.23.2 lifecycle: gateway restart --detach, then gateway ensure --json until it reports a ready gateway with a new instance. Use after a config or .env change, or when the gateway is stuck or down. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
 ---
 
 # /hermes-restart — reload the gateway the native way (SSH-first)
@@ -10,7 +10,7 @@ Claude Code, Cursor, Gemini CLI — whichever ran you) is talking to a remote VP
 
 This is the user-facing skill for "reload / restart the gateway", and it documents the
 canonical lifecycle every other hstack skill uses (`gw_reload` and `gw_ready` in Step 0).
-Hermes v0.22.5 does the hard parts itself: stale pid/lock files, other profiles, drain of
+Hermes v0.23.2 does the hard parts itself: stale pid/lock files, other profiles, drain of
 live turns and the service manager are all handled by `gateway restart` and `gateway ensure`.
 This skill therefore **changes no files, deletes nothing and kills nothing**. It asks the
 native commands, reads their answer, and reports it. If they refuse, it says why; it does
@@ -21,9 +21,9 @@ not work around the refusal.
 which wraps `ssh` and puts `~/.local/bin` (where `hermes` lives) on the remote PATH. Run all
 blocks in ONE shell session: later steps call the Step 0 functions.
 
-**Honest picture.** Everything below is checked against the Hermes v0.22.5 source (see
-"Verified against Hermes v0.22.5"). Nothing was run against a real Hermes host; the offline
-tests drive these exact blocks against a stub whose command *syntax* is the real v0.22.5
+**Honest picture.** Everything below is checked against the Hermes v0.23.2 source (see
+"Verified against Hermes v0.23.2"). Nothing was run against a real Hermes host; the offline
+tests drive these exact blocks against a stub whose command *syntax* is the real v0.23.2
 argparse and whose *behaviour* is an assumption.
 
 ---
@@ -127,7 +127,7 @@ the skill reports it (Step 6).
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -136,12 +136,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was changed."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was changed."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was changed."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The `whoami; hostname` check from
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The `whoami; hostname` check from
 `CLAUDE.md` applies if you ssh in by hand: a hex hostname means you are inside a container, not on the host.
 
 ---
@@ -318,7 +318,7 @@ deleting pid/lock files. If a previous skill changed `.env`/`config.yaml` and th
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (`0.22.5`)
+- [ ] Hermes version verified on the VPS (`0.23.2`)
 - [ ] Dry-run shown to the user; user approved (or `AUTO_APPROVE=1`)
 - [ ] Live-session behaviour was explicit: refused, or interrupted only because `GW_INTERRUPT=1` was set with the user's yes
 - [ ] The service was installed only if `INSTALL_SERVICE=1` and the user said yes
@@ -329,9 +329,9 @@ deleting pid/lock files. If a previous skill changed `.env`/`config.yaml` and th
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the tagged source (`NousResearch/hermes-agent` at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`), paths relative to the repo root:
+Read in the tagged source (`NousResearch/hermes-agent` at `ae2a81ccc00e9b7c06301523e5bb09608397149c`), paths relative to the repo root:
 
 - `hermes_cli/subcommands/gateway.py:70-215`: there is no `--daemon` flag on `gateway run`; `restart` takes `--all`, `--force`, `-y/--yes/--interrupt`, `--detach`;
   `ensure` takes `--json`, `--timeout` and documents exit codes 0/2/3/4/5/6/7; `status` takes `--deep`, `--full`; `install` takes `--if-missing`,

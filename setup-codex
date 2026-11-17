@@ -356,7 +356,7 @@ Hermes deployment + 70+ integration skills. Codex can invoke any /hermes-* /plat
 /integration-* skill via SSH against a remote VPS. Every skill is SSH-first (\$VPS_IP +
 \$VPS_USER) and idempotent. See /hermes-deploy for the full end-to-end setup.
 Platforms: telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal.
-Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Target: Hermes v0.23.2 (source-verified; vendor and live gateway validation remain pending).
 Use the native catalog/MCP or installed skill route documented for each integration. Reload with
 /hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"

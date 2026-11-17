@@ -1,6 +1,6 @@
 ---
 name: integration-tally
-description: Configure Tally for Hermes v0.22.5 over SSH using native connectors or an installed local REST skill, with credential preflight, private storage and verified rollback.
+description: Configure Tally for Hermes v0.23.2 over SSH using native connectors or an installed local REST skill, with credential preflight, private storage and verified rollback.
 ---
 
 # /integration-tally — Tally on a self-hosted Hermes
@@ -9,7 +9,7 @@ Run all blocks in one local Bash session. `remote` targets the exclusive default
 
 Use the remote MCP with the tly- key; successful initialize is not proof that tools were installed. Require an enabled entry and native mcp test. Form/submission changes need user approval.
 
-Hermes interfaces are source-verified at the pinned v0.22.5 commit. Vendor endpoints and token conventions are carried forward from the previous recipe and have **not** been live-verified here. No live server, vendor credentials, Telegram or paid API was used during this migration.
+Hermes interfaces are source-verified at the pinned v0.23.2 commit. Vendor endpoints and token conventions are carried forward from the previous recipe and have **not** been live-verified here. No live server, vendor credentials, Telegram or paid API was used during this migration.
 
 ## Before you start
 
@@ -257,8 +257,8 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
@@ -637,9 +637,9 @@ Use the remote MCP with the tly- key; successful initialize is not proof that to
 - https://developers.tally.so/api-reference/mcp
 - https://tally.so/settings/api-keys
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Pinned official source: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e). Verified interfaces are `hermes_cli/subcommands/mcp.py`, `mcp_config.py` (prompt cancellation, enabled listing and connection-test exits), `mcp_catalog.py` (manifest-driven install, native OAuth and tool selection), `config_env_routing.py` (private .env settings), `skills_hub.py:956-1005` and `tools/skills_tool.py` (local SKILL.md discovery), and the gateway lifecycle sources documented by the canonical helper.
+Pinned official source: [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent/tree/ae2a81ccc00e9b7c06301523e5bb09608397149c). Verified interfaces are `hermes_cli/subcommands/mcp.py`, `mcp_config.py` (prompt cancellation, enabled listing and connection-test exits), `mcp_catalog.py` (manifest-driven install, native OAuth and tool selection), `config_env_routing.py` (private .env settings), `skills_hub.py:956-1005` and `tools/skills_tool.py` (local SKILL.md discovery), and the gateway lifecycle sources documented by the canonical helper.
 
 **Not verified live:** vendor API/package behavior, real host service management, browser consent, paid operations, and chat-turn use of this skill. Offline sandbox checks execute these snippets and the installed client with fake endpoints; native parser fixtures prove CLI syntax only.
 

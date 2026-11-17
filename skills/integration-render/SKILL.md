@@ -1,11 +1,11 @@
 ---
 name: integration-render
-description: Set up render on a host-installed Hermes 0.22.5 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
+description: Set up render on a host-installed Hermes 0.23.2 default profile over SSH, with read-only credential preflight, native integration commands and verified recovery.
 ---
 
 # /integration-render — connect render to Hermes over SSH
 
-> **Compatibility:** source-verified for Hermes **0.22.5**, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
+> **Compatibility:** source-verified for Hermes **0.23.2**, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`. Host-installed default profile only. Vendor live validation is pending; source and sandbox tests do not prove a live connection.
 
 ## Before you start — gather (ask once, in one batch)
 
@@ -217,8 +217,8 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || exit 1
   hermes -p default --version
 ') || { echo "ABORT: install Hermes on the VPS host first; container-only installations are unsupported. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure supports Hermes 0.22.5 only. Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure supports Hermes 0.23.2 only. Nothing was written."; exit 1;
 }
 remote 'command -v curl >/dev/null && command -v python3 >/dev/null' || {
   echo "ABORT: install curl and python3 on the host first. Nothing was written."; exit 1;
@@ -328,7 +328,7 @@ snapshot: rollback does not revoke tokens or overwrite an existing OAuth authori
 
 | # | Pitfall | Correct behavior |
 |---|---------|------------------|
-| 1 | Wrong Hermes release or profile | Exact 0.22.5 host/default gate before writes; other installations need a separately reviewed procedure. |
+| 1 | Wrong Hermes release or profile | Exact 0.23.2 host/default gate before writes; other installations need a separately reviewed procedure. |
 | 2 | Treating exit 0 from `mcp add`/login as connection proof | Require an enabled entry plus `mcp test`; cancellation and a saved disabled entry do not count. |
 | 3 | Putting secrets into SSH arguments or YAML | Send values as stdin, keep `.env` private and use variable references. |
 | 4 | Using a missing background flag or log substring as health | Use the shared restart/ensure helpers and require a changed instance ID. |
@@ -341,7 +341,7 @@ snapshot: rollback does not revoke tokens or overwrite an existing OAuth authori
 
 ## Definition of done
 
-- [ ] Hermes 0.22.5 host/default release verified before configuration changes.
+- [ ] Hermes 0.23.2 host/default release verified before configuration changes.
 - [ ] Read-only vendor credential and consent gates passed from the target host.
 - [ ] Private credentials written over stdin with mode 600; config uses references.
 - [ ] Native catalog/custom MCP is enabled and passes `mcp test`, or the real runtime skill is discoverable.

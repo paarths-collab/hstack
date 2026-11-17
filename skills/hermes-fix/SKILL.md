@@ -1,6 +1,6 @@
 ---
 name: hermes-fix
-description: "Diagnose and repair a broken self-hosted Hermes v0.22.5 over SSH, starting from hermes doctor: gateway down or wedged, bot silent, model or tool errors, PATH, Docker UID, memory growth. Repairs are consent-gated, snapshot-backed and reload only through the native gateway lifecycle. Use when Hermes is broken. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
+description: "Diagnose and repair a broken self-hosted Hermes v0.23.2 over SSH, starting from hermes doctor: gateway down or wedged, bot silent, model or tool errors, PATH, Docker UID, memory growth. Repairs are consent-gated, snapshot-backed and reload only through the native gateway lifecycle. Use when Hermes is broken. Works from any AI agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI)."
 ---
 
 # /hermes-fix — diagnose first, repair with consent (SSH-first)
@@ -15,12 +15,12 @@ Do everything autonomously that is safe; stop for the things a machine must not 
 the `remote` helper from Step 0, which wraps `ssh` and puts `~/.local/bin` (where `hermes` lives) on the remote PATH. Secrets travel to the
 VPS only over ssh STDIN. Run all blocks in ONE shell session: later steps call the Step 0 functions.
 
-**Honest picture (Hermes v0.22.5).** `hermes doctor` is the first tool, and its exit status is meaningful: it is **1 when issues remain**
+**Honest picture (Hermes v0.23.2).** `hermes doctor` is the first tool, and its exit status is meaningful: it is **1 when issues remain**
 and 0 when it found none (`hermes_cli/doctor.py:172-194`, forwarded by `hermes_cli/main.py:1837,3550-3554`). It checks configuration,
 credentials, providers (it opens outbound connections to each configured one), tool availability, state files and the gateway *service*
 setup (linger). It does **not** check that a gateway is running or that the bot answers. `gateway status` text is shown as information
-only: `✗ Gateway is not running` contains the word `running`. Everything below is checked against the v0.22.5 source (see "Verified
-against Hermes v0.22.5"); nothing was run against a real host.
+only: `✗ Gateway is not running` contains the word `running`. Everything below is checked against the v0.23.2 source (see "Verified
+against Hermes v0.23.2"); nothing was run against a real host.
 
 `hermes doctor --fix` is **not** a harmless tidy-up. It can create `.env`, migrate `config.yaml`, remove a stale `HERMES_MAX_ITERATIONS`
 from `.env`, repair a malformed `state.db` (with a backup beside it), checkpoint a large WAL and recreate the `~/.local/bin/hermes`
@@ -217,7 +217,7 @@ Rules for calling them (every skill follows these):
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -226,12 +226,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "DIAGNOSED: hermes is not reachable even with ~/.local/bin on PATH. Reinstall with /hermes-install. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5`. A host where `hermes` runs only after `~/.local/bin` is added to PATH (plain `ssh host hermes` fails,
+Expected: a banner naming Hermes `0.23.2`. A host where `hermes` runs only after `~/.local/bin` is added to PATH (plain `ssh host hermes` fails,
 `remote` works) is the `command-not-found` case: see Fix A in Step 5.
 
 ---
@@ -450,7 +450,7 @@ This skill never writes a provider key.
 
 ### Fix E — `tools`: a tool backend reports a missing variable, or an auxiliary task silently uses the main model
 
-At v0.22.5 an auxiliary task set to `auto` uses the main chat model, and web extraction is not an auxiliary task at all
+At v0.23.2 an auxiliary task set to `auto` uses the main chat model, and web extraction is not an auxiliary task at all
 (`website/docs/user-guide/configuration.md`, "Auxiliary Models"), so "add the auxiliary provider key" is no longer the usual cure. Read the
 doctor rows first: **Tool Availability** lists `(missing VARIABLE)` per toolset, and the config check reports an explicitly routed
 `auxiliary.<task>.provider` that does not resolve ("the task silently runs on the main model",
@@ -495,9 +495,9 @@ fi
 ```
 
 The old copy of this skill installed a root crontab entry that ran `gateway stop` at 04:00 and then started the gateway with a `--daemon` flag. That is removed, not
-replaced: the `--daemon` flag does not exist (argparse rejects it, exit 2), so the job would stop the gateway every night and fail to start it, and v0.22.5's own cron
+replaced: the `--daemon` flag does not exist (argparse rejects it, exit 2), so the job would stop the gateway every night and fail to start it, and v0.23.2's own cron
 refuses jobs that restart or stop the gateway (`cron/lifecycle_guard.py:30-67`, enforced by `cron.jobs.create_job`) because that loops. No
-scheduled restart is offered at all. What v0.22.5 gives instead:
+scheduled restart is offered at all. What v0.23.2 gives instead:
 
 - The installed service (`hermes gateway install`, or `INSTALL_SERVICE=1` in `/hermes-restart`) runs the gateway under a unit with `Restart=always` and `RestartSec=5`
   (`hermes_cli/gateway.py:3262-3290`), so a gateway killed by the OOM killer returns in about five seconds. Without a service nothing brings it back: `gateway ensure` or
@@ -509,7 +509,7 @@ scheduled restart is offered at all. What v0.22.5 gives instead:
 - `gateway status` appends "Recent gateway health" warnings (stale heartbeat, wedged loop, startup failure) when the gateway's state file says so
   (`hermes_cli/gateway.py:4698-4750`).
 
-This skill found no source evidence at v0.22.5 for or against a particular memory-growth bug, so it states none. If RSS keeps growing, record the
+This skill found no source evidence at v0.23.2 for or against a particular memory-growth bug, so it states none. If RSS keeps growing, record the
 numbers above over time and tell the user; a planned `/hermes-restart` is the stop-gap.
 
 ### Fix G — `docker-chown`: `chown ... not permitted` in a container
@@ -626,7 +626,7 @@ longer need the undo.
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (`0.22.5`)
+- [ ] Hermes version verified on the VPS (`0.23.2`)
 - [ ] `hermes doctor` was the first diagnostic; its output and exit status were shown; gateway status text was shown as information only
 - [ ] A clean doctor report with no symptom ended the run early without claiming the gateway healthy
 - [ ] Dry run shown; user approved (or `AUTO_APPROVE=1`); `doctor --fix` ran only with `ALLOW_DOCTOR_FIX=1`
@@ -638,9 +638,9 @@ longer need the undo.
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the tagged source (`NousResearch/hermes-agent` at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`), paths relative to the repo root:
+Read in the tagged source (`NousResearch/hermes-agent` at `ae2a81ccc00e9b7c06301523e5bb09608397149c`), paths relative to the repo root:
 
 - `hermes_cli/subcommands/doctor.py:10-25` (`--fix`, `--live`, `--ack`), `hermes_cli/doctor.py:148-166,172-194` (summary and exit status),
   `hermes_cli/main.py:1837,3550-3554` (the status is forwarded as the process exit code).
@@ -657,6 +657,6 @@ Read in the tagged source (`NousResearch/hermes-agent` at `bf0203a794a07aac3ff76
 
 Not verified: nothing was run against a real Hermes host, a real Docker container or a real provider. Upstream issue numbers quoted by the old copy of this skill
 (a "not configured" cosmetic row, an RSS leak, a Docker image tag) could not be confirmed or refuted from the tagged source and are not repeated. The stub the tests use reproduces the command
-syntax of v0.22.5 but invents behaviour.
+syntax of v0.23.2 but invents behaviour.
 
 See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for the full symptom -> cause -> fix catalogue.

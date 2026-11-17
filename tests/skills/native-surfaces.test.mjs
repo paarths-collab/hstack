@@ -8,7 +8,7 @@ import { it } from "node:test";
 import { REPO_ROOT, loadBlocks } from "./helpers/blocks.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixture = path.join(here, "fixtures/hermes-v0.22.5");
+const fixture = path.join(here, "fixtures/hermes-v0.23.2");
 const provenance = JSON.parse(readFileSync(path.join(fixture, "provenance.json"), "utf8"));
 
 it("exact tagged syntax fixtures and installer are bound to the single supported target in VERSIONS.txt", () => {
@@ -31,12 +31,12 @@ it("exact tagged syntax fixtures and installer are bound to the single supported
   for (const skill of ["hermes-install", "hermes-update", "hermes-deploy", "hermes-memory"]) {
     const text = readFileSync(path.join(REPO_ROOT, `skills/${skill}/SKILL.md`), "utf8");
     assert.doesNotMatch(text, /CANDIDATE_ACKNOWLEDGED|compatibility candidate|unpromoted/i, `${skill}: the opt-in framing is retired`);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/, skill);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/, skill);
     assert.match(text, /not live-verified|source-verified/i, `${skill}: says honestly that nothing was run live`);
   }
 });
 
-it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/memory/update assumptions", () => {
+it("actual v0.23.2 parsers accept migrated commands and reject retired daemon/memory/update assumptions", () => {
   const accepted = [
     ["gateway", "stop"], ["gateway", "start"],
     ["gateway", "ensure", "--json", "--timeout", "60"],
@@ -60,7 +60,7 @@ it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/me
   const rejected = [
     ["gateway", "run", "--daemon"], ["gateway", "ensure", "--daemon"],
     ["memory", "write", "--note", "test"], ["memory", "search", "test"],
-    ["update", "--version", "0.22.5"], ["model", "--provider", "openrouter"],
+    ["update", "--version", "0.23.2"], ["model", "--provider", "openrouter"],
     ["setup", "--portal", "--no-browser"],
     ["backup", "--keep", "-1"],
     ["plugins", "install", "mem0", "--yes-deps", "--no-deps"],
@@ -77,7 +77,7 @@ it("actual v0.22.5 parsers accept migrated commands and reject retired daemon/me
   }
 });
 
-it("actual immutable installer accepts the v0.22.5 flags before help and refuses unsupported arguments without running stages", () => {
+it("actual immutable installer accepts the v0.23.2 flags before help and refuses unsupported arguments without running stages", () => {
   const r = spawnSync("/bin/bash", [path.join(fixture, "install.sh"), "--commit", provenance.commit, "--channel", "stable", "--non-interactive", "--skip-browser", "--skip-computer-use", "--help"], { encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /--commit SHA/);

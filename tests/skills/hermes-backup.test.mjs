@@ -1,5 +1,5 @@
 // hermes-backup: the real SKILL.md blocks run against a simulated VPS whose `hermes backup` / `hermes import` stubs are
-// built from hermes_cli/backup.py at v0.22.5 (tests/skills/stub-commands/{backup,import}.sh). The skill must use the native
+// built from hermes_cli/backup.py at v0.23.2 (tests/skills/stub-commands/{backup,import}.sh). The skill must use the native
 // commands (SQLite-safe zip, native `-k` retention, `import --force`), keep the archive private (umask 077, dir 700), verify
 // it, and never restore without an explicit gate plus a safety backup. Behaviour of the stubs is an assumption written from the
 // source; the argparse that checks every call is the real one.
@@ -210,10 +210,10 @@ describe("hermes-backup: inputs are validated locally before anything is written
       assert.match(run.out, /ABORT: SSH/);
     });
   });
-  it("a Hermes that is not 0.22.5 stops the procedure before any native call", async () => {
+  it("a Hermes that is not 0.23.2 stops the procedure before any native call", async () => {
     await scenario({ name: "bk-ver", seed: SEED, files: { "hermes.version": "hermes 0.17.1\n" }, script: backupFlow() }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /ABORT: .*0\.22\.5/);
+      assert.match(run.out, /ABORT: .*0\.23\.2/);
       noRemoteWrites(run);
     });
   });
@@ -411,7 +411,7 @@ describe("hermes-backup: static facts about the text", () => {
     assert.match(text, /state-snapshots/);
   });
   it("cites the source it was verified against and says what was not run", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/backup\.py:\d+/);
     assert.match(text, /\*\*Not verified:\*\*[\s\S]*real Hermes/);
   });

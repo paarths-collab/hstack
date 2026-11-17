@@ -1,7 +1,7 @@
 #!/bin/bash
 # shellcheck shell=bash
 # event and inject are defined by the sourcing tests/skills/stubs/hermes script.
-# Test behaviour of `hermes pairing list` (hermes_cli/pairing.py:22-53 at v0.22.5). Sourced by the hermes stub; $@ starts at the
+# Test behaviour of `hermes pairing list` (hermes_cli/pairing.py:22-53 at v0.23.2). Sourced by the hermes stub; $@ starts at the
 # command (-p already removed). The SYNTAX is checked by the real vendored argparse before this runs; the BEHAVIOUR is an assumption
 # written from the source's output strings: with nothing paired it prints "No pairing data found. No one has tried to pair yet~"
 # (pairing.py:27); otherwise the test supplies the exact text in $HOME/pairing.out. Only the read-only `list` action is modelled:

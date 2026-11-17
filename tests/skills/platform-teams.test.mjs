@@ -1,6 +1,6 @@
 // platform-teams: the real SKILL.md blocks against a simulated VPS (helpers/sandbox.mjs).
 //
-// What is real here: the bash of the skill, the argparse syntax of every `hermes` call (vendored v0.22.5 builders), the ssh/stdin
+// What is real here: the bash of the skill, the argparse syntax of every `hermes` call (vendored v0.23.2 builders), the ssh/stdin
 // plumbing. What is assumed: how the stubbed Hermes, curl and the Microsoft identity platform BEHAVE (each stub says so in its header).
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -186,10 +186,10 @@ describe("platform-teams: good run", { concurrency: 6 }, () => {
     });
   });
 
-  it("a Hermes that is not 0.22.5 is refused before anything", async () => {
+  it("a Hermes that is not 0.23.2 is refused before anything", async () => {
     await run1({ name: "teams-ver", files: { "hermes.version": "hermes 0.17.2\n", "logs.txt": GOOD_LOGS } }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /source-verified for Hermes 0.22.5 only/);
+      assert.match(run.out, /source-verified for Hermes 0.23.2 only/);
       assertStateIdentical(run);
       assert.equal(run.sb.curlCalls().length, 0);
     });
@@ -529,12 +529,12 @@ describe("platform-teams: text-level guarantees", () => {
   const blocks = loadBlocks(SKILL);
   const codeLines = blocks.flatMap((b) => b.code.split("\n").filter((l) => !/^\s*#/.test(l)));
 
-  it("names the human steps and the v0.22.5 facts the legacy text got wrong", () => {
+  it("names the human steps and the v0.23.2 facts the legacy text got wrong", () => {
     assert.match(text, /\*\*Human\*\*/);
     assert.match(text, /public HTTPS endpoint/);
     assert.match(text, /There is \*\*no `TEAMS_ENABLED` variable\*\*/);
     assert.match(text, /default is \*\*deny\*\*/);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /plugins\/platforms\/teams\/adapter\.py/);
     assert.match(text, /\*\*Not verified:\*\*/);
   });

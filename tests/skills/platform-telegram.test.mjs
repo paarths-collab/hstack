@@ -54,7 +54,7 @@ describe("platform-telegram: good run", { concurrency: 6 }, () => {
       assert.match(run.sb.read(".hermes/config.yaml"), /^platforms\.telegram\.enabled: true$/m);
       assert.ok(!run.sb.read(".hermes/config.yaml").includes(GOOD));
       // gateway: ONE native reload (probe ensure, restart --detach, ensure until ready). No stop, no foreground run, and no second
-      // "nudge" cycle: the retired folk-lore cycle has no basis in the v0.22.5 adapter source.
+      // "nudge" cycle: the retired folk-lore cycle has no basis in the v0.23.2 adapter source.
       assert.deepEqual(gwEvents(run), ["hermes gateway ensure", "hermes gateway restart", "hermes gateway ensure"]);
       assert.ok(run.sb.hermesCalls().some((c) => c.join(" ") === "gateway restart --detach"), "restart must be detached");
       assert.ok(!run.sb.hermesCalls().some((c) => c.some((x) => ["-y", "--yes", "--force", "--all", "--interrupt"].includes(x))), "no interruption flag by default");
@@ -104,13 +104,13 @@ describe("platform-telegram: good run", { concurrency: 6 }, () => {
     });
   });
 
-  it("Step 1 is a version gate: a banner that does not name 0.22.5 aborts with nothing written and no vendor call", async () => {
+  it("Step 1 is a version gate: a banner that does not name 0.23.2 aborts with nothing written and no vendor call", async () => {
     await scenario({
       name: "tg-version", valid: [GOOD], script: flow(), env: env(),
-      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.22.5"', 'echo "hermes 0.22.4"'), 0o755),
+      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.23.2"', 'echo "hermes 0.22.4"'), 0o755),
     }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /ABORT: .*0\.22\.5 only \(got: hermes 0\.22\.4\)\. Nothing was written/);
+      assert.match(run.out, /ABORT: .*0\.23\.2 only \(got: hermes 0\.22\.4\)\. Nothing was written/);
       assert.deepEqual(writeEvents(run), []);
       assert.equal(run.sb.curlCalls().length, 0);
       assertStateIdentical(run);
@@ -120,7 +120,7 @@ describe("platform-telegram: good run", { concurrency: 6 }, () => {
   it("CONTROL: the stub replacement used by the version-gate test really changes the banner", async () => {
     await scenario({
       name: "tg-version-ctl", script: "export PATH=\"$HOME/.local/bin:$PATH\"; hermes -p default --version\n",
-      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.22.5"', 'echo "hermes 0.22.4"'), 0o755),
+      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.23.2"', 'echo "hermes 0.22.4"'), 0o755),
     }, async (run) => {
       assert.match(run.out, /0\.22\.4/);
     });
@@ -521,8 +521,8 @@ describe("platform-telegram: tg_username", { concurrency: 4 }, () => {
 
 describe("platform-telegram: skill text states what is verified and what is not", () => {
   const text = readFileSync(skillPath(SKILL), "utf8");
-  it("has a 'Verified against Hermes v0.22.5' section with file:line citations for the env bridge, authorization and send", () => {
-    const m = /\n## Verified against Hermes v0\.22\.5\n([\s\S]*?)(\n## |\n---\n|$)/.exec(text);
+  it("has a 'Verified against Hermes v0.23.2' section with file:line citations for the env bridge, authorization and send", () => {
+    const m = /\n## Verified against Hermes v0\.23\.2\n([\s\S]*?)(\n## |\n---\n|$)/.exec(text);
     assert.ok(m, "missing section");
     for (const cite of [/plugins\/platforms\/telegram\/gateway_env\.py:\d+/, /plugins\/platforms\/telegram\/adapter\.py:\d+/, /gateway\/authz_mixin\.py:\d+/, /hermes_cli\/send_cmd\.py:\d+/, /hermes_cli\/config\.py:\d+/]) {
       assert.match(m[1], cite);
@@ -530,7 +530,7 @@ describe("platform-telegram: skill text states what is verified and what is not"
     assert.match(m[1], /not (been )?(run|verified) against a (live|real)|source-verified|Unverified/i, "must say what was not run");
   });
   it("carries no candidate / unpromoted framing and no retired gate", () => {
-    assert.doesNotMatch(text, /candidate|unpromoted|CANDIDATE_ACKNOWLEDGED|HERMES_VERSION=0\.22\.5 explicit/i);
+    assert.doesNotMatch(text, /candidate|unpromoted|CANDIDATE_ACKNOWLEDGED|HERMES_VERSION=0\.23\.2 explicit/i);
   });
   it("explains why the post-setup nudge was dropped instead of silently removing it", () => {
     assert.match(text, /nudge[\s\S]{0,400}(dropped|removed|no longer)/i);

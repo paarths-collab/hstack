@@ -1,6 +1,6 @@
 // hermes-install: the version gate, the exact installer invocation, and the Step 4 verification gate (pm doctor gates, hermes doctor is
 // reported but not fatal). The installer itself is never executed: a `bash` shim on the simulated VPS records the argv/env of the
-// installer invocation, and the recorded flags are then replayed against the REAL v0.22.5 installer (vendored, sha-pinned) with --help.
+// installer invocation, and the recorded flags are then replayed against the REAL v0.23.2 installer (vendored, sha-pinned) with --help.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
@@ -13,7 +13,7 @@ import { REPO_ROOT, assemble, loadBlocks } from "./helpers/blocks.mjs";
 import { SCRIPT_END, scenario } from "./helpers/sandbox.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const fixture = path.join(here, "fixtures/hermes-v0.22.5");
+const fixture = path.join(here, "fixtures/hermes-v0.23.2");
 const provenance = JSON.parse(readFileSync(path.join(fixture, "provenance.json"), "utf8"));
 const COMMIT = provenance.commit;
 const seed = { env: "PUBLIC_FIXTURE=keep\n", config: "model.default: prior/model\n" };
@@ -42,7 +42,7 @@ esac
 }
 
 /** Make Step 4 pass its identity checks: the git checkout reports the pinned commit, hermes reports `banner`. */
-function installedHost(sb, banner = "Hermes Agent v0.22.5 (2026.10.1)") {
+function installedHost(sb, banner = "Hermes Agent v0.23.2 (2026.10.1)") {
   sb.write("hermes.version", `${banner}\n`);
   sb.write("remote_bin/git", `#!/bin/bash\ncase "$*" in *rev-parse*) echo ${COMMIT} ;; *) exit 0 ;; esac\n`, 0o755);
   sb.write(".hermes/hermes-agent/.git/fixture", "present");
@@ -50,11 +50,11 @@ function installedHost(sb, banner = "Hermes Agent v0.22.5 (2026.10.1)") {
 
 describe("hermes-install: Step 0 version gate", { concurrency: 6 }, () => {
   const step0 = run([blocks("step0#1")]);
-  for (const v of ["0.15.2", "0.21.6", "0.23.0", "10.22.5", "0.22.50", "v0.22.5", "0.22.5 "]) {
+  for (const v of ["0.15.2", "0.21.6", "0.23.0", "10.23.2", "0.23.20", "v0.23.2", "0.23.2 "]) {
     it(`refuses HERMES_VERSION=${JSON.stringify(v)} before any remote call`, async () => {
       await scenario({ name: "inst-ver", seed, script: step0, env: { HERMES_VERSION: v } }, async (r) => {
         assert.equal(r.code, 1, r.out);
-        assert.match(r.out, /ABORT: .*0\.22\.5/);
+        assert.match(r.out, /ABORT: .*0\.23\.2/);
         assert.match(r.out, /Nothing was written/);
         assert.equal(r.sb.sshCalls().length, 0);
         assertStateIdentical(r);
@@ -62,7 +62,7 @@ describe("hermes-install: Step 0 version gate", { concurrency: 6 }, () => {
     });
   }
 
-  for (const env of [{}, { HERMES_VERSION: "0.22.5" }, { HERMES_VERSION: "" }]) {
+  for (const env of [{}, { HERMES_VERSION: "0.23.2" }, { HERMES_VERSION: "" }]) {
     it(`accepts ${JSON.stringify(env)} and goes on to check SSH (no CANDIDATE_ACKNOWLEDGED needed)`, async () => {
       await scenario({ name: "inst-ver-ok", seed, script: step0, env }, async (r) => {
         assert.equal(r.code, 0, r.out);
@@ -84,8 +84,8 @@ describe("hermes-install: Step 0 version gate", { concurrency: 6 }, () => {
 describe("hermes-install: Step 3 runs the pinned installer with the verified flags", { concurrency: 6 }, () => {
   const flow = run([blocks("step0#1", "step1#1", "step3#1")]);
 
-  it("downloads, checks the SHA-256, then runs it with exactly the v0.22.5 flags; the flags are accepted by the real installer", async () => {
-    await scenario({ name: "inst-flow", seed, script: flow, env: { HERMES_VERSION: "0.22.5" }, setup: (sb) => { freshHost(sb); installerShims(sb); } }, async (r) => {
+  it("downloads, checks the SHA-256, then runs it with exactly the v0.23.2 flags; the flags are accepted by the real installer", async () => {
+    await scenario({ name: "inst-flow", seed, script: flow, env: { HERMES_VERSION: "0.23.2" }, setup: (sb) => { freshHost(sb); installerShims(sb); } }, async (r) => {
       assert.equal(r.code, 0, r.out);
       const log = r.sb.log("installer.log");
       const argv = /^argv:(.*)$/m.exec(log)[1].trim().split(/\s+/);
@@ -107,7 +107,7 @@ describe("hermes-install: Step 3 runs the pinned installer with the verified fla
       freshHost(sb); installerShims(sb);
       sb.write("remote_bin/curl", `#!/bin/bash\nout=""\nwhile [ $# -gt 0 ]; do if [ "$1" = -o ]; then shift; out="$1"; fi; shift; done\nprintf 'echo tampered\\n' > "$out"\n`, 0o755);
     };
-    await scenario({ name: "inst-sha", seed, script: flow, env: { HERMES_VERSION: "0.22.5" }, setup: tampered }, async (r) => {
+    await scenario({ name: "inst-sha", seed, script: flow, env: { HERMES_VERSION: "0.23.2" }, setup: tampered }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /FAIL: installation incomplete/);
       assert.equal(r.sb.log("installer.log"), "");
@@ -116,7 +116,7 @@ describe("hermes-install: Step 3 runs the pinned installer with the verified fla
   });
 
   it("an installer that fails leaves the host untouched by this skill and says to preserve ~/.hermes", async () => {
-    await scenario({ name: "inst-fail", seed, script: flow, env: { HERMES_VERSION: "0.22.5" }, setup: (sb) => { freshHost(sb); installerShims(sb, { installerExit: 1 }); } }, async (r) => {
+    await scenario({ name: "inst-fail", seed, script: flow, env: { HERMES_VERSION: "0.23.2" }, setup: (sb) => { freshHost(sb); installerShims(sb, { installerExit: 1 }); } }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /Preserve ~\/\.hermes/);
       assertStateIdentical(r);
@@ -124,7 +124,7 @@ describe("hermes-install: Step 3 runs the pinned installer with the verified fla
   });
 
   it("an existing launcher is refused before any download (user state preserved)", async () => {
-    await scenario({ name: "inst-exists", seed, script: flow, env: { HERMES_VERSION: "0.22.5" }, setup: (sb) => installerShims(sb) }, async (r) => {
+    await scenario({ name: "inst-exists", seed, script: flow, env: { HERMES_VERSION: "0.23.2" }, setup: (sb) => installerShims(sb) }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /installation already exists/);
       assert.equal(r.sb.log("installer.log"), "");
@@ -137,10 +137,10 @@ describe("hermes-install: Step 3 runs the pinned installer with the verified fla
 describe("hermes-install: Step 4 verification", { concurrency: 6 }, () => {
   const gate = run([blocks("step0#1", "step4#1")]);
   const all = run([blocks("step0#1", "step4#1", "step4#2")]);
-  const env = { HERMES_VERSION: "0.22.5" };
+  const env = { HERMES_VERSION: "0.23.2" };
   const calls = (r) => r.sb.hermesCalls().map((c) => c.join(" "));
 
-  it("passes on the pinned commit, a 0.22.5 banner and a healthy pm; every native call is bound to -p default", async () => {
+  it("passes on the pinned commit, a 0.23.2 banner and a healthy pm; every native call is bound to -p default", async () => {
     await scenario({ name: "inst-v4", seed, script: gate, env, setup: (sb) => installedHost(sb) }, async (r) => {
       assert.equal(r.code, 0, r.out);
       assert.ok(calls(r).includes("pm doctor"), calls(r).join(" | "));
@@ -150,7 +150,7 @@ describe("hermes-install: Step 4 verification", { concurrency: 6 }, () => {
     });
   });
 
-  for (const banner of ["Hermes Agent v0.21.6 (2026.9.1)", "hermes 0.15.2", "Hermes Agent v0.22.50", "Hermes Agent v10.22.5"]) {
+  for (const banner of ["Hermes Agent v0.21.6 (2026.9.1)", "hermes 0.15.2", "Hermes Agent v0.23.20", "Hermes Agent v10.23.2"]) {
     it(`a ${JSON.stringify(banner)} banner fails the gate`, async () => {
       await scenario({ name: "inst-v4-bad", seed, script: gate, env, setup: (sb) => installedHost(sb, banner) }, async (r) => {
         assert.equal(r.code, 1, r.out);
@@ -207,7 +207,7 @@ describe("hermes-install: text invariants", () => {
     assert.doesNotMatch(text, /CANDIDATE_ACKNOWLEDGED|compatibility candidate|opt-in|unpromoted/i);
     assert.doesNotMatch(code, /pip install|\/main\/scripts\/install|CANDIDATE/);
     assert.match(text, /source-verified/i);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
   });
 
   it("pins the commit and installer digest from VERSIONS.txt", () => {

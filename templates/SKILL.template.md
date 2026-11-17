@@ -206,7 +206,7 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -228,7 +228,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -237,12 +237,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -492,7 +492,7 @@ If your Hermes build keeps MCP registrations outside `config.yaml`, also run
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on VPS (exact pinned 0.22.5 target)
+- [ ] Hermes version verified on VPS (exact pinned 0.23.2 target)
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] HARD GATE passed: credential format OK and the live vendor preflight returned `200` BEFORE any write
 - [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)

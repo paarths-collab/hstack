@@ -1,7 +1,7 @@
 # Hermes compatibility
 
-hstack targets **Hermes 0.22.5**, pinned in [VERSIONS.txt](../VERSIONS.txt) to
-commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e` with an immutable, hash-checked
+hstack targets **Hermes 0.23.2**, pinned in [VERSIONS.txt](../VERSIONS.txt) to
+commit `ae2a81ccc00e9b7c06301523e5bb09608397149c` with an immutable, hash-checked
 installer. The catalogue is **source-verified, not live-verified**. See the
 [machine-readable record](hermes.json), [migration notes](MIGRATION.md) and
 [validation evidence](VALIDATION.md).
@@ -41,6 +41,11 @@ private test delivery, restart, an injected failure and recovery, and preservati
 of unrelated state. Explicit review is required. Never commit credentials, private
 chat identifiers, recordings or local paths as evidence.
 
+The 17 November 2026 reference-target refresh to 0.23.2 is an explicitly
+authorized, one-time exception for a source-verified target after tagged interface,
+installer and regression checks. It does not waive the live-verification gate or
+authorize automatic future pin changes.
+
 ## Upstream review
 
 For a new official release, compare tagged source and release notes with the
@@ -51,6 +56,6 @@ and tests before changing the pin. Source review alone cannot promote a release.
 The recurring compatibility check may prepare local changes; it does not commit,
 push, deploy, use live credentials or promote releases automatically.
 
-Official sources: [release](https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5),
-[gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/gateway.py),
-[cron CLI](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/cron.py).
+Official sources: [release](https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.2),
+[gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/gateway.py),
+[cron CLI](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/cron.py).

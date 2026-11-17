@@ -1,6 +1,6 @@
 ---
 name: hermes-soul
-description: Give a self-hosted Hermes v0.22.5 agent a name and personality by writing ~/.hermes/SOUL.md directly over SSH. Backs up the previous file, needs no gateway reload (new sessions read it from disk), and checks the result with a one-shot native call. Use when setting or updating the agent's identity. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Give a self-hosted Hermes v0.23.2 agent a name and personality by writing ~/.hermes/SOUL.md directly over SSH. Backs up the previous file, needs no gateway reload (new sessions read it from disk), and checks the result with a one-shot native call. Use when setting or updating the agent's identity. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
 # /hermes-soul — set the agent's name + personality (SSH-first)
@@ -15,7 +15,7 @@ remote PATH. Run all blocks in ONE shell session: later steps call the Step 0 fu
 Do everything autonomously; stop only for the one thing a machine cannot do: pick a name and a vibe for the agent (or
 supply the user's own SOUL.md).
 
-**How SOUL.md works in Hermes v0.22.5 (read from source).**
+**How SOUL.md works in Hermes v0.23.2 (read from source).**
 
 - **Where and what.** `<Hermes home>/SOUL.md` (`~/.hermes/SOUL.md` for the default profile) is the first slot of the
   system prompt, in place of the built-in "You are Hermes Agent, built by Nous Research..." identity. Missing, empty or
@@ -180,7 +180,7 @@ REMOTE
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -189,13 +189,13 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
-against the v0.22.5 source; it has not been run against a live host. `~/.hermes` is the Hermes home of a host install; for a
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked
+against the v0.23.2 source; it has not been run against a live host. `~/.hermes` is the Hermes home of a host install; for a
 Docker deployment the same file lives in the container's data volume (`/opt/data/SOUL.md`), so run `whoami; hostname` once: a
 hex hostname means you are inside a container.
 
@@ -256,7 +256,7 @@ fi
 ```bash
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
-  0. (already passed) inputs validated, Hermes 0.22.5 confirmed, nothing written yet
+  0. (already passed) inputs validated, Hermes 0.23.2 confirmed, nothing written yet
   1. Copy the current ~/.hermes/SOUL.md (${EXISTING:-0} bytes, or none) to ~/.hermes/.hstack-backup/hermes-soul
   2. Write ~/.hermes/SOUL.md: ${#CONTENT} characters${AGENT_NAME:+, agent name $AGENT_NAME}${SOUL_FILE:+ (from your SOUL_FILE)}
   3. Verify it byte for byte and that it is readable
@@ -368,7 +368,7 @@ Open chats keep the identity they started with either way; use `/new` to see the
 
 ## Definition of done
 
-- [ ] SSH confirmed; Hermes banner names `0.22.5`
+- [ ] SSH confirmed; Hermes banner names `0.23.2`
 - [ ] Inputs validated locally (name, style or `SOUL_FILE`); a different existing SOUL.md was only replaced with `FORCE=1`
 - [ ] Dry run shown; user approved (or `AUTO_APPROVE=1`)
 - [ ] `~/.hermes/SOUL.md` backed up by `soul_snapshot` before the write, then written over stdin
@@ -379,9 +379,9 @@ Open chats keep the identity they started with either way; use `/new` to see the
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read from the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the
+Read from the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the
 repository root of that tag.
 
 - `load_soul_md` reads `<home>/SOUL.md` from disk, strips it, scans it (own file: warn only; distribution-owned: block) and

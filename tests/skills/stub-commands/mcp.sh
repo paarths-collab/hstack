@@ -3,15 +3,15 @@
 # (sourced by ../hermes, which defines H, K, CFG, ENVF, event, inject, upsert_env, gw_state, mcp_names and mcp_field)
 # Test behaviour of the `hermes mcp` subcommands the main stub does not model itself: catalog, picker, install, login, reauth,
 # configure. NOT Hermes. Sourced by the hermes stub from its `mcp)` branch ($@ starts at `mcp`; the global `-p default` is
-# already removed and the real v0.22.5 argparse has accepted the argv). `add`, `remove`, `list` and `test` live in the main stub.
+# already removed and the real v0.23.2 argparse has accepted the argv). `add`, `remove`, `list` and `test` live in the main stub.
 #
 # Messages, order of steps and exit codes are copied from hermes_cli/mcp_picker.py, hermes_cli/mcp_catalog.py and
-# hermes_cli/mcp_config.py at v0.22.5; what the vendor SERVER does is an assumption steered by knobs:
+# hermes_cli/mcp_config.py at v0.23.2; what the vendor SERVER does is an assumption steered by knobs:
 #   fail.mcp.probe   the probe cannot connect
 #   mcp_oauth_ok     `mcp login` succeeds and caches a token (writes $H/mcp-oauth/<name>.json)
 #
 # Real behaviours reproduced on purpose (each one matters to a skill):
-#   * the catalog is 100% HTTP at v0.22.5: 56 OAuth entries, 10 no-auth entries, 0 API-key entries; the stub lists the exact HTTP catalog
+#   * the catalog is 100% HTTP at v0.23.2: 56 OAuth entries, 10 no-auth entries, 0 API-key entries; the stub lists the exact HTTP catalog
 #     with the real auth type and endpoint of each (optional-mcps/<name>/manifest.yaml);
 #   * `mcp install NAME` on an OAuth entry writes the entry, cannot probe without cached tokens ("Couldn't probe server;
 #     installed with no tool filter"), and still exits 0 - the server is installed but NOT signed in;

@@ -149,7 +149,7 @@ Every SKILL.md that this validator gates on:
 4. **DRY_RUN preview.** Before any write, the skill prints exactly what will happen. Only lengths and prefixes of secrets are shown — the full value is never echoed.
 5. **`chmod 600 ~/.hermes/.env` after every write.** Enforced by [`scripts/validate-skills.sh`](scripts/validate-skills.sh).
 6. **Env-var indirection in `config.yaml`.** Configs reference `${VAR_NAME}`, never inline the secret.
-7. **`gw_reload` after env/config changes.** `hermes gateway restart --detach`, then `hermes gateway ensure --json` must exit 0 with `"state":"ready"` and a new `instance_id`; a refusal because of live sessions is reported and only overridden by the operator with `GW_INTERRUPT=1`. A restarted gateway re-reads `.env` (`gateway/run.py:1583-1585` in Hermes v0.22.5).
+7. **`gw_reload` after env/config changes.** `hermes gateway restart --detach`, then `hermes gateway ensure --json` must exit 0 with `"state":"ready"` and a new `instance_id`; a refusal because of live sessions is reported and only overridden by the operator with `GW_INTERRUPT=1`. A restarted gateway re-reads `.env` (`gateway/run.py:1583-1585` in Hermes v0.23.2).
 8. **Verification in gateway logs.** Skills poll for the "registered" line before returning success.
 9. **Live smoke test inside the VPS.** The smoke test runs from the VPS, so the token never leaves the box.
 10. **`rollback()` function.** Auto-invoked on any assertion failure; unsets env, removes MCP registration, restores the prior `.env` and `config.yaml`, and reloads the gateway (restart, then readiness proven by `gateway ensure --json`).

@@ -1,5 +1,5 @@
 // hermes-cron: the real SKILL.md blocks against a simulated VPS (helpers/sandbox.mjs) whose `hermes cron` double
-// (stub-commands/cron.sh) prints the v0.22.5 output strings quoted in its header. Syntax is checked by the real argparse.
+// (stub-commands/cron.sh) prints the v0.23.2 output strings quoted in its header. Syntax is checked by the real argparse.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -152,12 +152,12 @@ describe("hermes-cron: input validation happens before any remote write", { conc
     });
   });
 
-  it("a Hermes that is not 0.22.5 stops the run at the version gate", async () => {
-    const replace = [["v?0[.]22[.]5([[:space:]]|$)", "v?9[.]9[.]9([[:space:]]|$)"]];
+  it("a Hermes that is not 0.23.2 stops the run at the version gate", async () => {
+    const replace = [["v?0[.]23[.]2([[:space:]]|$)", "v?9[.]9[.]9([[:space:]]|$)"]];
     mustReplace({ skill: SKILL, ids: ["step1#1"], replace });
     await scenario({ name: "cron-version", seed: SEED, script: flow({ replace }), env: AGENT }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /source-verified for Hermes 0\.22\.5 only/);
+      assert.match(run.out, /source-verified for Hermes 0\.23\.2 only/);
       assert.equal(creates(run).length, 0);
     });
   });
@@ -454,7 +454,7 @@ describe("hermes-cron: static facts about the text", () => {
     assert.doesNotMatch(text, /deliver results to the configured home channel/);
   });
   it("it names its source citations and what remains unverified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/cron\.py:790-812/);
     assert.match(text, /cron\/lifecycle_guard\.py/);
     assert.match(text, /Not verified: nothing here was run against a real Hermes/);

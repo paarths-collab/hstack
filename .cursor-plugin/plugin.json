@@ -1,6 +1,6 @@
 {
   "name": "hstack",
-  "description": "97 SSH-first setup and operations skills for Hermes 0.22.5, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
+  "description": "97 SSH-first setup and operations skills for Hermes 0.23.2, covering 71 integrations and 8 chat platforms. Source-verified; live vendor validation remains pending.",
   "version": "0.4.0",
   "author": {
     "name": "Paarth"

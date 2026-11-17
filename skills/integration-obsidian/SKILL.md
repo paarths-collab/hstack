@@ -5,7 +5,7 @@ description: Connect an Obsidian vault to a self-hosted Hermes agent over SSH. O
 
 # /integration-obsidian — connect an Obsidian vault to a remote Hermes (SSH-first)
 
-You are the engineer connecting an Obsidian vault to a self-hosted Hermes agent (v0.22.5) on the
+You are the engineer connecting an Obsidian vault to a self-hosted Hermes agent (v0.23.2) on the
 user's VPS. You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of
 them) work over SSH as root against the VPS. Every `bash` block below runs on the agent's
 LOCAL machine (possibly macOS, bash 3.2) and reaches the VPS through the `remote` helper from
@@ -15,7 +15,7 @@ Run all blocks in ONE shell session: later steps call the Step 0 functions.
 Do everything autonomously; stop only for things a machine cannot do — syncing the vault onto the VPS, installing the
 Local REST API plugin in the desktop app, starting an OS-level tunnel (Tailscale / Cloudflare Tunnel).
 
-**Honest picture.** Obsidian ships **no first-party MCP** and no first-party API. What exists, and what Hermes v0.22.5 can use:
+**Honest picture.** Obsidian ships **no first-party MCP** and no first-party API. What exists, and what Hermes v0.23.2 can use:
 
 - **Path A, vault as files (default).** Hermes bundles an `obsidian` skill ("Read, search, create, and edit notes in the Obsidian vault") that is filesystem-first and takes
   the vault location from the `OBSIDIAN_VAULT_PATH` environment variable, for example from `~/.hermes/.env`, falling back to `~/Documents/Obsidian Vault`
@@ -223,7 +223,7 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -246,7 +246,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -255,12 +255,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -615,9 +615,9 @@ The `.prev` folder holds the previous `.env` (including any old key) at mode 600
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (paths relative to the Hermes repo root); NOT run against a live Hermes, Obsidian, the plugin or uv:
+Read in the v0.23.2 source (paths relative to the Hermes repo root); NOT run against a live Hermes, Obsidian, the plugin or uv:
 
 - The bundled Obsidian skill and its `OBSIDIAN_VAULT_PATH` convention (including "for example from `~/.hermes/.env`"): `skills/note-taking/obsidian/SKILL.md:14-26`. Whether the agent's tool environment actually carries the variable from `.env` is that skill's concern and was not exercised.
 - `config set` of an UPPER_SNAKE name goes to `.env` and is not echoed: `hermes_cli/config_env_routing.py:36-64`, `hermes_cli/config.py:858-882,3398-3440`.
@@ -634,7 +634,7 @@ NOT verified: the Local REST API plugin's endpoints and authentication, `mcp-obs
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes version verified on the VPS (banner names 0.22.5)
+- [ ] Hermes version verified on the VPS (banner names 0.23.2)
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] `WRITES_ACKNOWLEDGED=1` consent gate passed
 - [ ] Path picked (A or C); every input passed its format check locally BEFORE any ssh call

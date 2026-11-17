@@ -1,0 +1,24 @@
+/* Masonry and motion are progressive enhancements: content is never CSS-hidden. */
+.scroll-masonry { columns: 2; column-gap: 36px; }
+.scroll-masonry-item { display: flow-root; break-inside: avoid; margin-bottom: 36px; transform-origin: 50% 85%; }
+
+@media (max-width: 760px) {
+  .scroll-masonry { columns: 1; }
+  .scroll-masonry-item { margin-bottom: 24px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hermes-site .button, .hermes-site .nav-cta, .hermes-site a.platform-card,
+  .hermes-site a.logo-tile, .hermes-site .doc-cards > li > a,
+  .hermes-site .docs-sections > li > a, .hermes-site .footer-badges > a {
+    transition: translate .22s ease, background .22s ease, border-color .22s ease;
+  }
+  .hermes-site .button:hover, .hermes-site .nav-cta:hover { translate: 0 -2px; }
+  .hermes-site a.platform-card:hover, .hermes-site a.logo-tile:hover,
+  .hermes-site .doc-cards > li > a:hover, .hermes-site .docs-sections > li > a:hover,
+  .hermes-site .footer-badges > a:hover { translate: 0 -3px; }
+  .hermes-site .logo-tile-more svg, .hermes-site .docs-inline-link > svg { transition: translate .22s ease; }
+  .hermes-site .logo-tile:hover .logo-tile-more svg, .hermes-site .docs-inline-link:hover > svg { translate: 3px 0; }
+  .faq-list details[open] > p { animation: faq-answer-in .25s ease-out; }
+  @keyframes faq-answer-in { from { opacity: 0; translate: 0 -4px; } to { opacity: 1; translate: 0 0; } }
+}

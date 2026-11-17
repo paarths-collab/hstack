@@ -7,7 +7,7 @@ import { describe, it } from "node:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 
 import { SKILLS_DIR, TEMPLATE_PATH, extractBlocks, fillPlaceholders, loadBlocks, skillPath } from "./helpers/blocks.mjs";
-import { checkAgainstV0225, hermesInvocations } from "./helpers/hermes-calls.mjs";
+import { checkAgainstTarget, hermesInvocations } from "./helpers/hermes-calls.mjs";
 
 // The skills this wave modernized (and the template they copy). Every skill that defines the Step 0 `remote()` helper is
 // "canonical": it must carry byte-identical copies of the shared helpers. hermes-deploy is the one namespaced variant.
@@ -214,7 +214,7 @@ describe("modernized skills: no retired or nonexistent gateway commands", () => 
     it(`${name}: no \`gateway run --daemon\`, no daemon flag claims, no stop/run reload recipe`, () => {
       const t = text(file);
       for (const l of t.split("\n")) assert.ok(!/gateway\s+run[^|;&]*--daemon/.test(l), `${name}: line matches the validator's daemon regex: ${l}`);
-      assert.ok(!/gateway run --daemon|run --daemon/.test(t), `${name}: mentions \`run --daemon\` (the flag does not exist at v0.22.5; \`gateway run\` is the foreground command)`);
+      assert.ok(!/gateway run --daemon|run --daemon/.test(t), `${name}: mentions \`run --daemon\` (the flag does not exist at v0.23.2; \`gateway run\` is the foreground command)`);
       for (const l of t.split("\n")) {
         if (!/--daemon/.test(l)) continue;
         assert.match(l, /\b(no|not|never|nonexistent|does not exist|has no)\b/i, `${name}: --daemon mentioned without saying it does not exist: ${l}`);
@@ -247,20 +247,20 @@ describe("modernized skills: no retired or nonexistent gateway commands", () => 
 
 describe("modernized skills: version and marker", () => {
   for (const [name, file] of FILES.filter(([n]) => n !== "template")) {
-    it(`${name}: names Hermes 0.22.5 and carries no legacy compatibility marker`, () => {
+    it(`${name}: names Hermes 0.23.2 and carries no legacy compatibility marker`, () => {
       const t = text(file);
-      assert.match(t, /0\.22\.5/, `${name}: does not name the target version 0.22.5`);
+      assert.match(t, /0\.23\.2/, `${name}: does not name the target version 0.23.2`);
       assert.ok(!/^> \*\*Compatibility:\*\* legacy procedure/m.test(t), `${name}: still carries the legacy marker, so it is not modernized`);
       assert.doesNotMatch(t, /\b0\.15\.\d|0\.17\.x/, `${name}: mentions an older Hermes version as if supported`);
     });
   }
 });
 
-describe("every `hermes ...` invocation in the modernized skills parses at v0.22.5", () => {
+describe("every `hermes ...` invocation in the modernized skills parses at v0.23.2", () => {
   for (const [name, file] of FILES) {
-    it(`${name}: all invocations are accepted by the real v0.22.5 argparse builders`, () => {
+    it(`${name}: all invocations are accepted by the real v0.23.2 argparse builders`, () => {
       const inv = hermesInvocations(text(file));
-      const bad = checkAgainstV0225(inv).filter((r) => r.code !== 0);
+      const bad = checkAgainstTarget(inv).filter((r) => r.code !== 0);
       assert.deepEqual(bad.map((r) => `line ${r.line} [${r.block}]: hermes ${r.argv.join(" ")}  =>  ${r.output.split("\n").filter(Boolean).pop()}`), []);
     });
   }
@@ -271,7 +271,7 @@ describe("every `hermes ...` invocation in the modernized skills parses at v0.22
     }
   });
   it("the vendored parser rejects the retired forms (control)", () => {
-    const rows = checkAgainstV0225([
+    const rows = checkAgainstTarget([
       { argv: ["-p", "default", "gateway", "run", "--daemon"] },
       { argv: ["-p", "default", "mcp", "add", "x", "--auth-header", "Authorization"] },
       { argv: ["-p", "default", "gateway", "restart", "--detach", "-y"] },

@@ -1,5 +1,5 @@
 // /blueprint-install and /blueprint-saas-founder chain specialist skills. A specialist that still carries the legacy
-// compatibility marker (its reload / `mcp add` forms may not exist on Hermes 0.22.5) must be refused unless the user
+// compatibility marker (its reload / `mcp add` forms may not exist on Hermes 0.23.2) must be refused unless the user
 // sets ALLOW_LEGACY=1 knowingly. Same refusal as /hermes-integrate. Local only: no ssh, nothing written.
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -8,7 +8,7 @@ import { describe, it } from "node:test";
 import { REPO_ROOT, assemble, loadBlocks } from "./helpers/blocks.mjs";
 import { scenario } from "./helpers/sandbox.mjs";
 
-const MARKER = "> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.22.5. Commands such as `gateway run --daemon` in older copies do not exist on 0.22.5; prefer /hermes-restart for reloads.";
+const MARKER = "> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.23.2. Commands such as `gateway run --daemon` in older copies do not exist on 0.23.2; prefer /hermes-restart for reloads.";
 const VALIDATOR = path.join(REPO_ROOT, "skills", "blueprint-install", "scripts", "validate_blueprint.py");
 const BLUEPRINT = path.join(REPO_ROOT, "blueprints", "saas-founder.hstack-blueprint.json"); // resolves to platform-telegram, integration-stripe/posthog/sentry/github, hermes-home, hermes-cron
 const skillFile = (name, legacy) => `---\nname: ${name}\ndescription: fixture\n---\n\n# /${name}\n${legacy ? `\n${MARKER}\n` : ""}\nbody\n`;

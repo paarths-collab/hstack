@@ -1,5 +1,5 @@
 // hermes-fix: the real SKILL.md blocks, in document order, against a simulated VPS (helpers/sandbox.mjs).
-// The skill diagnoses with `hermes doctor` (non-zero when issues remain at v0.22.5), repairs only with consent (`doctor --fix` edits .env,
+// The skill diagnoses with `hermes doctor` (non-zero when issues remain at v0.23.2), repairs only with consent (`doctor --fix` edits .env,
 // config.yaml and can repair state.db), reloads only through the native lifecycle, and must never schedule a nightly gateway outage
 // (no crontab write), delete pid/lock files, grep `gateway status` for health, or write a secret through argv.
 import assert from "node:assert/strict";
@@ -246,7 +246,7 @@ describe("hermes-fix: a missing tool key (the only secret this skill writes)", {
 });
 
 describe("hermes-fix: gates", { concurrency: 4 }, () => {
-  it("a Hermes that is not 0.22.5 aborts before any diagnosis", async () => {
+  it("a Hermes that is not 0.23.2 aborts before any diagnosis", async () => {
     await run({ files: { "hermes.version": "hermes 0.15.2\n" }, seed: SEED }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /ABORT/);
@@ -275,7 +275,7 @@ describe("hermes-fix: the text", () => {
     assert.match(text, /doctor_config\.py:\d+/);
     assert.match(text, /docker run -e HERMES_UID/, "the Docker UID fix is a container-creation setting");
     assert.doesNotMatch(text, /restart does not (reliably )?re-?read/i);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /(not|nothing)[^.\n]*run against a (live|real)/i);
   });
 });

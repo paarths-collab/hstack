@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { describe, it } from "node:test";
 import { assemble, loadBlocks, skillPath, TEMPLATE_PATH } from "./helpers/blocks.mjs";
-import { checkAgainstV0225, hermesInvocations } from "./helpers/hermes-calls.mjs";
+import { checkAgainstTarget, hermesInvocations } from "./helpers/hermes-calls.mjs";
 import { assertStateIdentical, assertSecretsNotPrinted } from "./helpers/asserts.mjs";
 import { scenario } from "./helpers/sandbox.mjs";
 
@@ -73,7 +73,7 @@ describe("wave2 batch3: source-bound native surfaces", () => {
   for (const vendor of vendors) {
     it(`${vendor}: every actual CLI invocation parses and every bash block is complete`, () => {
       const text = readFileSync(skillPath(`integration-${vendor}`), "utf8");
-      const rows = checkAgainstV0225(hermesInvocations(text));
+      const rows = checkAgainstTarget(hermesInvocations(text));
       assert.deepEqual(rows.filter(r => r.code).map(r => `${r.line}: ${r.argv.join(" ")} ${r.output}`), []);
       for (const b of loadBlocks(`integration-${vendor}`)) {
         const result = spawnSync("/bin/bash", ["-n"], { input: b.code, encoding: "utf8" });

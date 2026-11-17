@@ -18,12 +18,12 @@ describe("all migrated host/version preflights", { concurrency: 4 }, () => {
   for (const skill of bannerSkills) {
     const label = skill === TEMPLATE_PATH ? "template" : skill;
     it(`${label} accepts the two native banner formats and rejects near-match versions before writes`, async () => {
-      for (const version of ["hermes 0.22.5", "Hermes Agent v0.22.5 (2026.9.1)", "hermes 0.22.50", "hermes 10.22.5", "hermes 0.22.5-rc1"]) {
-        const allowed = version === "hermes 0.22.5" || version.startsWith("Hermes Agent v0.22.5 ");
+      for (const version of ["hermes 0.23.2", "Hermes Agent v0.23.2 (2026.9.1)", "hermes 0.23.20", "hermes 10.23.2", "hermes 0.23.2-rc1"]) {
+        const allowed = version === "hermes 0.23.2" || version.startsWith("Hermes Agent v0.23.2 ");
         await scenario({ name: "banner-boundary", seed, script: preflight(skill), files: { "hermes.version": `${version}\n` } }, async run => {
           assert.equal(run.code, allowed ? 0 : 1, `${label}: ${version}\n${run.out}`);
           assert.equal(run.out.includes("PREFLIGHT-ACCEPTED"), allowed);
-          if (!allowed) assert.match(run.out, /ABORT:.*0\.22\.5/);
+          if (!allowed) assert.match(run.out, /ABORT:.*0\.23\.2/);
           assert.ok(!run.sb.exists(".hermes/.hstack-backup"));
           assertStateIdentical(run);
         });
@@ -38,7 +38,7 @@ describe("all migrated host/version preflights", { concurrency: 4 }, () => {
 printf '%s\\n' "$*" >> "$HOME/logs/container-probe.log"
 case "$1" in
   ps) echo hermes ;;
-  exec) echo 'Hermes Agent v0.22.5' ;;
+  exec) echo 'Hermes Agent v0.23.2' ;;
   *) exit 1 ;;
 esac
 `, 0o755);
@@ -56,7 +56,7 @@ esac
   }
 });
 
-const deployEnv = { PLATFORM: "telegram", HOME_CHANNEL_ID: "555", MODEL_PROVIDER: "openai", MODEL_API_KEY: "public_fixture_key_long_enough", HERMES_MODEL: "example/model", HERMES_VERSION: "0.22.5" };
+const deployEnv = { PLATFORM: "telegram", HOME_CHANNEL_ID: "555", MODEL_PROVIDER: "openai", MODEL_API_KEY: "public_fixture_key_long_enough", HERMES_MODEL: "example/model", HERMES_VERSION: "0.23.2" };
 const calls = run => run.sb.hermesCalls().map(c => c.join(" "));
 
 describe("direct gateway stop interruption gates", { concurrency: 4 }, () => {

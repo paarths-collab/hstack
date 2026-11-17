@@ -16,7 +16,7 @@ source. Per-IDE `setup-*` scripts symlink (or, on Windows, copy) or convert them
 | OpenClaw / VS Code   | `~/.openclaw/skills/`      | `SKILL.md` verbatim |
 
 The catalog: **97 skills** (15 hermes-* core + 1 setup-* prerequisite + 8 platform-* + 71 integration-* connectors + 2 blueprint-* composition skills),
-targeting **8 messaging platforms** in the catalog. The skills target Hermes **v0.22.5** only (`HERMES_VERSION` in `VERSIONS.txt`): source-verified against the tagged
+targeting **8 messaging platforms** in the catalog. The skills target Hermes **v0.23.2** only (`HERMES_VERSION` in `VERSIONS.txt`): source-verified against the tagged
 source, live validation pending. The promotion policy in `compatibility/hermes.json` governs any "live-verified"
 claim. Current compatibility and live-validation status are recorded in `compatibility/hermes.json` and
 `compatibility/VALIDATION.md`.
@@ -116,7 +116,7 @@ edit a tier, edit `install.sh` first and mirror it here.
 The SSH-first hardening template every `integration-*/SKILL.md` follows:
 
 1. **SSH access check** — verify we're on the VPS host, not a container (`whoami; hostname`).
-2. **Verify Hermes** — abort unless `hermes --version` names the `HERMES_VERSION` target (0.22.5, `VERSIONS.txt`), check the procedure's supported scope, gateway and private credential files. Source verification is not live compatibility evidence; each skill states its vendor and runtime validation limits.
+2. **Verify Hermes** — abort unless `hermes --version` names the `HERMES_VERSION` target (0.23.2, `VERSIONS.txt`), check the procedure's supported scope, gateway and private credential files. Source verification is not live compatibility evidence; each skill states its vendor and runtime validation limits.
 3. **Idempotency check** — abort if the integration is already wired and green.
 4. **HARD GATE (Step 3)** — local format check, then a live read-only vendor call from the VPS with the secret passed as an ssh-stdin curl config. Runs BEFORE the dry run and BEFORE `snapshot`; a failure means `ABORT … Nothing was written.`
 5. **DRY_RUN preview** — print secret length + prefix only, never plaintext.
@@ -241,7 +241,7 @@ Full procedure is in `skills/hermes-mcp-add/SKILL.md`. Key rules:
 2. **Initialize ≠ auth** — probe `tools/list` without auth; the error message is the spec.
 3. **Native registration** — prefer `hermes mcp install NAME` (catalog) or `mcp add NAME --url U --auth header` with `MCP_<NAME>_API_KEY` already in `~/.hermes/.env` (Hermes then skips the token prompt and stores `Authorization: Bearer ${MCP_<NAME>_API_KEY}`); feed the prompts on stdin and verify with `mcp list` and `mcp test`, because `mcp add` exits 0 even when it saved nothing.
 4. **Never put the secret in config.yaml or on the local command line** — only `${VAR}` references go in `config.yaml`; shapes `mcp add` cannot express use `config set mcp_servers.<name>.…` with a `${VAR}` reference.
-5. **Supported gateway lifecycle** — reload with `gw_reload` (restart, then `gateway ensure --json` ready); a restarted gateway re-reads `.env` (`gateway/run.py:1583-1585`, v0.22.5). Do not copy legacy `run --daemon` commands onto current Hermes.
+5. **Supported gateway lifecycle** — reload with `gw_reload` (restart, then `gateway ensure --json` ready); a restarted gateway re-reads `.env` (`gateway/run.py:1583-1585`, v0.23.2). Do not copy legacy `run --daemon` commands onto current Hermes.
 6. **Two `.env` files** — compose `.env` (container-level) vs `/opt/data/.env` (Hermes runtime). MCP secrets go in the Hermes one.
 
 ---

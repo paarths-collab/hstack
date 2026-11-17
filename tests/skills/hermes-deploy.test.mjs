@@ -12,7 +12,7 @@ import { fake } from "./helpers/tokens.mjs";
 // A Discord-shaped numeric id, built at run time (no id-shaped literal in the repo).
 const DISCORD_ID = "1".repeat(18);
 const SSH_CHECK = "confirm-ssh-access-before-doing-anything#1";
-const ROUTE_GATE = '[ "$PLATFORM" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.22.5 one at a time. Nothing was written."; exit 1; }';
+const ROUTE_GATE = '[ "$PLATFORM" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.23.2 one at a time. Nothing was written."; exit 1; }';
 const SSH_ROUTE_GATE = ROUTE_GATE.replace('"$PLATFORM"', '"${PLATFORM:-}"');
 const TG = fake.telegram("G");
 const OR = fake.openrouter("K");
@@ -21,7 +21,7 @@ const OLD_TG = fake.telegram("O", "987654321");
 
 const baseEnv = {
   FORCE: "1",
-  HERMES_VERSION: "0.22.5",
+  HERMES_VERSION: "0.23.2",
   MODEL_PROVIDER: "openrouter",
   MODEL_API_KEY: OR,
   HERMES_MODEL: "anthropic/claude-sonnet-4",
@@ -489,9 +489,9 @@ describe("hermes-deploy: Step 0 input validation (before any remote call)", { co
     ["model id with command substitution", { HERMES_MODEL: 'x$(touch "$HOME/pwned")' }, /HERMES_MODEL/],
     ["empty model key", { MODEL_API_KEY: "" }, /MODEL_API_KEY is empty/],
     ["malformed host", { VPS_IP: "1.2.3.4;id" }, /VPS_IP \/ VPS_USER look malformed/],
-    ["a wrong HERMES_VERSION (the legacy 0.15.2 fixture)", { HERMES_VERSION: "0.15.2" }, /HERMES_VERSION must be 0\.22\.5/],
-    ["a newer HERMES_VERSION (nothing newer is verified)", { HERMES_VERSION: "0.23.0" }, /HERMES_VERSION must be 0\.22\.5/],
-    ["HERMES_VERSION that merely contains 0.22.5", { HERMES_VERSION: "10.22.51" }, /HERMES_VERSION must be 0\.22\.5/],
+    ["a wrong HERMES_VERSION (the legacy 0.15.2 fixture)", { HERMES_VERSION: "0.15.2" }, /HERMES_VERSION must be 0\.23\.2/],
+    ["a newer HERMES_VERSION (nothing newer is verified)", { HERMES_VERSION: "0.23.0" }, /HERMES_VERSION must be 0\.23\.2/],
+    ["HERMES_VERSION that merely contains 0.23.2", { HERMES_VERSION: "10.23.21" }, /HERMES_VERSION must be 0\.23\.2/],
   ];
   for (const [label, over, msg] of cases) {
     it(`rejects ${label} with zero ssh/curl calls`, async () => {
@@ -506,11 +506,11 @@ describe("hermes-deploy: Step 0 input validation (before any remote call)", { co
     });
   }
 
-  it("HERMES_VERSION is optional: unset, or exactly 0.22.5, passes; CANDIDATE_ACKNOWLEDGED is not required", async () => {
+  it("HERMES_VERSION is optional: unset, or exactly 0.23.2, passes; CANDIDATE_ACKNOWLEDGED is not required", async () => {
     const script = assemble([
       "set +e\n", { skill: "hermes-deploy", ids: ["step0#1"], replace: [["\ndeploy_validate_inputs || exit 1\n", "\n"], [ROUTE_GATE, ""]] },
       "( unset HERMES_VERSION CANDIDATE_ACKNOWLEDGED; deploy_validate_inputs >/dev/null 2>&1 && echo UNSET_OK || echo UNSET_REJ )\n",
-      "( HERMES_VERSION=0.22.5; unset CANDIDATE_ACKNOWLEDGED; deploy_validate_inputs >/dev/null 2>&1 && echo PINNED_OK || echo PINNED_REJ )\n",
+      "( HERMES_VERSION=0.23.2; unset CANDIDATE_ACKNOWLEDGED; deploy_validate_inputs >/dev/null 2>&1 && echo PINNED_OK || echo PINNED_REJ )\n",
     ]);
     await scenario({ name: "dep-ver", script, env: { ...baseEnv, HERMES_VERSION: undefined } }, async (run) => {
       assert.ok(run.out.includes("UNSET_OK") && run.out.includes("PINNED_OK"), run.out);
@@ -541,7 +541,7 @@ describe("hermes-deploy: Step 0 input validation (before any remote call)", { co
     });
   });
 
-  it("per-platform variable names match the v0.22.5 plugin sources (credentials, allowlist, home channel)", async () => {
+  it("per-platform variable names match the v0.23.2 plugin sources (credentials, allowlist, home channel)", async () => {
     // Source: plugins/platforms/<p>/gateway_env.py (ENV_ENABLE_CREDENTIALS, ENV_OVERRIDES home_step, AUTHZ allowed_users_env);
     // slack SLACK_APP_TOKEN: slack/adapter.py:1791-1793; teams: teams/adapter.py:162-164,183,850; google_chat: adapter.py:1590-1592,1626,1629,1673,1684
     // (inbound needs a project AND a Pub/Sub subscription name, so GOOGLE_CHAT_SUBSCRIPTION_NAME is required); signal home: gateway_env.py:16.
@@ -572,18 +572,18 @@ describe("hermes-deploy: Step 4 version gate (before the first write)", { concur
   const step4 = assemble(["set +e\n", { skill: "hermes-deploy", ids: ["step0#1", "step4#1"] }, SCRIPT_END]);
   const banner = (v) => (sb) => sb.write(".local/bin/hermes", `#!/bin/bash\necho '${v}'\n`, 0o755);
 
-  it("accepts the 0.22.5 banner and takes the deploy snapshot", async () => {
+  it("accepts the 0.23.2 banner and takes the deploy snapshot", async () => {
     await scenario({ name: "dep-v-ok", seed, script: step4, env: baseEnv }, async (run) => {
       assert.equal(run.code, 0, run.out);
       assert.ok(run.sb.exists(".hermes/.hstack-backup/hermes-deploy"));
     });
   });
 
-  for (const v of ["hermes 0.15.2", "Hermes Agent v0.21.6 (2026.9.1)", "Hermes Agent v0.22.50", "Hermes Agent v10.22.5", "hermes version unknown"]) {
+  for (const v of ["hermes 0.15.2", "Hermes Agent v0.21.6 (2026.9.1)", "Hermes Agent v0.23.20", "Hermes Agent v10.23.2", "hermes version unknown"]) {
     it(`refuses the banner ${JSON.stringify(v)} before any snapshot or write`, async () => {
       await scenario({ name: "dep-v-bad", seed, script: step4, env: baseEnv, setup: banner(v) }, async (run) => {
         assert.equal(run.code, 1, run.out);
-        assert.match(run.out, /ABORT: .*0\.22\.5/);
+        assert.match(run.out, /ABORT: .*0\.23\.2/);
         assert.ok(!run.sb.exists(".hermes/.hstack-backup"), "no snapshot directory");
         assertStateIdentical(run);
         assert.deepEqual(writeEvents(run), []);

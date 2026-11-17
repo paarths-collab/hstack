@@ -1,6 +1,6 @@
 // hermes-soul: the real SKILL.md blocks run against a simulated VPS. SOUL.md is written over ssh stdin, snapshotted and restored
 // byte for byte, verified, and checked with the native one-shot call. No gateway reload and no `hermes setup` (read from
-// agent/prompt_builder.py, agent/system_prompt.py, agent/conversation_loop.py and hermes_cli/setup.py at v0.22.5).
+// agent/prompt_builder.py, agent/system_prompt.py, agent/conversation_loop.py and hermes_cli/setup.py at v0.23.2).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -189,10 +189,10 @@ describe("hermes-soul: inputs are validated locally before anything is written",
       assert.match(run.out, /ABORT: SSH/);
     });
   });
-  it("a Hermes that is not 0.22.5 stops the procedure before any write", async () => {
+  it("a Hermes that is not 0.23.2 stops the procedure before any write", async () => {
     await scenario({ name: "soul-ver", files: { "hermes.version": "hermes 0.17.1\n" }, script: flow(), env: { AGENT_NAME: "Atlas" } }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /ABORT: .*0\.22\.5/);
+      assert.match(run.out, /ABORT: .*0\.23\.2/);
       assert.equal(run.sb.read(".hermes/SOUL.md"), null);
     });
   });
@@ -245,7 +245,7 @@ describe("hermes-soul: static facts about the text", () => {
     assert.match(text, /FLOOR of\s+the cap/);
   });
   it("cites its source and says what was not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /\*\*Not verified:\*\*/);
   });
 });

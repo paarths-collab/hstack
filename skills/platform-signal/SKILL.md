@@ -1,9 +1,9 @@
 ---
 name: platform-signal
-description: "Wire a remote Hermes Agent 0.22.5 to Signal through a signal-cli HTTP daemon over SSH. Hard allowlist gate, a read-only daemon health check before any write, snapshot and rollback, native gateway reload, log-verified connect. Linking the Signal account (QR) and installing the daemon stay human steps."
+description: "Wire a remote Hermes Agent 0.23.2 to Signal through a signal-cli HTTP daemon over SSH. Hard allowlist gate, a read-only daemon health check before any write, snapshot and rollback, native gateway reload, log-verified connect. Linking the Signal account (QR) and installing the daemon stay human steps."
 ---
 
-# /platform-signal — wire Signal to a remote Hermes (SSH-first, allowlist-gated, source-verified for 0.22.5)
+# /platform-signal — wire Signal to a remote Hermes (SSH-first, allowlist-gated, source-verified for 0.23.2)
 
 You are the engineer connecting Signal to a self-hosted Hermes agent on the user's VPS.
 You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
@@ -25,7 +25,7 @@ PATH. Run all blocks in ONE shell session: later steps call the Step 0 functions
 personal data, so they are treated like secrets: they travel to the VPS over ssh **stdin**, never in an
 ssh argument, and they are not echoed back by this skill (counts and masked forms only).
 
-**What the source says about access (Hermes v0.22.5, details in "Verified against").**
+**What the source says about access (Hermes v0.23.2, details in "Verified against").**
 
 - Signal is enabled when BOTH `SIGNAL_HTTP_URL` and `SIGNAL_ACCOUNT` are set. There is **no `SIGNAL_ENABLED`
   variable** (the older recipe wrote one; it does nothing). Only an explicit `platforms.signal.enabled: false` in
@@ -284,7 +284,7 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -306,7 +306,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS host
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host (not only inside a container).
 
@@ -315,12 +315,12 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5 source; it has not been run against a live host.
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2 source; it has not been run against a live host.
 
 ---
 
@@ -760,7 +760,7 @@ To remove Signal entirely instead (destructive, only if the user asks): delete t
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes `0.22.5` verified on the VPS host
+- [ ] Hermes `0.23.2` verified on the VPS host
 - [ ] Human-only steps done: signal-cli installed, account linked/registered, daemon running on loopback (the skill checks the last, not the rest)
 - [ ] Idempotency check ran (skipped if URL + account + a safe allowlist were already stored, unless `FORCE=1`)
 - [ ] HARD GATE passed with nothing written: allowlist non-empty, no `*`, every entry E.164-with-`+` or UUID; account E.164; no allow-all switch or wildcard in the VPS `.env`; `GET /api/v1/check` returned 200 from the VPS
@@ -775,11 +775,11 @@ To remove Signal entirely instead (destructive, only if the user asks): delete t
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified, **not** live-verified: everything below was read from the Hermes v0.22.5 source (tag `v0.22.5`, commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`) and exercised only against test doubles (`tests/skills/platform-signal.test.mjs`: the real bash of
-this skill, the real v0.22.5 argparse for every `hermes` call, stubbed `ssh`/`curl`/`hermes` behaviour). It has not been run against a
+Source-verified, **not** live-verified: everything below was read from the Hermes v0.23.2 source (tag `v0.23.2`, commit
+`ae2a81ccc00e9b7c06301523e5bb09608397149c`) and exercised only against test doubles (`tests/skills/platform-signal.test.mjs`: the real bash of
+this skill, the real v0.23.2 argparse for every `hermes` call, stubbed `ssh`/`curl`/`hermes` behaviour). It has not been run against a
 real Hermes, a real signal-cli daemon, or a real Signal account. Paths are relative to the Hermes repository root.
 
 - Env names and what enables Signal: `plugins/platforms/signal/gateway_env.py:7-17` (`SIGNAL_HTTP_URL` + `SIGNAL_ACCOUNT` both required, `SIGNAL_IGNORE_STORIES`, `SIGNAL_HOME_CHANNEL`),

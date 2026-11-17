@@ -2,7 +2,7 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by the hermes stub: H, K, event, inject and gw_state come from it)
 # Test behaviour of `hermes memory status`. NOT Hermes. Sourced by the hermes stub; $@ starts at the command (-p already removed) and the
-# real v0.22.5 argparse has already accepted the argv. The text is hermes_cli/memory_setup.py:cmd_status at v0.22.5 (:365-425): a "Memory
+# real v0.23.2 argparse has already accepted the argv. The text is hermes_cli/memory_setup.py:cmd_status at v0.23.2 (:365-425): a "Memory
 # status" banner, the built-in MEMORY.md / USER.md toggles, the provider name and its config keys, and "Plugin:" / "Status:" rows. It prints
 # NO backend type, usage or ceiling. Which provider is configured is an assumption: $HOME/memory.out replaces the whole text.
 # Event: "hermes memory status". Knob: fail.memory -> exit 1. (hermes-memory extended this file; see the block below.)

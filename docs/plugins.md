@@ -3,7 +3,7 @@
 The repository distributes the same 97 setup skills through three host formats
 and a portable Agent Plugins manifest. The plugin identity remains `hstack`.
 The refreshed package version is **0.4.0**, targeting source-verified Hermes
-**0.22.5**. Installing a plugin makes procedures available to the coding agent;
+**0.23.2**. Installing a plugin makes procedures available to the coding agent;
 it does not deploy Hermes, connect vendor accounts or activate an automation.
 
 ## Package files

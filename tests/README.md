@@ -23,9 +23,11 @@ git diff --check
 
 ## Runtime regressions
 
-Use Node 20 or later, Python 3, Bash and the system tools described by the relevant
+Use Node 20 or later, Python 3.10 or later, Bash and the system tools described by the relevant
 suite. Loopback scenarios require local socket access; SSH scenarios also require
-OpenSSH tools. CI runs the main suites on Ubuntu and macOS.
+OpenSSH tools. The simulated SSH harness preserves the Python interpreter selected
+by the test runner’s PATH for the tagged parser checks. CI runs the main suites on
+Ubuntu and macOS.
 
 ```bash
 node --test tests/recipes/*.mjs

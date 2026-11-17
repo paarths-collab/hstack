@@ -1,5 +1,5 @@
 // hermes-restart: the real SKILL.md blocks, in document order, against a simulated VPS (helpers/sandbox.mjs).
-// The hermes stub validates every call against the real v0.22.5 argparse; what a command PRINTS or DOES is an assumption of the stub.
+// The hermes stub validates every call against the real v0.23.2 argparse; what a command PRINTS or DOES is an assumption of the stub.
 // The skill documents and drives the canonical reload (gw_reload / gw_ready) and must never do what the 0.15-era text did:
 // delete pid/lock files, kill processes, probe an HTTP port, call `gateway run --daemon`, or decide health from `gateway status` text.
 import assert from "node:assert/strict";
@@ -155,7 +155,7 @@ describe("hermes-restart: refusals are read, not evaded", { concurrency: 4 }, ()
 });
 
 describe("hermes-restart: gates", { concurrency: 4 }, () => {
-  it("a Hermes that is not 0.22.5 aborts before any gateway command", async () => {
+  it("a Hermes that is not 0.23.2 aborts before any gateway command", async () => {
     await run({ files: { "hermes.version": "hermes 0.15.2\n" } }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /ABORT/);
@@ -201,7 +201,7 @@ describe("hermes-restart: the text no longer teaches the retired recipe", () => 
     assert.doesNotMatch(code, /\brm\b|pgrep|pkill|gateway\.pid|gateway-locks|\b4000\b|\/health|gateway run|--daemon|tmux|nohup|loginctl|systemctl/);
   });
   it("states what was verified and what was not", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/gateway\.py:\d+/);
     assert.match(text, /hermes_cli\/gateway_lifecycle_guards\.py:\d+/);
     assert.match(text, /(not|nothing)[^.\n]*run against a (live|real)/i);

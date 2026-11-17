@@ -1,5 +1,5 @@
 // hermes-home: the real SKILL.md blocks against a simulated VPS. `hermes config get|set|unset` and `hermes send` are test doubles
-// (stubs/hermes, stub-commands/send.sh) whose behaviour is written from the v0.22.5 output strings quoted in their headers; syntax is
+// (stubs/hermes, stub-commands/send.sh) whose behaviour is written from the v0.23.2 output strings quoted in their headers; syntax is
 // checked by the real vendored argparse, so a retired flag (`send --home`, `cron run --once`) cannot pass.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -152,10 +152,10 @@ describe("hermes-home: input validation and the wired gate come before any write
       assert.equal(sets(run).length, 0);
     });
   });
-  it("a Hermes that is not 0.22.5 stops at the version gate", async () => {
+  it("a Hermes that is not 0.23.2 stops at the version gate", async () => {
     await scenario({ name: "home-version", seed: SEED, script: flow(), env: TG, files: { "hermes.version": "hermes 0.22.4\n" } }, async (run) => {
       assert.equal(run.code, 1);
-      assert.match(run.out, /source-verified for Hermes 0\.22\.5 only/);
+      assert.match(run.out, /source-verified for Hermes 0\.23\.2 only/);
       assertStateIdentical(run);
     });
   });
@@ -274,7 +274,7 @@ describe("hermes-home: static facts about the text", () => {
     assert.match(text, /MATRIX_HOME_ROOM/);
   });
   it("it cites its sources and states what was not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/send_cmd\.py/);
     assert.match(text, /gateway\/slash_commands\.py:659-701/);
     assert.match(text, /Not verified: nothing here was run against a real Hermes or a real chat/);

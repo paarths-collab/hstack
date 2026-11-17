@@ -5,7 +5,7 @@ description: Connect GitHub (repos, issues, PRs, Actions) to a self-hosted Herme
 
 # /integration-github — connect GitHub to a remote Hermes (SSH-first)
 
-You are the engineer connecting GitHub to a self-hosted Hermes agent (v0.22.5) on the user's VPS.
+You are the engineer connecting GitHub to a self-hosted Hermes agent (v0.23.2) on the user's VPS.
 You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over
 SSH as root against the VPS. The user only mints the token; everything else — token storage, MCP
 registration, gateway reload, verification — is done idempotently on the VPS. Every `bash` block
@@ -220,7 +220,7 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -243,7 +243,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -252,12 +252,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -518,7 +518,7 @@ The `.prev` folder holds the previous `.env` (including any old token) at mode 6
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Invented flags for header auth (a separate header-name or scheme option), or `--env` on a URL server | Neither exists at v0.22.5 (`--auth` takes `oauth` or `header`; `--env` is stdio-only): argparse exits 2 or the command refuses | Use exactly the forms in Step 6 |
+| 1 | Invented flags for header auth (a separate header-name or scheme option), or `--env` on a URL server | Neither exists at v0.23.2 (`--auth` takes `oauth` or `header`; `--env` is stdio-only): argparse exits 2 or the command refuses | Use exactly the forms in Step 6 |
 | 2 | `echo >> .env` instead of `config set` | Can merge onto a prior line without trailing newline | Always `hermes -p default config set` |
 | 3 | Token in `config.yaml` instead of `.env` | World-readable; not loaded by runtime | Only `~/.hermes/.env`, `chmod 600`, referenced as `${MCP_GITHUB_API_KEY}` |
 | 4 | Writing the PAT as `GITHUB_TOKEN` and expecting `--auth header` to find it | Hermes looks for `MCP_GITHUB_API_KEY`; without it `mcp add` prompts for the token (and a closed stdin gets none) and the header would hold an unset `${...}` | Step 5 writes `MCP_GITHUB_API_KEY` |
@@ -541,9 +541,9 @@ The `.prev` folder holds the previous `.env` (including any old token) at mode 6
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (paths relative to the Hermes repo root); NOT run against a live Hermes, GitHub or npm:
+Read in the v0.23.2 source (paths relative to the Hermes repo root); NOT run against a live Hermes, GitHub or npm:
 
 - `mcp add NAME --url U --auth oauth|header`, `--env KEY=VALUE... --command C --args ...`: `hermes_cli/subcommands/mcp.py`; `--env` is rejected for URL servers and kept as the entry's `env` for stdio (`hermes_cli/mcp_config.py:345-361,641,666-675`).
 - Header auth: the env name is `MCP_<NAME>_API_KEY` and the stored header is `Authorization: Bearer ${MCP_<NAME>_API_KEY}`; an already-set key skips the token prompt (`hermes_cli/mcp_config.py:305-333,545-583`).
@@ -560,7 +560,7 @@ NOT verified: that `https://api.githubcopilot.com/mcp/` accepts a PAT as a beare
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
-- [ ] Hermes version verified on the VPS (banner names 0.22.5)
+- [ ] Hermes version verified on the VPS (banner names 0.23.2)
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] HARD GATE passed: token format OK and the live `GET /user` preflight returned `200` BEFORE any write
 - [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)

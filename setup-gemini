@@ -356,7 +356,7 @@ hstack skills are loaded as context files under $GEMINI_DIR. To use one, @refere
 in your prompt, e.g. \`@hstack/hermes-deploy.md please run this skill against \$VPS_IP\`.
 Every skill is SSH-first and assumes \$VPS_IP + \$VPS_USER are exported.
 Platforms: telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal.
-Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Target: Hermes v0.23.2 (source-verified; vendor and live gateway validation remain pending).
 Use the native catalog/MCP or installed skill route documented for each integration. Reload with
 /hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"

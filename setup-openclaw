@@ -363,7 +363,7 @@ hstack skills are loaded from $OPENCLAW_SKILLS. Every skill is SSH-first (needs 
 \$VPS_USER) and idempotent. Use /hermes-deploy for the full end-to-end setup, then any
 /platform-* or /integration-* skill to wire a service into the running Hermes agent.
 Platforms: telegram, discord, whatsapp, slack, mattermost, teams, google-chat, signal.
-Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Target: Hermes v0.23.2 (source-verified; vendor and live gateway validation remain pending).
 Use the native catalog/MCP or installed skill route documented for each integration. Reload with
 /hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $MARK_END"

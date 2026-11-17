@@ -103,8 +103,8 @@ again.
 ## Step 1b — refuse specialists that are still legacy procedures
 
 The validated plan resolves to specialist skills. Several `/integration-*` skills still carry the line
-`> **Compatibility:** legacy procedure written for Hermes 0.15.x - not yet re-verified on Hermes 0.22.5`: their reload or `mcp add` steps may call gateway or MCP flags that
-do not exist on Hermes 0.22.5. Chaining one of them from a blueprint would
+`> **Compatibility:** legacy procedure written for Hermes 0.15.x - not yet re-verified on Hermes 0.23.2`: their reload or `mcp add` steps may call gateway or MCP flags that
+do not exist on Hermes 0.23.2. Chaining one of them from a blueprint would
 run an unverified procedure inside an approved plan, so the plan stops here unless the user accepts that explicitly. The check is local; nothing is
 written and no ssh call is made.
 
@@ -130,7 +130,7 @@ for n in $RESOLVED; do
 done
 LEGACY=$(printf '%s' "$LEGACY" | sed 's/^ *//')
 if [ -n "$LEGACY" ] && [ "${ALLOW_LEGACY:-0}" != 1 ]; then
-  echo "ABORT: still legacy procedures, not re-verified for Hermes 0.22.5 (their reload step may call commands that do not exist): $LEGACY."
+  echo "ABORT: still legacy procedures, not re-verified for Hermes 0.23.2 (their reload step may call commands that do not exist): $LEGACY."
   echo "       Remove them from the blueprint, or set ALLOW_LEGACY=1 only if the user accepts running an unverified procedure. Nothing was written."
   exit 1
 fi
@@ -319,7 +319,7 @@ configuration deletion.
 | 8 | Scheduling terminal-only output | Hermes has no home channel to deliver it | Disable automations without a selected delivery channel. |
 | 9 | Treating approval policy as enforcement | The runtime may need its own policy configuration | State it as a plan contract and preserve specialist safety gates. |
 | 10 | Deleting “everything from the blueprint” on failure | Some selected configuration may predate this run | Roll back only resources that the owning skill created. |
-| 11 | Chaining a legacy-marked specialist | Its reload or `mcp add` form may not exist on Hermes 0.22.5 | Step 1b refuses unless `ALLOW_LEGACY=1` |
+| 11 | Chaining a legacy-marked specialist | Its reload or `mcp add` form may not exist on Hermes 0.23.2 | Step 1b refuses unless `ALLOW_LEGACY=1` |
 
 ---
 

@@ -9,7 +9,7 @@
 [![Platforms](https://img.shields.io/badge/platforms-8-8b5cf6)](skills/)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
-[![Hermes target](https://img.shields.io/badge/Hermes-0.22.5-8b5cf6)](compatibility/README.md)
+[![Hermes target](https://img.shields.io/badge/Hermes-0.23.2-8b5cf6)](compatibility/README.md)
 [![Validation](https://img.shields.io/badge/validation-source_checked-0ea5e9)](compatibility/VALIDATION.md)
 
 [Get started](#get-started) · [Use cases](#make-it-yours) · [Documentation](docs/README.md) · [Compatibility](compatibility/README.md)
@@ -130,7 +130,7 @@ credentials. Deployment happens separately on your server.
 
 ## Current status
 
-**Target: Hermes 0.22.5. Source-verified; live validation is still pending.**
+**Target: Hermes 0.23.2. Source-verified; live validation is still pending.**
 
 | Checked | Still needed |
 |---|---|

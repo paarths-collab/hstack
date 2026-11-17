@@ -2,8 +2,8 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by the hermes stub: H, K, event, inject and gw_state come from it)
 # Test behaviour of `hermes sessions prune [--older-than AGE] [--dry-run] [--yes]`, sourced by the hermes stub ($@ starts at "sessions"; -p
-# already removed). SYNTAX is the real vendored v0.22.5 argparse. BEHAVIOUR is an assumption written from hermes_cli/sessions_cmd.py:738-815
-# (v0.22.5): a bare prune (no filter at all) defaults to "older than 90 days"; AGE is days when a bare number, or Nh/Nd/Nw; only ENDED,
+# already removed). SYNTAX is the real vendored v0.23.2 argparse. BEHAVIOUR is an assumption written from hermes_cli/sessions_cmd.py:738-815
+# (v0.23.2): a bare prune (no filter at all) defaults to "older than 90 days"; AGE is days when a bare number, or Nh/Nd/Nw; only ENDED,
 # unpinned sessions are candidates; no candidates -> "No sessions match (...)." ; --dry-run lists and deletes nothing ; without --yes the
 # command asks "[y/N]" and a closed stdin cancels ("Cancelled.", exit 0, nothing deleted) ; with --yes it prints "Pruned N session(s).".
 # The simulated store is $HOME/sessions.db, one session per line "id<TAB>age_days<TAB>ended(0|1)<TAB>pinned(0|1)"; the test provides it.

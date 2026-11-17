@@ -1,9 +1,9 @@
 ---
 name: hermes-skills
-description: "Install a pack of third-party Hermes skills on a self-hosted Hermes v0.22.5 over SSH: resolve exact identifiers with skills search --json, skip what is installed, install with --yes after an explicit consent step, verify and undo. Use when adding capabilities to the agent."
+description: "Install a pack of third-party Hermes skills on a self-hosted Hermes v0.23.2 over SSH: resolve exact identifiers with skills search --json, skip what is installed, install with --yes after an explicit consent step, verify and undo. Use when adding capabilities to the agent."
 ---
 
-# /hermes-skills — install a skill pack on a remote Hermes (SSH-first, Hermes v0.22.5)
+# /hermes-skills — install a skill pack on a remote Hermes (SSH-first, Hermes v0.23.2)
 
 You are the engineer installing skills onto a self-hosted Hermes agent on the user's VPS. You (the AI agent —
 Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH as root against the VPS.
@@ -21,7 +21,7 @@ explicitly, and never overrides the security scan.
 This skill changes only `~/.hermes/skills/` and the hub lock file. It does not touch `.env` or `config.yaml`, so there is
 no `.env` snapshot; its undo is `hermes skills uninstall` of the skills this run installed.
 
-## What `hermes skills` does at v0.22.5 (source-verified, not live-verified)
+## What `hermes skills` does at v0.23.2 (source-verified, not live-verified)
 
 - **Find.** `skills search QUERY --json` prints a JSON array of `{name, identifier, source, trust_level, description}`
   (`hermes_cli/skills_hub.py:354-362`); without `--json` it prints a blank line, `Searching for: <q>` and a Rich table
@@ -162,7 +162,7 @@ undo_installs() {
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -171,12 +171,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5`. Skills install into the host's Hermes home; if `hostname` shows a hex name you are
+Expected: a banner naming Hermes `0.23.2`. Skills install into the host's Hermes home; if `hostname` shows a hex name you are
 inside a container whose filesystem may be rebuilt: leave it.
 
 ---
@@ -367,9 +367,9 @@ Files a skill wrote while the agent used it are not removed.
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the source of tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repository root:
+Read in the source of tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repository root:
 
 - Parser: `hermes_cli/subcommands/skills.py:20-177` (`search QUERY [--source --limit --json]`, `install IDENTIFIER [--category --name --force --yes]`, `inspect`,
   `list [--source all|hub|builtin|local]`, `uninstall NAME [--yes]`, `snapshot export|import`, `tap`; no `describe`).
@@ -407,7 +407,7 @@ encodes the strings quoted above; it is not evidence about the real CLI.
 
 ## Definition of done
 
-- [ ] SSH confirmed; the banner names Hermes `0.22.5`
+- [ ] SSH confirmed; the banner names Hermes `0.23.2`
 - [ ] Every entry resolved to one exact identifier via `skills search --json` (no hardcoded leaf names, no first-hit guessing)
 - [ ] Already-installed skills skipped using `skills snapshot export -`
 - [ ] Dry run shown with source and trust for each skill; the user said yes; community sources only with `ALLOW_COMMUNITY=1`

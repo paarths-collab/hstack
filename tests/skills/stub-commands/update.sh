@@ -1,10 +1,10 @@
 #!/bin/bash
 # shellcheck shell=bash disable=SC2154
 # Test behaviour of `hermes update [--plan] [--check] [--channel C] [--backup|--no-backup] [--yes]`. NOT Hermes. Sourced by the hermes stub
-# ($@ starts at `update`; the global `-p default` is removed and the real v0.22.5 argparse, hermes_cli/subcommands/update.py, has accepted
+# ($@ starts at `update`; the global `-p default` is removed and the real v0.23.2 argparse, hermes_cli/subcommands/update.py, has accepted
 # the argv, so an invented flag such as --version never gets here).
 #
-# Strings and exit codes come from the v0.22.5 source: the plan header and rows are update_inventory.print_update_plan (:355-373), the check
+# Strings and exit codes come from the v0.23.2 source: the plan header and rows are update_inventory.print_update_plan (:355-373), the check
 # verdicts are update_cmd_check (:197-225), `--check` exits 2 on an admission refusal and 1 when it cannot fetch (update_cmd.py:651-690), `--plan`
 # is read-only and handled before every refusal gate (main.py:2277-2340), and the pre-update backup is best-effort (update_cmd_maint.py:752-787).
 # What the host would actually do is an ASSUMPTION steered by knobs under $HOME/knobs:

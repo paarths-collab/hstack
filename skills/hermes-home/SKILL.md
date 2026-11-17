@@ -1,9 +1,9 @@
 ---
 name: hermes-home
-description: "Set or verify the home channel (where cron output and proactive notices are delivered) of a self-hosted Hermes v0.22.5 over SSH, proving it with a native hermes send probe. Use after a messaging platform is wired."
+description: "Set or verify the home channel (where cron output and proactive notices are delivered) of a self-hosted Hermes v0.23.2 over SSH, proving it with a native hermes send probe. Use after a messaging platform is wired."
 ---
 
-# /hermes-home — set and verify the home channel (SSH-first, Hermes v0.22.5)
+# /hermes-home — set and verify the home channel (SSH-first, Hermes v0.23.2)
 
 You are the engineer wiring the **home channel** of a self-hosted Hermes agent. The agent
 (Hermes, Claude Code, Codex, Cursor, Gemini — whichever ran you) works over SSH as root against the VPS.
@@ -20,7 +20,7 @@ platform name creates fine and sends nothing.
 Do everything autonomously; stop only for things a machine cannot do (find a chat id, type `/sethome` in a
 chat, invite the bot to a channel).
 
-## What the home channel is at v0.22.5 (source-verified, not live-verified)
+## What the home channel is at v0.23.2 (source-verified, not live-verified)
 
 - **It is an environment setting.** Each platform has one variable (`PlatformEntry.cron_deliver_env_var`):
   `TELEGRAM_HOME_CHANNEL`, `DISCORD_HOME_CHANNEL`, `SLACK_HOME_CHANNEL`, `MATTERMOST_HOME_CHANNEL`, `SIGNAL_HOME_CHANNEL`,
@@ -229,7 +229,7 @@ shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -239,12 +239,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5`, with `whoami=root` on a readable hostname (a hex hostname means you are inside a container: leave it).
+Expected: a banner naming Hermes `0.23.2`, with `whoami=root` on a readable hostname (a hex hostname means you are inside a container: leave it).
 
 ---
 
@@ -434,9 +434,9 @@ The `.prev` folder holds the previous `.env` (with its secrets) at mode 600; del
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the source of tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repository root:
+Read in the source of tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repository root:
 
 - Home variables: `plugins/platforms/telegram/adapter.py:7372`, `discord/adapter.py:7402`, `slack/adapter.py:6941`, `mattermost/adapter.py:740`, `matrix/adapter.py:3273`
   (`MATRIX_HOME_ROOM`), `signal/register.py:68`, `whatsapp/adapter.py:1266`, `teams/adapter.py:850`, `google_chat/adapter.py:1790`; env-to-config step `gateway/platform_env.py:104-113`.
@@ -477,7 +477,7 @@ The test double that exercises these blocks encodes the strings quoted above; it
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed and the banner names Hermes `0.22.5`
+- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed and the banner names Hermes `0.23.2`
 - [ ] `hermes send --list $PLATFORM` succeeded (the platform is wired)
 - [ ] Idempotency checked with `hermes config get`: an identical value exits 0 without writing
 - [ ] Dry run shown and approved (or `AUTO_APPROVE=1`); verify-only mode writes nothing

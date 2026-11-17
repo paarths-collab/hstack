@@ -1,14 +1,14 @@
 ---
 name: platform-google-chat
-description: "Wire a remote Hermes 0.22.5 agent to Google Chat over SSH using a Cloud Pub/Sub pull subscription: service-account key upload, an email allowlist, a live Google token plus subscription check before any write, rollback, and log verification. A human must create the GCP resources and the Chat app."
+description: "Wire a remote Hermes 0.23.2 agent to Google Chat over SSH using a Cloud Pub/Sub pull subscription: service-account key upload, an email allowlist, a live Google token plus subscription check before any write, rollback, and log verification. A human must create the GCP resources and the Chat app."
 ---
 
 # /platform-google-chat — wire Google Chat to a remote Hermes (SSH-first, Pub/Sub pull)
 
 You are the engineer connecting Google Chat to a self-hosted Hermes agent on the user's VPS.
 The agent (Hermes, Claude Code, Codex, Cursor, Gemini CLI — whichever ran you) works over SSH as
-root. This skill is **source-verified against Hermes v0.22.5 only** (see "Verified against Hermes
-v0.22.5" at the end); nothing here was run against a live Hermes, GCP project or Workspace.
+root. This skill is **source-verified against Hermes v0.23.2 only** (see "Verified against Hermes
+v0.23.2" at the end); nothing here was run against a live Hermes, GCP project or Workspace.
 
 **Where commands run.** Every `bash` block below runs on the agent's LOCAL machine (possibly macOS,
 bash 3.2) and reaches the VPS through the `remote` helper from Step 0. Run all blocks in ONE shell
@@ -28,7 +28,7 @@ Most of Google Chat is set up in Google consoles. Be explicit with the user abou
 | The allowlist e-mails, project ID, subscription path, key file | **Human** supplies | |
 | Key upload (mode 600), live Google token and subscription check from the VPS, writes, reload, log verification, optional home-space message | **This skill** | Everything before the first write is read-only. |
 
-**What Hermes v0.22.5 does (source-verified):**
+**What Hermes v0.23.2 does (source-verified):**
 
 - Google Chat is a bundled platform plugin. It is enabled by environment alone: a GCP project ID plus a
   Pub/Sub subscription path (or an HTTP events URL). There is **no `GOOGLE_CHAT_ENABLED` variable**
@@ -235,7 +235,7 @@ written.` and never calls `rollback`. Every failure AFTER `snapshot` (Steps 5-7)
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums; rollback
 validates the whole recovery point before changing live files and keeps it active if restoration fails.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -258,7 +258,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 on the VPS host
+## Step 1 — verify Hermes v0.23.2 on the VPS host
 
 This skill writes the HOST's `~/.hermes`, so `hermes` must be installed on the host, not only inside a container.
 
@@ -267,8 +267,8 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
@@ -802,7 +802,7 @@ Then delete the key file on the VPS and delete or disable the key in GCP (IAM, S
 
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
-| 1 | Looking for a `GOOGLE_CHAT_ENABLED` switch | It does not exist in v0.22.5: project plus subscription in the env enable the platform, and only `platforms.google_chat.enabled: false` blocks it | Step 3b refuses over an explicit disable; the skill never writes `GOOGLE_CHAT_ENABLED` |
+| 1 | Looking for a `GOOGLE_CHAT_ENABLED` switch | It does not exist in v0.23.2: project plus subscription in the env enable the platform, and only `platforms.google_chat.enabled: false` blocks it | Step 3b refuses over an explicit disable; the skill never writes `GOOGLE_CHAT_ENABLED` |
 | 2 | `GOOGLE_CHAT_ALLOW_ALL_USERS`, `GATEWAY_ALLOW_ALL_USERS` or a `*` in an allowlist | Everyone the app is visible to can drive the bot | Step 3 refuses before any write and Step 5 re-checks after it (names only) |
 | 3 | A TOPIC path in `GOOGLE_CHAT_SUBSCRIPTION_NAME`, or a project that differs from `GOOGLE_CHAT_PROJECT_ID` | Hermes pulls subscriptions and rejects a project mismatch (`adapter.py:477-502`) | Step 3a validates the shape and the project match |
 | 4 | `chat-api-push@system.gserviceaccount.com` lacks Publisher on the topic | The bot connects but never receives anything; the subscription backlog stays at zero | Human check; this skill cannot read the topic policy (Step 3c explains, Step 8 gives the symptom) |
@@ -827,7 +827,7 @@ Then delete the key file on the VPS and delete or disable the key in GCP (IAM, S
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes `0.22.5` verified on the VPS host
+- [ ] Hermes `0.23.2` verified on the VPS host
 - [ ] Idempotency scan ran (stored setup safe, or `FORCE=1`), and an unsafe stored setup aborted
 - [ ] HARD GATE passed with nothing written: e-mail-only allowlist (no `*`), valid project and subscription (same project), a service-account key of the right shape, no open-access switch, no overriding or disabling `platforms.google_chat` block, lazy installs allowed (or `GOOGLE_CHAT_DEPS_PREINSTALLED=1`)
 - [ ] The live check from the VPS succeeded BEFORE the snapshot: Google token issued and `subscriptions.get` returned 200
@@ -839,9 +839,9 @@ Then delete the key file on the VPS and delete or disable the key in GCP (IAM, S
 - [ ] Any failure after the snapshot restored the prior `.env` and `config.yaml` and removed only the key file this run created
 - [ ] Human, outside this skill: topic Publisher binding, Chat app Configuration and visibility, and an allowlisted user got a reply
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repo root.
+Read in the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repo root.
 
 - Env names and enablement: `plugins/platforms/google_chat/plugin.yaml` (`requires_env`, `optional_env`); in `plugins/platforms/google_chat/adapter.py`: `_validate_config`, `_env_inbound_*`, `_check_for_registry`, `_is_connected`, `_env_enablement` `:1581-1630`, and `register` `:1774-1812` (`cron_deliver_env_var="GOOGLE_CHAT_HOME_CHANNEL"` `:1790`, `allowed_users_env="GOOGLE_CHAT_ALLOWED_USERS"` `:1792`, `allow_all_env="GOOGLE_CHAT_ALLOW_ALL_USERS"` `:1793`). No `GOOGLE_CHAT_ENABLED` anywhere. Enablement pass: `gateway/config_env.py:164-225,286-297`; explicit disable `gateway/config_env.py:192-194`; activation evidence by the `GOOGLE_CHAT_` prefix `gateway/platform_activation.py:124-131`. `extra` wins over env: `plugins/platforms/google_chat/adapter.py:477-502`.
 - Credentials (`plugins/platforms/google_chat/adapter.py`): `_load_sa_credentials_from` `:257-292` (path or inline JSON, `_SACredentialError` kinds), scopes `:143`, `_load_sa_credentials` `:457-475`; seeded from `GOOGLE_CHAT_SERVICE_ACCOUNT_JSON` then `GOOGLE_APPLICATION_CREDENTIALS` `:1619-1630`.

@@ -1,7 +1,7 @@
 // platform-discord / platform-slack / platform-mattermost: the real SKILL.md blocks against a simulated VPS
 // (helpers/sandbox.mjs). One table drives the checks the three skills share; platform-specific cases follow.
 //
-// What the stubs are: syntax = the real v0.22.5 argparse (hermes stub); behaviour = assumptions written in the stubs.
+// What the stubs are: syntax = the real v0.23.2 argparse (hermes stub); behaviour = assumptions written in the stubs.
 // Vendor answers come from the curl stub (valid_tokens + curl_routes). Nothing here proves a real Discord, Slack or
 // Mattermost call works; it proves ORDER, GATING, SECRET HANDLING, LOG VERDICTS and ROLLBACK of the skill text.
 import assert from "node:assert/strict";
@@ -37,7 +37,7 @@ const MM_URL = "https://chat.example.test";
 const tab = (...cols) => cols.join("\t");
 const routes = (...lines) => lines.join("\n") + "\n";
 
-// ---- log fixtures (line shapes copied from the v0.22.5 adapters; see the skills' "Verified" sections) ----
+// ---- log fixtures (line shapes copied from the v0.23.2 adapters; see the skills' "Verified" sections) ----
 const START = "2026-10-25 10:00:00 INFO gateway.run: Starting Hermes Gateway...";
 const logLines = (...l) => l.join("\n") + "\n";
 
@@ -180,8 +180,8 @@ for (const P of PLATFORMS) {
 
   describe(`${S}: shape of the skill text`, () => {
     const text = readFileSync(skillPath(S), "utf8");
-    it("names Hermes 0.22.5, never calls retired lifecycle commands, never writes the invented *_ENABLED variable", () => {
-      assert.match(text, /0\.22\.5/);
+    it("names Hermes 0.23.2, never calls retired lifecycle commands, never writes the invented *_ENABLED variable", () => {
+      assert.match(text, /0\.23\.2/);
       for (const b of loadBlocks(S)) for (const l of b.code.split("\n")) {
         if (/^\s*#/.test(l)) continue;
         assert.ok(!/gateway (stop|run)\b|--daemon|hard_rollback/.test(l), `${b.id}: ${l}`);
@@ -189,8 +189,8 @@ for (const P of PLATFORMS) {
         assert.ok(!new RegExp(`${P.key.toUpperCase()}_ENABLED`).test(l), `${b.id}: ${l}`);
       }
     });
-    it("has a Verified-against-Hermes-v0.22.5 section that states what was not run", () => {
-      assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    it("has a Verified-against-Hermes-v0.23.2 section that states what was not run", () => {
+      assert.match(text, /## Verified against Hermes v0\.23\.2/);
       assert.match(text, /not (been )?(run|called|exercised)|nothing was run|never (run|called)/i);
     });
   });
@@ -217,7 +217,7 @@ for (const P of PLATFORMS) {
           assert.equal(before, P.pre, "all preflight calls run before the snapshot");
           const ev = run.sb.events();
           assert.ok(idx(ev, /^curl status=200/) < idx(ev, /^hermes config set/));
-          // ---- the keys Hermes v0.22.5 reads, exactly once each, in the safe order
+          // ---- the keys Hermes v0.23.2 reads, exactly once each, in the safe order
           assert.deepEqual(writeKeys(run).filter((k) => /^[A-Z]/.test(k)), P.envOrder(withH));
           const env = parseEnv(run.sb.read(".hermes/.env"));
           for (const k of P.envOrder(withH)) assert.equal((env.get(k) || []).length, 1, `${k} must appear once`);
@@ -307,10 +307,10 @@ for (const P of PLATFORMS) {
       });
     }
 
-    it("Hermes version other than 0.22.5: ABORT before any vendor call or write", async () => {
+    it("Hermes version other than 0.23.2: ABORT before any vendor call or write", async () => {
       await scenario(base({ name: `${P.key}-ver`, files: { "hermes.version": "Hermes Agent v0.21.0\n", "logs.txt": P.goodLog } }), async (run) => {
         assert.equal(run.code, 1);
-        assert.match(run.out, /ABORT: .*0\.22\.5/);
+        assert.match(run.out, /ABORT: .*0\.23\.2/);
         assert.match(run.out, /Nothing was written/);
         assertStateIdentical(run);
         assert.equal(run.sb.curlCalls().length, 0);

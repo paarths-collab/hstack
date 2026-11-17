@@ -5,7 +5,7 @@ description: Connect cloudflare to a host-installed Hermes assistant over SSH us
 
 # /integration-cloudflare — connect cloudflare over SSH
 
-Source-verified for Hermes **0.22.5** at `bf0203a794a07aac3ff764972ab9087baa4e4f4e`.
+Source-verified for Hermes **0.23.2** at `ae2a81ccc00e9b7c06301523e5bb09608397149c`.
 This procedure targets the exclusive default profile on one host account. Containers,
 named profiles and concurrent configuration writers need a separately scoped procedure.
 Vendor endpoints, account entitlements and tool behavior have not been tested with live credentials.
@@ -226,8 +226,8 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
@@ -323,8 +323,8 @@ After a successful run, the previous bytes remain in `~/.hermes/.hstack-backup/i
 
 ## Verified against
 
-Official pinned Hermes source: [`v0.22.5`](https://github.com/NousResearch/hermes-agent/tree/bf0203a794a07aac3ff764972ab9087baa4e4f4e), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
-The native manifest is [`optional-mcps/cloudflare/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/bf0203a794a07aac3ff764972ab9087baa4e4f4e/optional-mcps/cloudflare/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
+Official pinned Hermes source: [`v0.23.2`](https://github.com/NousResearch/hermes-agent/tree/ae2a81ccc00e9b7c06301523e5bb09608397149c), `hermes_cli/subcommands/mcp.py`, `hermes_cli/mcp_catalog.py`, `hermes_cli/mcp_config.py`, `hermes_cli/subcommands/skills.py`, `gateway/run.py` and `tools/mcp_tool_config.py`.
+The native manifest is [`optional-mcps/cloudflare/manifest.yaml`](https://github.com/NousResearch/hermes-agent/blob/ae2a81ccc00e9b7c06301523e5bb09608397149c/optional-mcps/cloudflare/manifest.yaml). Its OAuth settings, endpoint and tool exclusions are retained by native install.
 Local model tests and exact-parser checks prove procedure shape and recovery assumptions. They do not prove vendor auth, package availability, real service readiness or delivery through a chat platform. No live credentials or paid APIs were used during this migration.
 
 ## Definition of done

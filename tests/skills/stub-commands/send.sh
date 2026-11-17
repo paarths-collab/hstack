@@ -1,5 +1,5 @@
 #!/bin/bash
-# Test behaviour of `hermes send --to TARGET MESSAGE` and `hermes send --list [PLATFORM]` (hermes_cli/send_cmd.py at v0.22.5). Sourced by the
+# Test behaviour of `hermes send --to TARGET MESSAGE` and `hermes send --list [PLATFORM]` (hermes_cli/send_cmd.py at v0.23.2). Sourced by the
 # hermes stub; $@ starts at the command (-p already removed). The SYNTAX is checked by the real vendored argparse before this runs; the
 # BEHAVIOUR below is an assumption written from the source's output strings: success prints the tool's note (or "sent") and exits 0
 # (send_cmd.py:73-81), a delivery error prints "hermes send: <error>" on stderr and exits 1 (send_cmd.py:73-74,81). The event log records

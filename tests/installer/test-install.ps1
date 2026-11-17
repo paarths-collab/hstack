@@ -1026,7 +1026,7 @@ Assert-That (-not (Test-Path -LiteralPath (Join-Path $Src 'rel.md'))) '...not ag
 $blk = Read-TextOrNull (Join-Path $w8 'rel.md')
 $p8 = @('telegram', 'discord', 'whatsapp', 'slack', 'mattermost', 'teams', 'google-chat', 'signal') | Where-Object { $blk -notmatch ('/platform-' + $_) }
 Assert-That (@($p8).Count -eq 0) "the injected block names all 8 platforms (missing: $($p8 -join ', '))"
-Assert-That ($blk.Contains('v0.22.5 (source-verified; vendor and live gateway validation remain pending)') -and ($blk -notmatch '0\.15')) 'the injected block targets Hermes v0.22.5 (source-verified only) and no longer pins 0.15.2'
+Assert-That ($blk.Contains('v0.23.2 (source-verified; vendor and live gateway validation remain pending)') -and ($blk -notmatch '0\.15')) 'the injected block targets Hermes v0.23.2 (source-verified only) and no longer pins 0.15.2'
 Assert-That ($blk.Contains("/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent") -and $blk.Contains("vendor and live gateway validation remain pending")) 'the injected block gives the gateway reload recipe and the live-validation caveat'
 
 # ===========================================================================

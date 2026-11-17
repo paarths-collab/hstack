@@ -1,6 +1,6 @@
 // platform-whatsapp (the Baileys/Node bridge path): the real SKILL.md blocks against a simulated VPS (helpers/sandbox.mjs).
 //
-// What is real: the bash of the skill and the syntax of every `hermes ...` call it makes (the stub runs the vendored v0.22.5 argparse).
+// What is real: the bash of the skill and the syntax of every `hermes ...` call it makes (the stub runs the vendored v0.23.2 argparse).
 // What is assumed: what the stubs print (gateway log lines, the bridge's /health JSON, `hermes send`) and the human QR step, which a test
 // can only simulate: the "human" is a `sleep` function injected before the run that creates the session file the way the pairing wizard
 // (`hermes whatsapp`, hermes_cli/main_platform_setup.py:133-223) does after a successful scan.
@@ -446,7 +446,7 @@ describe("platform-whatsapp: text and structure", () => {
     assert.ok(!/gateway (stop|run)|--daemon/.test(code));
   });
   it("states plainly that nothing here was run against a real WhatsApp account", () => {
-    assert.match(text, /Verified against Hermes v0\.22\.5/);
+    assert.match(text, /Verified against Hermes v0\.23\.2/);
     assert.match(text, /not\s+(been\s+)?(run|exercised|tested)\s+against\s+a\s+real/i);
   });
 });

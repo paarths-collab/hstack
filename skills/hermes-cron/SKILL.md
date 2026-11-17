@@ -1,9 +1,9 @@
 ---
 name: hermes-cron
-description: "Create, verify and manage scheduled jobs on a self-hosted Hermes v0.22.5 over SSH: agent prompts, no-agent scripts, and opt-in native backup and session-prune jobs. Use when the user wants something to run on a schedule."
+description: "Create, verify and manage scheduled jobs on a self-hosted Hermes v0.23.2 over SSH: agent prompts, no-agent scripts, and opt-in native backup and session-prune jobs. Use when the user wants something to run on a schedule."
 ---
 
-# /hermes-cron — scheduled jobs (SSH-first, Hermes v0.22.5)
+# /hermes-cron — scheduled jobs (SSH-first, Hermes v0.23.2)
 
 You are the engineer wiring a scheduled job on a self-hosted Hermes agent. The agent
 (Hermes, Codex, Claude Code, Cursor, Gemini CLI — whichever ran you) is talking to a
@@ -20,7 +20,7 @@ It writes no secrets and does not touch `.env` or `config.yaml`, so it has no
 snapshot/rollback of those files; its undo is `cron remove` of the job this run created
 (and of the preset script this run wrote).
 
-## What cron is at v0.22.5 (source-verified, not live-verified)
+## What cron is at v0.23.2 (source-verified, not live-verified)
 
 - **Two job kinds.** An *agent* job gives a prompt to the LLM each firing (it spends tokens
   and the final response is the output). A *no-agent* job (`--script FILE --no-agent`) runs a
@@ -171,7 +171,7 @@ undo_job() {
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -180,12 +180,12 @@ HERMES_BANNER=$(remote '
     || { echo "FAIL: hermes not found on the VPS host PATH; container-only installations are outside this procedure"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the VPS host account (container-only installs are unsupported). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). If `hostname` shows a hex name you are
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). If `hostname` shows a hex name you are
 inside a container: leave it, jobs belong to the host's Hermes home.
 
 ---
@@ -466,9 +466,9 @@ Jobs you did not create are never removed. The output a job already produced sta
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the source of tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repository root:
+Read in the source of tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repository root:
 
 - `cron` subcommands and flags: `hermes_cli/subcommands/cron.py:14-205` (`create|add SCHEDULE [PROMPT] --name --deliver --failure-deliver --script --no-agent --paused ...`,
   `list [--all]`, `pause`, `resume`, `run JOB_ID`, `remove|rm|delete`, `edit`, `status`, `doctor`).
@@ -515,7 +515,7 @@ strings quoted above; it is not evidence about the real CLI.
 
 ## Definition of done
 
-- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed and the banner names Hermes `0.22.5`
+- [ ] SSH to `$VPS_USER@$VPS_IP` confirmed and the banner names Hermes `0.23.2`
 - [ ] Inputs validated locally; a bare-platform `--deliver` target has its home channel set
 - [ ] No existing job with the same name (or the run exited 0 reporting it)
 - [ ] Dry run shown (schedule, timezone, delivery, prompt or script, side effects) and the user said yes

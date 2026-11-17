@@ -1,5 +1,5 @@
 // The shared gateway lifecycle helpers (gw_ready / gw_reload) from the Step 0 block of the skill template, run against the
-// stub whose syntax layer is the real v0.22.5 argparse. Behaviour of the stub is an assumption; the call shapes are not.
+// stub whose syntax layer is the real v0.23.2 argparse. Behaviour of the stub is an assumption; the call shapes are not.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 

@@ -1,9 +1,9 @@
 ---
 name: platform-whatsapp
-description: "Wire a remote Hermes Agent 0.22.5 to WhatsApp through the bundled Baileys/Node bridge (QR pairing, no Meta developer account) over SSH. Hard allowlist gate, strict allowlist DM policy, snapshot and rollback, native gateway reload, log and bridge-health verification. The QR pairing is a human step; the Meta Cloud API integration is a different path this skill does not cover."
+description: "Wire a remote Hermes Agent 0.23.2 to WhatsApp through the bundled Baileys/Node bridge (QR pairing, no Meta developer account) over SSH. Hard allowlist gate, strict allowlist DM policy, snapshot and rollback, native gateway reload, log and bridge-health verification. The QR pairing is a human step; the Meta Cloud API integration is a different path this skill does not cover."
 ---
 
-# /platform-whatsapp — wire WhatsApp (Baileys bridge) to a remote Hermes (SSH-first, allowlist-gated, source-verified for 0.22.5)
+# /platform-whatsapp — wire WhatsApp (Baileys bridge) to a remote Hermes (SSH-first, allowlist-gated, source-verified for 0.23.2)
 
 You are the engineer connecting WhatsApp to a self-hosted Hermes agent on the user's VPS.
 You (the AI agent — Hermes, Claude Code, Codex, Cursor, Gemini, any of them) work over SSH
@@ -23,7 +23,7 @@ ssh argument, and are not echoed back (counts and masked forms only).
 
 ## Which WhatsApp integration this is
 
-Hermes v0.22.5 ships TWO WhatsApp platforms that can run side by side on different numbers
+Hermes v0.23.2 ships TWO WhatsApp platforms that can run side by side on different numbers
 (`plugins/platforms/whatsapp_cloud/gateway_env.py:7`):
 
 | | **Baileys bridge** (this skill) | **Cloud API** (not this skill) |
@@ -42,12 +42,12 @@ facts are in `plugins/platforms/whatsapp_cloud/` (`gateway_env.py:6-28`, `plugin
 QR-paired session, which only exists after the human step. The only online check is the bridge's own loopback `/health` after the
 reload (Step 9). (The Cloud path would have the Graph API; that is not covered here.)
 
-**What the source says about access (Hermes v0.22.5, details in "Verified against").**
+**What the source says about access (Hermes v0.23.2, details in "Verified against").**
 
 - The bridge is enabled by the flag `WHATSAPP_ENABLED=true`, and the adapter refuses to start a bridge that has no `creds.json`
   (the pairing wizard therefore sets the flag only after a successful pairing). An explicit `platforms.whatsapp.enabled: false`
   in `config.yaml` beats the env flag, so Step 7 sets that key to `true`.
-- The older recipe claimed that an empty allowlist leaves the bot open to everyone. In v0.22.5 it does not: the Node bridge rejects incoming messages when
+- The older recipe claimed that an empty allowlist leaves the bot open to everyone. In v0.23.2 it does not: the Node bridge rejects incoming messages when
   no allowlist is set (unless the policy is `pairing`, where the bridge forwards unknown senders to the gateway for pairing)
   and the gateway default-denies. Open access needs an explicit switch: `WHATSAPP_ALLOWED_USERS=*` (the wizard offers it),
   `WHATSAPP_ALLOW_ALL_USERS=true|1|yes`, `GATEWAY_ALLOW_ALL_USERS=true|1|yes`, or `WHATSAPP_DM_POLICY=open`. This skill refuses
@@ -56,7 +56,7 @@ reload (Step 9). (The Cloud path would have the Graph API; that is not covered h
 - The default `WHATSAPP_DM_POLICY` is `pairing`: every DM reaches the gateway and a stranger can be sent a pairing code even when an
   allowlist exists. This skill writes `WHATSAPP_DM_POLICY=allowlist`, so only the allowlisted numbers get through. Groups default to
   policy `pairing`, which never forwards group traffic, and this skill leaves that alone.
-- Allowlist entries are bare phone numbers (country code + number, digits only, no `+`). The old "LID bug" caveat is stale for v0.22.5:
+- Allowlist entries are bare phone numbers (country code + number, digits only, no `+`). The old "LID bug" caveat is stale for v0.23.2:
   phone numbers and `@lid` identities are matched through the bridge's `lid-mapping` files.
 
 ---
@@ -280,7 +280,7 @@ Rules for calling them (every skill follows these):
   defines the function in a child shell and runs nothing).
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -302,7 +302,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS host
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host (not only inside a container).
 
@@ -311,12 +311,12 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5 source; it has not been run against a live host.
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2 source; it has not been run against a live host.
 
 ---
 
@@ -750,7 +750,7 @@ then reload with `gw_reload`.
 | # | Pitfall | Why it bites | Prevention |
 |---|---------|--------------|------------|
 | 1 | Open access via `WHATSAPP_ALLOWED_USERS=*`, `WHATSAPP_ALLOW_ALL_USERS`, `GATEWAY_ALLOW_ALL_USERS` or `WHATSAPP_DM_POLICY=open` | Anyone who messages the number can use the agent (the pairing wizard itself offers `*`) | Step 3 aborts before any write; Step 5 and Step 7 re-check (names only); never set them with this skill |
-| 2 | An empty allowlist | In v0.22.5 it is not open: the bridge rejects (or, in bot mode with the default policy, forwards unknown senders for pairing) and the gateway default-denies, so the bot is simply useless or hands out pairing codes | Step 3a hard-aborts |
+| 2 | An empty allowlist | In v0.23.2 it is not open: the bridge rejects (or, in bot mode with the default policy, forwards unknown senders for pairing) and the gateway default-denies, so the bot is simply useless or hands out pairing codes | Step 3a hard-aborts |
 | 3 | Default policy `pairing` with an allowlist | Strangers' DMs still reach the gateway and can be offered pairing codes | Step 5 writes `WHATSAPP_DM_POLICY=allowlist` |
 | 4 | Allowlist with `+`, spaces, dashes, `@lid` or a JID | The documented form is bare digits; other forms are not what the wizard stores | Step 3a requires 7-15 digits per entry |
 | 5 | The wizard overwrote the allowlist (a different list, or `*`, or nothing) | The enable flag would then turn on a different audience than the one you approved | Step 7 compares the stored allowlist to the supplied one before enabling and rolls back otherwise |
@@ -773,7 +773,7 @@ then reload with `gw_reload`.
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working
-- [ ] Hermes `0.22.5` verified on the VPS host
+- [ ] Hermes `0.23.2` verified on the VPS host
 - [ ] Idempotency check ran (skipped if enabled + a safe allowlist + a paired session were already stored, unless `FORCE=1`)
 - [ ] HARD GATE passed with nothing written: allowlist non-empty, no `*`, every entry 7-15 digits; mode valid; no allow-all switch, open policy or wildcard in the VPS `.env`
 - [ ] Dry-run shown to the user; user approved (or `AUTO_APPROVE=1`)
@@ -789,11 +789,11 @@ then reload with `gw_reload`.
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified, **not** live-verified: everything below was read from the Hermes v0.22.5 source (tag `v0.22.5`, commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`) and exercised only against test doubles (`tests/skills/platform-whatsapp.test.mjs`: the real bash of this skill, the
-real v0.22.5 argparse for every `hermes` call it runs, stubbed `ssh`/`curl`/`hermes` behaviour, and a simulated human for the QR step). It has not been run
+Source-verified, **not** live-verified: everything below was read from the Hermes v0.23.2 source (tag `v0.23.2`, commit
+`ae2a81ccc00e9b7c06301523e5bb09608397149c`) and exercised only against test doubles (`tests/skills/platform-whatsapp.test.mjs`: the real bash of this skill, the
+real v0.23.2 argparse for every `hermes` call it runs, stubbed `ssh`/`curl`/`hermes` behaviour, and a simulated human for the QR step). It has not been run
 against a real Hermes, a real bridge, or a real WhatsApp account. Paths are relative to the Hermes repository root.
 
 - Which integrations exist and how they differ: `hermes_cli/subcommands/whatsapp.py:8-24` (`hermes whatsapp` = Baileys bridge for personal accounts; `hermes whatsapp-cloud` = Meta Cloud API, Business account and public webhook),
@@ -815,7 +815,7 @@ against a real Hermes, a real bridge, or a real WhatsApp account. Paths are rela
 - `hermes config set` routes UPPER_SNAKE names to `.env` and does not echo values: `hermes_cli/config.py:3398-3439`; `hermes pairing list|approve|revoke` (Pitfall 11): `hermes_cli/subcommands/pairing.py:8-29`.
 - Gateway lifecycle: see the note under Step 0 (citations there).
 
-**Parser gap.** The vendored argparse fixtures under `tests/skills/fixtures/hermes-v0.22.5/` do not include `hermes whatsapp` or `hermes whatsapp-cloud` (`hermes_cli/subcommands/whatsapp.py`). Neither is run by any block here; the wizard
+**Parser gap.** The vendored argparse fixtures under `tests/skills/fixtures/hermes-v0.23.2/` do not include `hermes whatsapp` or `hermes whatsapp-cloud` (`hermes_cli/subcommands/whatsapp.py`). Neither is run by any block here; the wizard
 command appears only in a plain-text instruction, so its syntax (no arguments) is read from the source above, not checked by the harness.
 
 **Still unverified (nothing here was run against real WhatsApp).** The wizard's real prompts and timing (read from source); that the Node bridge starts and pairs on the target host (Node/npm availability, network access to WhatsApp);

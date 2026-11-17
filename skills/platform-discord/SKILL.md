@@ -1,6 +1,6 @@
 ---
 name: platform-discord
-description: "Wire a remote Hermes Agent v0.22.5 to Discord (bot token, Message Content intent, numeric user-ID allowlist) over SSH. Checks the token and intents against Discord from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
+description: "Wire a remote Hermes Agent v0.23.2 to Discord (bot token, Message Content intent, numeric user-ID allowlist) over SSH. Checks the token and intents against Discord from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
 ---
 
 # /platform-discord — wire Discord to a remote Hermes (SSH-first)
@@ -23,7 +23,7 @@ the remote PATH. The bot token is generated or pasted locally, format-checked lo
 over ssh STDIN (a curl `--config -` for the Discord check, a `read -r` for the write), never in an ssh argument, a
 URL on a command line or a quoted remote string. Run all blocks in ONE shell session.
 
-**Honest picture (source-verified against Hermes v0.22.5, not run against a live Hermes or Discord).**
+**Honest picture (source-verified against Hermes v0.23.2, not run against a live Hermes or Discord).**
 
 - **The token enables the platform.** Hermes turns Discord on when `DISCORD_BOT_TOKEN` is present. There is no
   `DISCORD_ENABLED` variable (`plugins/platforms/discord/gateway_env.py:6-12`). The only off switch is an explicit
@@ -34,7 +34,7 @@ URL on a command line or a quoted remote string. Run all blocks in ONE shell ses
   intent; if it is off in the Portal, Discord refuses the connection and Hermes records a non-retryable
   `discord_intents_required` error (`adapter.py:1467,1659-1668`). The Server Members intent is requested only for
   username or role allowlists (`adapter.py:405-412`); this skill accepts numeric IDs only, so it is not needed.
-- **An empty allowlist is not fail-open at v0.22.5, but this skill still refuses it.** With no allowlist and no
+- **An empty allowlist is not fail-open at v0.23.2, but this skill still refuses it.** With no allowlist and no
   allow-all switch, Discord messages are denied and one warning is logged (`adapter.py:4122-4139,4178-4194`). Two
   things can still let strangers in: a pairing approval (`hermes pairing approve`), and `DISCORD_ALLOWED_CHANNELS`,
   which admits anyone speaking in the listed server channels when no user or role allowlist exists
@@ -318,7 +318,7 @@ Rules for calling them: a failure BEFORE `snapshot` (Steps 1-4) is `exit 1` with
 previous `~/.hermes/.env` and `config.yaml` byte for byte (a file that did not exist is removed again), reloads the
 gateway with `gw_reload`, and only then retires the snapshot.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
 `gw_ready`, which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id`
 than before. Why this shape (source-verified, not live-verified):
 
@@ -341,7 +341,7 @@ than before. Why this shape (source-verified, not live-verified):
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS host
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host (a container-only install is not supported).
 
@@ -350,12 +350,12 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version') \
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -762,7 +762,7 @@ Removing Discord for good is a separate decision (unset the three `DISCORD_*` ke
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded and the Step 0 helpers are defined in this shell
-- [ ] Hermes on the VPS host reports `0.22.5`
+- [ ] Hermes on the VPS host reports `0.23.2`
 - [ ] Idempotency check ran (skipped only for a safe stored setup, unless `FORCE=1`)
 - [ ] Hard gate passed with nothing written: numeric allowlist (no `*`), token shape, no open-access setting in `.env` or `config.yaml`
 - [ ] Live Discord check from the VPS accepted the token and Message Content Intent is on (or the WARN was shown to the user)
@@ -780,9 +780,9 @@ See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md)
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository.
+Read in the Hermes source at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository.
 
 - Env names and enabling: `plugins/platforms/discord/gateway_env.py:6-21` (`DISCORD_BOT_TOKEN` enables; `DISCORD_HOME_CHANNEL`,
   `DISCORD_REPLY_TO_MODE`; allowlist `DISCORD_ALLOWED_USERS`, allow-all `DISCORD_ALLOW_ALL_USERS`, `DISCORD_ALLOW_BOTS`),
@@ -801,7 +801,7 @@ Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab908
 - Gateway lifecycle: the sources listed in the lifecycle note under Step 0.
 
 Not verified, and not claimed: nothing in this skill was run against a real Hermes, a real VPS, or Discord (the tests use a stub whose
-command syntax is the real v0.22.5 argparse and whose behaviour is an assumption). The Discord `applications/@me` response shape and
+command syntax is the real v0.23.2 argparse and whose behaviour is an assumption). The Discord `applications/@me` response shape and
 the `DiscordBot` User-Agent requirement come from the Hermes source and Discord's published conventions, not from a call made here.
 The exact text and timestamps of a real `gateway.log` were not observed. `hermes send --to discord` through the home channel was
 read, not exercised. The invite permission integer 309240908864 is computed from the ten permission bits in `onboarding.py:19-31`.

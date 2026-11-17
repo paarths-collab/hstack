@@ -326,7 +326,7 @@ gw_reload >/dev/null || { echo "FAIL: gateway did not restart ready. Rolling bac
 ```
 
 `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `hermes -p default gateway ensure --json --timeout 60` to exit 0 with
-`"state":"ready"` and a new `instance_id` (Hermes v0.22.5: `hermes_cli/gateway.py:5454-5536`, `hermes_cli/gateway_runtime_cli.py:8-37`). `gateway run` is the
+`"state":"ready"` and a new `instance_id` (Hermes v0.23.2: `hermes_cli/gateway.py:5454-5536`, `hermes_cli/gateway_runtime_cli.py:8-37`). `gateway run` is the
 foreground command and `--daemon` does not exist. Never decide health by grepping `gateway status` text: the stopped gateway prints
 `✗ Gateway is not running`. A restart that live sessions refuse (no TTY) is reported, not overridden; `GW_INTERRUPT=1` adds `-y`.
 

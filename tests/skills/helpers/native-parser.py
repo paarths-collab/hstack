@@ -16,6 +16,9 @@ import pathlib
 import sys
 import types
 
+if sys.version_info < (3, 10):
+    raise SystemExit("Hermes 0.23.2 parser fixtures require Python 3.10 or later on PATH.")
+
 sys.dont_write_bytecode = True
 root = pathlib.Path(sys.argv[1])
 # `FIXTURE -- ARGV...` (used by stubs/hermes): check ONE invocation, print argparse's message to stderr and
@@ -42,7 +45,11 @@ channels.validate_name = str  # Channel-name validity is outside this syntax tes
 sys.modules["hermes_cli.release_channels"] = channels
 runtime = types.ModuleType("hermes_cli.gateway_runtime_cli")
 runtime.cmd_gateway_ensure = lambda args: None
+runtime.cmd_gateway_attach = lambda args: None
 sys.modules["hermes_cli.gateway_runtime_cli"] = runtime
+tickets = types.ModuleType("hermes_cli.gateway_runtime_tickets")
+tickets.cmd_gateway_tickets = lambda args: None
+sys.modules["hermes_cli.gateway_runtime_tickets"] = tickets
 migration = types.ModuleType("hermes_cli.left_core_migration")
 migration.moved_command_hint = lambda prog, value: ""
 sys.modules["hermes_cli.left_core_migration"] = migration

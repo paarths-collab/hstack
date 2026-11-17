@@ -1,19 +1,19 @@
 ---
 name: hermes-update
-description: Inspect and apply Hermes's native stable-channel updater on an existing Hermes 0.22.5 source installation, with a verified native backup first, and report version, runtime and delivery honestly.
+description: Inspect and apply Hermes's native stable-channel updater on an existing Hermes 0.23.2 source installation, with a verified native backup first, and report version, runtime and delivery honestly.
 ---
 
 # /hermes-update — use the installation owner's updater
 
-Hermes v0.22.5 source installations use tested stable releases and PM dependency
+Hermes v0.23.2 source installations use tested stable releases and PM dependency
 generations. Use `hermes -p default update`; do not install a PyPI package over its launcher,
 run `git reset`, or replace it with an installer tracking `main`. Desktop packages,
 Store installs and Docker images have their own update owners and must use them.
 
-**Target: Hermes v0.22.5 only, source-verified and not live-verified.** This recipe starts from an
-installation that reports 0.22.5 and drives the native updater (`update --plan`, `update --check`,
+**Target: Hermes v0.23.2 only, source-verified and not live-verified.** This recipe starts from an
+installation that reports 0.23.2 and drives the native updater (`update --plan`, `update --check`,
 `update --channel stable --yes`). Stable is an upstream release channel, not a promise to remain on
-v0.22.5: if a newer release is published, the update moves the host past the only version the other hstack
+v0.23.2: if a newer release is published, the update moves the host past the only version the other hstack
 skills were read against. Review the native plan and release notes before authorizing it, and treat the
 result as **unverified for hstack** until its skills are re-verified for that release. If an exact immutable
 version is required, do not pretend the updater has a `--version` flag: use an explicitly reviewed fresh
@@ -24,7 +24,7 @@ source installation and migration plan instead.
 | Variable | Meaning |
 |---|---|
 | `VPS_IP`, `VPS_USER` | Target and installation owner |
-| `HERMES_VERSION` | Optional. If set it must be exactly `0.22.5` (the version this recipe updates from); anything else is refused before the target is contacted |
+| `HERMES_VERSION` | Optional. If set it must be exactly `0.23.2` (the version this recipe updates from); anything else is refused before the target is contacted |
 | `ALLOW_STABLE_UPDATE=1` | Explicitly authorize the native stable-channel update after reviewing its plan |
 | `GATEWAY_EXPECTED=1` | Set when a gateway should be running after the update (every `/hermes-deploy` host). The post-update check is `gateway ensure`, which would START a gateway that was deliberately stopped, so it only runs when you say so |
 
@@ -69,8 +69,8 @@ gw_reload() {
   if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
   printf '%s\n' "$out"
 }
-[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.22.5 ] \
-  || { echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
+[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.23.2 ] \
+  || { echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
 [[ "$VPS_IP" =~ ^[A-Za-z0-9._:-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
   || { echo "ABORT: malformed SSH target. Nothing was written."; exit 1; }
 ```
@@ -93,8 +93,8 @@ whoami; hostname
   || { echo "ABORT: this recipe requires the default POSIX source installation; use the actual package/image owner." >&2; exit 1; }
 v=$(hermes -p default --version)
 printf '%s\n' "$v"
-printf '%s\n' "$v" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' \
-  || { echo "ABORT: this recipe updates FROM Hermes 0.22.5 only (got: $v)." >&2; exit 1; }
+printf '%s\n' "$v" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' \
+  || { echo "ABORT: this recipe updates FROM Hermes 0.23.2 only (got: $v)." >&2; exit 1; }
 hermes -p default update --plan
 hermes -p default update --channel stable --check
 REMOTE
@@ -108,7 +108,7 @@ upgrade path first. Do not force a downgrade or interrupt live work to get past 
 
 Explain that the native updater owns code/dependency preparation and the gateway fleet restart (unless
 `--no-gateway-restart`, `hermes_cli/subcommands/update.py:110-114`); back up first, follow stable for this run, and
-verify afterwards. Stable may advance beyond v0.22.5. Its selection does not promote that version into hstack's support matrix.
+verify afterwards. Stable may advance beyond v0.23.2. Its selection does not promote that version into hstack's support matrix.
 
 ```bash
 [ "${ALLOW_STABLE_UPDATE:-0}" = 1 ] \
@@ -157,10 +157,10 @@ remote 'hermes -p default pm doctor' >/dev/null \
   || { echo "FAIL: pm doctor reports a missing or unverified package after the update. Keep the recovery artifact; use pm repair after inspecting."; exit 1; }  # hermes-parse: skip (pm is dispatched before argparse: hermes_cli/main.py:679-683)
 NEW_VERSION=$(remote 'hermes -p default --version') || { echo "FAIL: version unreadable after the update."; exit 1; }
 printf 'Version after update: %s\n' "$NEW_VERSION"
-if printf '%s\n' "$NEW_VERSION" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)'; then
-  echo "Still Hermes 0.22.5: no newer stable release was applied."
+if printf '%s\n' "$NEW_VERSION" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)'; then
+  echo "Still Hermes 0.23.2: no newer stable release was applied."
 else
-  echo "UNVERIFIED FOR HSTACK: the host moved past 0.22.5. The other hstack skills refuse to run on any other version until they are re-verified."
+  echo "UNVERIFIED FOR HSTACK: the host moved past 0.23.2. The other hstack skills refuse to run on any other version until they are re-verified."
 fi
 DOCTOR_RC=0
 DOCTOR_OUT=$(remote 'hermes -p default doctor 2>&1') || DOCTOR_RC=$?
@@ -211,7 +211,7 @@ Use the narrowest status supported by the evidence:
 | Runtime ready, inference failed | The configured provider is not confirmed | Check provider identity/credentials without printing secrets |
 | Inference passed, canary missing | Real workflow delivery is unknown | Keep scheduled activation under review |
 | Intended canary observed | The tested workflow completed on this version | Record its actual scope; do not generalize to all integrations |
-| Version moved past 0.22.5 | hstack's skills are not verified for it | Report it as unverified; do not run other hstack skills until they are re-verified |
+| Version moved past 0.23.2 | hstack's skills are not verified for it | Report it as unverified; do not run other hstack skills until they are re-verified |
 
 An uncertain result does not justify deleting the backup or automatically retrying sends.
 An update can change behavior even when the version banner looks correct.
@@ -258,7 +258,7 @@ Do not invent `--version`, `--tag`, or a pip fallback to simulate one.
 | 7 | Counting `OK` inside an error as success | Diagnostic text can repeat the prompt | Require command success and exact output |
 | 8 | Assuming install success proves delivery | Platform routing may still be wrong | Observe the intended private canary |
 | 9 | Calling every integration supported | Only a bounded workflow was tested | Report version, target and tested operations |
-| 10 | Assuming stable means hstack-verified | Stable moves on; this recipe was read against 0.22.5 only | Compare the version after the update; report "unverified for hstack" when it changed |
+| 10 | Assuming stable means hstack-verified | Stable moves on; this recipe was read against 0.23.2 only | Compare the version after the update; report "unverified for hstack" when it changed |
 | 11 | Running `update --backup` on top of an explicit `hermes backup` | Two full archives, and the updater's copy is best-effort | One verified `hermes backup`; the updater's default quick snapshot still runs |
 | 12 | `gateway ensure` after the update on a host whose gateway was stopped on purpose | `ensure` starts a gateway | Only with `GATEWAY_EXPECTED=1` |
 | 13 | Failing the update because `hermes doctor` exits 1 | Doctor exits non-zero while any issue remains | Gate on `pm doctor` and inference; classify doctor's issues |
@@ -269,24 +269,24 @@ Report the native update's before/after version and installation owner.
 Report whether the private backup was verified before the change.
 Report `pm doctor`, `hermes doctor` and gateway readiness outcomes separately.
 Report inference and workflow delivery outcomes separately.
-State that this procedure was source-verified, not run against a live host, and whether the version is still 0.22.5.
+State that this procedure was source-verified, not run against a live host, and whether the version is still 0.23.2.
 Preserve unresolved errors and the exact recovery artifact.
 
 ## Definition of done
 
-- [ ] `HERMES_VERSION` unset or `0.22.5`; the host reported 0.22.5 before the update
+- [ ] `HERMES_VERSION` unset or `0.23.2`; the host reported 0.23.2 before the update
 - [ ] Installation owner, native plan and stable-channel choice reviewed
 - [ ] Exact private backup path recorded before update
 - [ ] Native update completed without bypassing process/dependency guards
-- [ ] Version after the update recorded (and called out as unverified for hstack if it is not 0.22.5)
+- [ ] Version after the update recorded (and called out as unverified for hstack if it is not 0.23.2)
 - [ ] `pm doctor` passed; `hermes doctor` exit code and issues recorded; gateway readiness checked when `GATEWAY_EXPECTED=1`
 - [ ] Inference command succeeded with exact expected output
 - [ ] Intended connector and private-message delivery reverified, or explicitly unverified
 - [ ] No pip mutation, moving-main installer, forced downgrade or invented restore command
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository.
+Source-verified at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository.
 
 - `update` flags `--check --plan --backup --no-backup --yes/-y --channel --set-channel --no-gateway-restart`: `hermes_cli/subcommands/update.py:8-115`
   (there is no `--version` flag).
@@ -306,6 +306,6 @@ Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e
 Not verified: any run of the updater on a live host (fetch, dependency sync, fleet restart), what the next stable release changes, whether
 the updater's quick snapshot succeeds on a real home, and everything after the update (inference, delivery).
 
-Sources: v0.22.5 [update parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/update.py),
-[backup parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/backup.py),
-[import parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/import_cmd.py).
+Sources: v0.23.2 [update parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/update.py),
+[backup parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/backup.py),
+[import parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/import_cmd.py).

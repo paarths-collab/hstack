@@ -1,6 +1,6 @@
 ---
 name: platform-mattermost
-description: "Wire a remote Hermes Agent v0.22.5 to a Mattermost server (server URL plus bot or personal-access token) over SSH. Checks the token against the server's /api/v4/users/me from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
+description: "Wire a remote Hermes Agent v0.23.2 to a Mattermost server (server URL plus bot or personal-access token) over SSH. Checks the token against the server's /api/v4/users/me from the VPS before any write, refuses open access, reloads the gateway natively, verifies the adapter's own connected log line and rolls back to the previous values on any failure."
 ---
 
 # /platform-mattermost — wire Mattermost to a remote Hermes (SSH-first)
@@ -23,7 +23,7 @@ the remote PATH. The token is pasted locally, format-checked locally, and travel
 curl `--config -` for the server check, a `read -r` for the write), never in an ssh argument, a URL on a command line
 or a quoted remote string. Run all blocks in ONE shell session.
 
-**Honest picture (source-verified against Hermes v0.22.5, not run against a live Hermes or Mattermost).**
+**Honest picture (source-verified against Hermes v0.23.2, not run against a live Hermes or Mattermost).**
 
 - **Token plus URL.** `MATTERMOST_TOKEN` enables the platform and `MATTERMOST_URL` supplies the server; Hermes warns when the
   token is set without the URL (`plugins/platforms/mattermost/gateway_env.py:6-14`, `adapter.py:92-102`). There is no
@@ -38,7 +38,7 @@ or a quoted remote string. Run all blocks in ONE shell session.
   ping from inside the container. This skill requires Hermes on the host (Step 1), so the check runs from the host: use a URL the
   host can reach (a published port such as `http://127.0.0.1:8065` if Mattermost is a container on the same VPS, or its public
   `https://` address).
-- **An empty allowlist is not fail-open at v0.22.5, but this skill still refuses it.** With no allowlist and no allow-all switch,
+- **An empty allowlist is not fail-open at v0.23.2, but this skill still refuses it.** With no allowlist and no allow-all switch,
   Mattermost senders are denied (`gateway/authz_mixin.py:687-694`, docs `website/docs/user-guide/messaging/mattermost.md:328-331`),
   and an unknown DM sender is offered a pairing code. A configured allowlist turns that offer off (`allowlist_suppresses_pairing`,
   `gateway_env.py:21`). Hermes' own setup wizard says "leave empty for open access" (`adapter.py:682-686`); the source does not
@@ -312,7 +312,7 @@ Rules for calling them: a failure BEFORE `snapshot` (Steps 1-4) is `exit 1` with
 previous `~/.hermes/.env` and `config.yaml` byte for byte (a file that did not exist is removed again), reloads the
 gateway with `gw_reload`, and only then retires the snapshot.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires
 `gw_ready`, which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id`
 than before. Why this shape (source-verified, not live-verified):
 
@@ -335,7 +335,7 @@ than before. Why this shape (source-verified, not live-verified):
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS host
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS host
 
 This skill writes the HOST's `~/.hermes/.env`, so `hermes` must be installed on the host (a container-only install is not supported).
 
@@ -344,12 +344,12 @@ HERMES_BANNER=$(remote '
   command -v hermes >/dev/null 2>&1 || { echo "FAIL: hermes not found on the VPS host PATH"; exit 1; }
   hermes -p default --version') \
   || { echo "ABORT: Hermes is not installed on the host (a container-only install is not supported by this skill). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1;
 }
 ```
 
-Expected: a banner naming Hermes `0.22.5` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.22.5
+Expected: a banner naming Hermes `0.23.2` (`HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the v0.23.2
 source; it has not been run against a live host.
 
 ---
@@ -761,7 +761,7 @@ Removing Mattermost for good is a separate decision (unset the `MATTERMOST_*` ke
 ## Definition of done
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded and the Step 0 helpers are defined in this shell
-- [ ] Hermes on the VPS host reports `0.22.5`
+- [ ] Hermes on the VPS host reports `0.23.2`
 - [ ] Idempotency check ran (skipped only for a safe stored setup, unless `FORCE=1`)
 - [ ] Hard gate passed with nothing written: 26-character user-ID allowlist (no `*`), URL and token shape, no open-access setting in `.env` or `config.yaml`
 - [ ] Live `GET /api/v4/users/me` from the VPS accepted the token and returned the account
@@ -779,9 +779,9 @@ See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md)
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository.
+Read in the Hermes source at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository.
 
 - Env names and enabling: `plugins/platforms/mattermost/gateway_env.py:6-22` (`MATTERMOST_TOKEN` enables, `MATTERMOST_URL` is the server,
   `MATTERMOST_HOME_CHANNEL`; allowlist `MATTERMOST_ALLOWED_USERS`, allow-all `MATTERMOST_ALLOW_ALL_USERS`),
@@ -801,7 +801,7 @@ Read in the Hermes source at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab908
 - Gateway lifecycle: the sources listed in the lifecycle note under Step 0.
 
 Not verified, and not claimed: nothing in this skill was run against a real Hermes, a real VPS, or a Mattermost server (the tests use a
-stub whose command syntax is the real v0.22.5 argparse and whose behaviour is an assumption). The `users/me` response shape comes from
+stub whose command syntax is the real v0.23.2 argparse and whose behaviour is an assumption). The `users/me` response shape comes from
 the adapter's use of it and Hermes' docs; no server was called. The 26-character lowercase ID format is Mattermost's, stated in the
 Hermes docs (`mattermost.md:108`), not enforced by Hermes. The exact text and timestamps of a real `gateway.log` were not observed.
 `hermes send --to mattermost` through the home channel was read, not exercised.

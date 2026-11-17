@@ -1,6 +1,6 @@
 // hermes-integrate: the orchestrator validates the picks, refuses specialists that are still legacy procedures, keeps a resumable
 // plan, writes NO secret and does not reload, and verifies the batch with the native `mcp test` and `gateway ensure`.
-// The real SKILL.md blocks run against a simulated VPS (stubs written from the v0.22.5 source).
+// The real SKILL.md blocks run against a simulated VPS (stubs written from the v0.23.2 source).
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -11,7 +11,7 @@ import { SCRIPT_END, scenario } from "./helpers/sandbox.mjs";
 
 const SKILL = "hermes-integrate";
 const PRE = ["before-you-start#1", "step0#1"];
-const MARKER = "> **Compatibility:** legacy procedure written for Hermes 0.15.x - not yet re-verified on Hermes 0.22.5.\n";
+const MARKER = "> **Compatibility:** legacy procedure written for Hermes 0.15.x - not yet re-verified on Hermes 0.23.2.\n";
 const script = (ids, { replace = [], pre = "", post = "" } = {}) =>
   assemble(["set +e\n", pre, { skill: SKILL, ids: PRE, replace }, { skill: SKILL, ids, replace }, post, SCRIPT_END]);
 const gate = (o) => script(["step1#1", "step2#1"], o);
@@ -68,10 +68,10 @@ describe("hermes-integrate: Step 2 validates the picks before anything runs", { 
       assert.match(run.out, /ABORT: SSH/);
     });
   });
-  it("a Hermes that is not 0.22.5 stops before the plan is built", async () => {
+  it("a Hermes that is not 0.23.2 stops before the plan is built", async () => {
     await scenario({ name: "int-ver", files: { "hermes.version": "hermes 0.17.1\n" }, script: gate(), env: { CHOSEN: "notion" } }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /ABORT: .*0\.22\.5/);
+      assert.match(run.out, /ABORT: .*0\.23\.2/);
       assert.ok(!/Plan \(in this order\)/.test(run.out));
     });
   });
@@ -199,7 +199,7 @@ describe("hermes-integrate: static facts about the text", () => {
     assert.match(text, /up to N times/);
   });
   it("cites its source and says what was not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /\*\*Not verified:\*\*/);
   });
 });

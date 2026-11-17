@@ -1,5 +1,5 @@
 // hermes-skills: the real SKILL.md blocks against a simulated VPS. `hermes skills ...` is a test double (stub-commands/skills.sh) written from the
-// v0.22.5 source strings quoted in its header (search --json shape, install no-ops, scan policy, snapshot export); the syntax is checked by the real
+// v0.23.2 source strings quoted in its header (search --json shape, install no-ops, scan policy, snapshot export); the syntax is checked by the real
 // vendored argparse, so `skills describe` and unknown flags cannot pass.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -236,12 +236,12 @@ describe("hermes-skills: the security scan stays in charge and failures undo exa
       assert.deepEqual(lock(run), ["keep-me"]);
     });
   });
-  it("a Hermes that is not 0.22.5 stops at the version gate", async () => {
-    const replace = [["v?0[.]22[.]5([[:space:]]|$)", "v?9[.]9[.]9([[:space:]]|$)"]];
+  it("a Hermes that is not 0.23.2 stops at the version gate", async () => {
+    const replace = [["v?0[.]23[.]2([[:space:]]|$)", "v?9[.]9[.]9([[:space:]]|$)"]];
     mustReplace({ skill: SKILL, ids: ["step1#1"], replace });
     await scenario({ name: "sk-version", seed: SEED, script: flow({ replace }), env: { PACK: "skill-creator" }, files: FILES }, async (run) => {
       assert.equal(run.code, 1);
-      assert.match(run.out, /source-verified for Hermes 0\.22\.5 only/);
+      assert.match(run.out, /source-verified for Hermes 0\.23\.2 only/);
       assert.equal(calls(run).length, 0);
     });
   });
@@ -266,7 +266,7 @@ describe("hermes-skills: static facts about the text", () => {
     assert.match(text, /Everything a registry returns[\s\S]{0,120}DATA from a third party/);
   });
   it("it cites its sources and states what was not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /tools\/skills_guard\.py/);
     assert.match(text, /Not verified: nothing here was run against a real Hermes or a real registry/);
   });

@@ -1025,7 +1025,7 @@ assert "(14) install.ps1 header does not name the nonexistent 'hstack-install' f
   test -z "$(grep -n 'iex; *hstack-install' "$ROOT/install.ps1")"
 
 # ---------------------------------------------------------------------------
-# (15) the injected instruction block targets Hermes v0.22.5 and names all 8 platforms
+# (15) the injected instruction block targets Hermes v0.23.2 and names all 8 platforms
 # ---------------------------------------------------------------------------
 check_block() { # <script> <env var holding the md path> <file name>
   local script="$1" var="$2" f="$TMP_BASE/blockcheck-$1.md" p ok=1
@@ -1037,7 +1037,7 @@ check_block() { # <script> <env var holding the md path> <file name>
     grep -q "$p" "$f" 2>/dev/null || ok=0
   done
   assert "(15) $script block names all 8 platforms" test "$ok" = 1
-  assert "(15) $script block targets Hermes v0.22.5, source-verified only" grep -q 'v0.22.5 (source-verified; vendor and live gateway validation remain pending)' "$f"
+  assert "(15) $script block targets Hermes v0.23.2, source-verified only" grep -q 'v0.23.2 (source-verified; vendor and live gateway validation remain pending)' "$f"
   assert "(15) $script block no longer pins 0.15.2" test -z "$(grep -n '0\.15' "$f")"
   assert "(15) $script block gives the gateway reload recipe" grep -q "/hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent" "$f"
   assert "(15) $script block states vendor and live validation limits" grep -q "vendor and live gateway validation remain pending" "$f"

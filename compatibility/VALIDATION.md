@@ -1,11 +1,48 @@
 # Validation evidence and limits
 
-Updated: **26 October 2026**. Hermes **0.22.5** is source-verified, not live-verified.
+Updated: **17 November 2026**. Hermes **0.23.2** is source-verified, not live-verified.
 All 97 skills remain in the catalogue. The dedicated GitHub report workers and
 experimental acceptance transaction have been removed; their previous checks are
 not evidence for the current product. Historical results remain in Git history.
 
-## Catalogue migration
+## Hermes 0.23.2 refresh — 17 November 2026
+
+The official stable release is pinned to commit
+`ae2a81ccc00e9b7c06301523e5bb09608397149c`, with installer SHA-256
+`c73dad4dcf7c9ecadb98578e28cc763d23d7be3fa1b513545319038795493214`.
+The new source fixture provenance records and verifies the Git blob and SHA-256
+of each vendored file. The historical 0.22.5 fixtures are unchanged.
+
+Executed locally on macOS:
+
+- All **2,295 skill regressions passed**, with no failures or skips. These include
+  the 97 catalogue CLI parser contracts, exact source/installer provenance,
+  early profile selection, rollback, gateway refusal and readiness checks.
+- Stock macOS Bash installer: **411 passed**. Script regressions: **116 passed**.
+  Recipe/plugin/removal regressions: **18 passed** in both the working and isolated
+  publishing checkouts.
+- **97 skill validations**, skill references and all three sample blueprints passed.
+  Markdown Bash lint parsed **962 blocks** with no errors; 87 placeholder blocks
+  were excluded.
+- The Next.js production build and **26 browser checks passed**. Additional desktop
+  and mobile preview checks confirmed six filled feature cards, their six guide
+  links, the 0.23.2 version label and removal of the visible artwork credit.
+- Gitleaks found no leaks in the publication tree; **seven scanner controls passed**.
+
+The tagged gateway readiness JSON, endpoint instance identity and guarded restart
+handlers were reviewed. All 22 literal native MCP catalogue entries referenced by
+the skills exist in the pinned tree, including the supported `official/` aliases.
+These are source and simulated checks; they do not establish live credentials,
+model responses or a running gateway. The parser checks used Python 3.12; Python
+3.10 or later is required, and the SSH harness preserves the runner’s selected
+interpreter. PowerShell was not installed for this refresh, so its older results
+below have not been re-established on 0.23.2.
+
+Reviewed source: [gateway verdict](https://github.com/NousResearch/hermes-agent/blob/ae2a81ccc00e9b7c06301523e5bb09608397149c/hermes_cli/gateway_runtime_cli.py),
+[gateway lifecycle](https://github.com/NousResearch/hermes-agent/blob/ae2a81ccc00e9b7c06301523e5bb09608397149c/hermes_cli/gateway.py),
+[MCP catalogue](https://github.com/NousResearch/hermes-agent/blob/ae2a81ccc00e9b7c06301523e5bb09608397149c/hermes_cli/mcp_catalog.py).
+
+## Earlier catalogue migration
 
 All 68 remaining integration procedures were migrated to reviewed native routes.
 The [migration record](MIGRATION.md) explains the changes. Source fixtures bind

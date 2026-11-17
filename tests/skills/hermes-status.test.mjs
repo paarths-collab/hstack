@@ -150,7 +150,7 @@ describe("hermes-status: opt-in checks", { concurrency: 4 }, () => {
 });
 
 describe("hermes-status: gates", { concurrency: 4 }, () => {
-  it("a Hermes that is not 0.22.5 aborts before any report", async () => {
+  it("a Hermes that is not 0.23.2 aborts before any report", async () => {
     await run({ files: { "hermes.version": "hermes 0.15.2\n" } }, async (r) => {
       assert.equal(r.code, 1, r.out);
       assert.match(r.out, /ABORT/);
@@ -179,7 +179,7 @@ describe("hermes-status: the text", () => {
   });
   it("says that status text is informational and which checks change anything", () => {
     assert.match(text, /informational/i);
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/status\.py:\d+/);
     assert.match(text, /hermes_cli\/gateway\.py:\d+/);
     assert.match(text, /(not|nothing)[^.\n]*run against a (live|real)/i);

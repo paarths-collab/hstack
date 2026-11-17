@@ -1,6 +1,6 @@
 ---
 name: hermes-memory
-description: Inspect, switch off or prepare Hermes external memory with the native memory and plugin commands on Hermes 0.22.5, keeping provider dependencies under Hermes PM and never putting a provider key through SSH argv.
+description: Inspect, switch off or prepare Hermes external memory with the native memory and plugin commands on Hermes 0.23.2, keeping provider dependencies under Hermes PM and never putting a provider key through SSH argv.
 ---
 
 # /hermes-memory — native memory configuration
@@ -10,7 +10,7 @@ external provider. External memory is additive, not a replacement for built-in m
 Only one external provider is selected at a time. Do not describe memory as unlimited
 or assume built-in memory is enabled on a deliberately minimal Blank Slate profile.
 
-**Target: Hermes v0.22.5 only, source-verified and not live-verified.** Bundled providers are `retaindb` and `byterover`.
+**Target: Hermes v0.23.2 only, source-verified and not live-verified.** Bundled providers are `retaindb` and `byterover`.
 `honcho`, `hindsight`, `supermemory`, `mem0`, `openviking` and `holographic` are catalog plugins, installed with
 `hermes plugins install <name>` (`hermes_cli/subcommands/memory.py:14-19`, `plugin-catalog/<name>.yaml`). Hermes PM prepares declared plugin
 dependencies; do not install guessed packages such as `${PROVIDER}ai` into an ambient or guessed venv.
@@ -23,9 +23,9 @@ dependencies; do not install guessed packages such as `${PROVIDER}ai` into an am
 | `MODE` | `inspect` (default, read-only), `builtin` (external provider off), `external` (prepare a provider for attended setup) or `verify` (after the attended setup) |
 | `PROVIDER` | For `external` and `verify`: `retaindb`, `byterover`, `honcho`, `hindsight`, `supermemory`, `mem0`, `openviking`, `holographic` |
 | `DEPS_CONSENT=1` | For `external` with a catalog provider: you reviewed its declared dependencies and disclosure (the manifest in `plugin-catalog/<name>.yaml`) and consent to `plugins install --yes-deps` |
-| `HERMES_VERSION` | Optional. If set it must be exactly `0.22.5` |
+| `HERMES_VERSION` | Optional. If set it must be exactly `0.23.2` |
 
-What each provider needs, from the v0.22.5 sources (the credential is entered by the human in native setup, never by this skill):
+What each provider needs, from the v0.23.2 sources (the credential is entered by the human in native setup, never by this skill):
 
 | Provider | Source | Declared credential or dependency |
 |---|---|---|
@@ -202,8 +202,8 @@ if [ "$MODE" = external ]; then
          || { echo "ABORT: review plugin-catalog/$PROVIDER.yaml (dependencies, disclosure) and set DEPS_CONSENT=1 to install it. Nothing was written."; exit 1; } ;;
   esac
 fi
-[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.22.5 ] \
-  || { echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
+[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.23.2 ] \
+  || { echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
 [[ "$VPS_IP" =~ ^[A-Za-z0-9._:-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
   || { echo "ABORT: malformed SSH target. Nothing was written."; exit 1; }
 ```
@@ -216,14 +216,14 @@ provider `Plugin:    installed ✓` and `Status:    available ✓` (or `not avai
 
 ```bash
 BANNER=$(remote 'hermes -p default --version') || { echo "ABORT: could not read the Hermes version. Nothing was written."; exit 1; }
-printf '%s\n' "$BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' \
-  || { echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $BANNER). Nothing was written."; exit 1; }
+printf '%s\n' "$BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' \
+  || { echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $BANNER). Nothing was written."; exit 1; }
 remote 'hermes -p default memory status' \
   || { echo "FAIL: native memory status unavailable; inspect this version before changing providers. Nothing was written."; exit 1; }
 if [ "$MODE" = inspect ]; then echo "Inspection complete. No provider was changed."; exit 0; fi
 ```
 
-The v0.22.5 memory parser has `setup [provider]`, `status`, `off` and `reset`; there are no generic `memory write` or
+The v0.23.2 memory parser has `setup [provider]`, `status`, `off` and `reset`; there are no generic `memory write` or
 `memory search` commands (`hermes_cli/subcommands/memory.py:21-33`).
 
 ## Step 2 — preserve a native backup (external mode)
@@ -409,7 +409,7 @@ Retain the exact backup path for the provider change.
 
 ## Definition of done
 
-- [ ] `HERMES_VERSION` unset or `0.22.5`; the host's version banner names 0.22.5
+- [ ] `HERMES_VERSION` unset or `0.23.2`; the host's version banner names 0.23.2
 - [ ] Native memory status inspected; default inspection made no provider changes
 - [ ] Provider change explicitly chosen and private native backup retained (external) or snapshot taken (builtin)
 - [ ] External dependencies handled by catalog/PM after `DEPS_CONSENT=1`, not ambient pip
@@ -418,9 +418,9 @@ Retain the exact backup path for the provider change.
 - [ ] Gateway reloaded with `gw_reload` (ready, new instance) and `memory status` names the provider as available (or `(none — built-in only)` for builtin)
 - [ ] Remote storage canary verified separately, or explicitly still unverified
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository.
+Source-verified at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository.
 
 - `memory setup [provider]`, `status`, `off`, `reset [--yes] [--target]`: `hermes_cli/subcommands/memory.py:10-34`; dispatch, `off` and `reset`:
   `hermes_cli/main_agent_cmds.py:11-68`; `setup <provider>` and the interactive wizard (activation in `memory.provider`, dependencies through PM, "Start a
@@ -437,6 +437,6 @@ Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e
 Not verified: any run of setup or install against a live host, each provider's own wizard prompts and defaults, that a running gateway needs the reload
 to pick up `memory.provider` (it is done as a precaution), and any remote storage behavior.
 
-Sources: [v0.22.5 memory parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/memory.py),
-[plugin parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/plugins.py),
+Sources: [v0.23.2 memory parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/memory.py),
+[plugin parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/plugins.py),
 [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers).

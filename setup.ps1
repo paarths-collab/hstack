@@ -740,7 +740,7 @@ setup. Setup: /hermes-install /hermes-model /hermes-skills /hermes-memory /herme
 /platform-mattermost /platform-teams /platform-google-chat /platform-signal.
 Ops: /hermes-status /hermes-restart /hermes-update /hermes-fix /hermes-backup.
 Enforce allowlists and keep secrets in .env with chmod 600.
-Target: Hermes v0.22.5 (source-verified; vendor and live gateway validation remain pending).
+Target: Hermes v0.23.2 (source-verified; vendor and live gateway validation remain pending).
 Use the native catalog/MCP or installed skill route documented for each integration. Reload with
 /hermes-restart: default profile, guarded restart, readiness and new-instance proof; interrupt chats only with explicit consent.
 $markEnd

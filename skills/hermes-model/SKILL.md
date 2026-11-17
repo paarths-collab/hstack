@@ -1,6 +1,6 @@
 ---
 name: hermes-model
-description: Configure the Hermes model and provider with an API key over SSH on Hermes v0.22.5, reload the gateway natively, and prove it with an exact-reply inference test that rolls back on failure. Use when setting up or changing which LLM a remote, self-hosted Hermes uses. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
+description: Configure the Hermes model and provider with an API key over SSH on Hermes v0.23.2, reload the gateway natively, and prove it with an exact-reply inference test that rolls back on failure. Use when setting up or changing which LLM a remote, self-hosted Hermes uses. Works from Claude Code, Codex, Cursor, Hermes itself, and Gemini CLI.
 ---
 
 # /hermes-model — configure provider + model on a remote Hermes (SSH-first)
@@ -13,7 +13,7 @@ YOUR machine (possibly macOS, bash 3.2) and reach the VPS through the `remote` h
 Do everything autonomously; stop only for the one thing a machine cannot do: mint the
 provider API key in the provider's dashboard.
 
-**Native surface (Hermes v0.22.5, source-verified, not run live).** For attended setup, prefer `hermes -p default model`
+**Native surface (Hermes v0.23.2, source-verified, not run live).** For attended setup, prefer `hermes -p default model`
 (interactive picker) or `hermes -p default setup model`; `setup --portal` is an OAuth login and must not be started in a
 noninteractive SSH session. This skill keeps a bounded BYOK path for OpenRouter, Anthropic, OpenAI and DeepSeek:
 
@@ -237,7 +237,7 @@ the last check. `rollback` RESTORES the pre-skill `.env` and `config.yaml`; it n
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
 
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`,
 which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id` than before. Why this shape
 (source-verified, not live-verified):
 
@@ -260,7 +260,7 @@ which is `gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` a
 
 ---
 
-## Step 1 — verify Hermes v0.22.5 is reachable on the VPS
+## Step 1 — verify Hermes v0.23.2 is reachable on the VPS
 
 ```bash
 HERMES_BANNER=$(remote '
@@ -269,13 +269,13 @@ HERMES_BANNER=$(remote '
   [ ! -e /.dockerenv ] && [ ! -e /run/.containerenv ] || { echo "FAIL: this recipe requires the host installation owner"; exit 1; }
   hermes -p default --version
 ') || { echo "ABORT: Hermes is not installed on the host account (a container-only install is not supported here). Run /hermes-install first. Nothing was written."; exit 1; }
-printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' || {
-  echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (got: $HERMES_BANNER). Nothing was written."; exit 1; }
+printf '%s\n' "$HERMES_BANNER" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' || {
+  echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (got: $HERMES_BANNER). Nothing was written."; exit 1; }
 printf '%s\n' "$HERMES_BANNER"
 ```
 
-Expected: a banner naming Hermes `0.22.5` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the
-v0.22.5 source; it has not been run against a live host, and a version banner is not evidence that provider inference works.
+Expected: a banner naming Hermes `0.23.2` (the version pinned as `HERMES_VERSION` in `VERSIONS.txt`). The procedure is checked against the
+v0.23.2 source; it has not been run against a live host, and a version banner is not evidence that provider inference works.
 
 Also confirm we are on the host, not a container — keys added inside a container are
 invisible to the host's sshd, and `~/.hermes/.env` on a container is ephemeral:
@@ -424,7 +424,7 @@ echo "OK: model.default=$GOT_MODEL model.provider=$GOT_PROVIDER"
 
 `hermes -z PROMPT` is one-shot mode: it prints ONLY the final response text on stdout (no banner, spinner or session line) and
 auto-bypasses approvals, so it can never hang on a prompt (`hermes_cli/_parser.py:148-153`; on the gateway path the session is created
-unattended, `hermes_cli/gateway_chat.py:235`, `hermes_cli/gateway_chat_view.py:52`, `:307`). At v0.22.5 it does not run an agent in
+unattended, `hermes_cli/gateway_chat.py:235`, `hermes_cli/gateway_chat_view.py:52`, `:307`). At v0.23.2 it does not run an agent in
 the calling process: it attaches to this profile's gateway, starting one if none is ready, and creates a session there
 (`hermes_cli/main.py:3022-3029`, `hermes_cli/gateway_chat_startup.py:33-48`, `hermes_cli/gateway_client.py:262-299`) — which is why
 Step 6 reloads first. Its exit code is 0 only for a completed turn, 2 for a failed or partial one, 1 when no text came back and 130 on
@@ -505,7 +505,7 @@ The `.prev` folder holds the previous `.env` (including the old key) at mode 600
 | 4 | Manual YAML edit after a native refusal | It bypasses schema, endpoint and route cleanup (a stale `model.base_url` sends the new key to the old endpoint) | The skill rolls back; inspect the native `config set` error |
 | 5 | Misreporting key persistence as inference | Config writes do not test a provider request | Require exit 0 AND an exact `OK` from `-z` |
 | 6 | Sending a key through SSH argv | Process listings and logs can expose it | Stdin transport; `config set` output discarded |
-| 7 | Running `-z` before the gateway is ready | At v0.22.5 `-z` goes through the gateway and starts one if none is ready, so it can exercise a stale or half-started instance | Step 6 (`gw_reload`) comes before Step 8 |
+| 7 | Running `-z` before the gateway is ready | At v0.23.2 `-z` goes through the gateway and starts one if none is ready, so it can exercise a stale or half-started instance | Step 6 (`gw_reload`) comes before Step 8 |
 | 8 | Stopping a shared host gateway casually | Multiple profiles can share one gateway | Exclusive-default scope; a live-session refusal is reported, `GW_INTERRUPT=1` is the deliberate override |
 | 9 | Printing `config show` | Prints the whole config; custom keys can hold secrets | Single-key `config get` (credential-shaped values are masked unless `--raw`) |
 | 10 | Treating an offline stub as real compatibility | The stub models assumed behavior | Keep source citations and live target evidence separate |
@@ -520,7 +520,7 @@ The `.prev` folder holds the previous `.env` (including the old key) at mode 600
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` succeeded
 - [ ] Inputs validated locally (`validate_inputs`): provider allowlist, key format (OAuth token refused for Anthropic), model id
-- [ ] Hermes version banner names 0.22.5 on the host (ABORT otherwise)
+- [ ] Hermes version banner names 0.23.2 on the host (ABORT otherwise)
 - [ ] Host vs container confirmed (`whoami; hostname` shows host, not hex container id)
 - [ ] Idempotency check passed (exact `config get` comparison, or `FORCE=1` overrode)
 - [ ] Dry-run shown; user approved (or `AUTO_APPROVE=1`)
@@ -535,9 +535,9 @@ The `.prev` folder holds the previous `.env` (including the old key) at mode 600
 
 ---
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to the repository root.
+Read in the v0.23.2 source (tag `v0.23.2`, commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to the repository root.
 
 | Claim used by this skill | Source |
 |---|---|
@@ -552,7 +552,7 @@ Read in the v0.22.5 source (tag `v0.22.5`, commit `bf0203a794a07aac3ff764972ab90
 | `setup --portal` is an OAuth login; `hermes model` is an interactive picker | `hermes_cli/subcommands/setup.py:34-37`, `hermes_cli/subcommands/model.py:11-13` |
 | Gateway restart / ensure / instance semantics | the "Gateway lifecycle" list in Step 0 |
 
-Every `hermes ...` invocation in this file is also checked by `tests/skills/static.test.mjs` against the vendored v0.22.5 argparse
+Every `hermes ...` invocation in this file is also checked by `tests/skills/static.test.mjs` against the vendored v0.23.2 argparse
 builders (syntax only).
 
 **Unverified.** Nothing here was run against a real Hermes host or a real provider: the provider endpoint, the key's quota, whether the

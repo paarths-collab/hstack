@@ -79,7 +79,7 @@ MAX_LINES=$(version_pin SKILL_MAX_LINE_COUNT)
 MIN_PITFALLS=$(version_pin SKILL_MIN_PITFALLS)
 
 # The exact line a not-yet-modernized skill carries under its H1 (see header, rule 8).
-LEGACY_MARKER='> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.22.5. Commands such as `gateway run --daemon` in older copies do not exist on 0.22.5; prefer /hermes-restart for reloads.'
+LEGACY_MARKER='> **Compatibility:** legacy procedure written for Hermes 0.15.x — not yet re-verified on Hermes 0.23.2. Commands such as `gateway run --daemon` in older copies do not exist on 0.23.2; prefer /hermes-restart for reloads.'
 
 # ---------------------------------------------------------------------------
 # CLI flags

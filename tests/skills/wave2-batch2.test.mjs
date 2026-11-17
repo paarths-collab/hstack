@@ -1,5 +1,5 @@
 // Runs actual batch2 SKILL.md snippets against the offline VPS model. Vendor calls are fake.
-// Catalog contracts below are verbatim bytes from the official 0.22.5 commit, not invented by the MCP stub.
+// Catalog contracts below are verbatim bytes from the official 0.23.2 commit, not invented by the MCP stub.
 import assert from "node:assert/strict";
 import { readFileSync,writeFileSync,chmodSync } from "node:fs";
 import path from "node:path";
@@ -9,10 +9,10 @@ import { createServer } from "node:http";
 import { once } from "node:events";
 import { it,describe } from "node:test";
 import { REPO_ROOT,assemble,loadBlocks,extractBlocks,skillPath } from "./helpers/blocks.mjs";
-import { hermesInvocations,checkAgainstV0225 } from "./helpers/hermes-calls.mjs";
+import { hermesInvocations,checkAgainstTarget } from "./helpers/hermes-calls.mjs";
 import { Sandbox,scenario,SCRIPT_END } from "./helpers/sandbox.mjs";
 import { assertNoSecretInArgv,assertSecretsNotPrinted,assertStateIdentical } from "./helpers/asserts.mjs";
-const PIN="bf0203a794a07aac3ff764972ab9087baa4e4f4e";
+const PIN="ae2a81ccc00e9b7c06301523e5bb09608397149c";
 const MANIFESTS={
   "intercom": {
     "sha256": "b6181fffba6dded39846b9ce43ec9950f77a9e8af6d38f46f1bfd9111694dfa5",
@@ -66,7 +66,7 @@ describe("wave2 batch2 pinned source and syntax",()=>{
    for(const b of extractBlocks(md)){const p=spawnSync("/bin/bash",["-n"],{input:b.code,encoding:"utf8"});assert.equal(p.status,0,`${name} ${b.id}: ${p.stderr}`);}
    calls.push(...hermesInvocations(md));
   }
-  const invalid=checkAgainstV0225(calls).filter(r=>r.code);assert.deepEqual(invalid,[]);
+  const invalid=checkAgainstTarget(calls).filter(r=>r.code);assert.deepEqual(invalid,[]);
  });
  it("catalog routes match the actual pinned upstream manifests, including Jira authv2 and vendor OAuth",()=>{
   for(const [name,entry] of Object.entries(CATALOG)){

@@ -3,7 +3,7 @@
 // observable outcomes: what the stubs saw, in what order, and whether ~/.hermes/.env and config.yaml are byte-identical
 // after a failure.
 //
-// The truth encoded here is Hermes v0.22.5 as read from source: `mcp add` is interactive (answers on stdin; a closed stdin
+// The truth encoded here is Hermes v0.23.2 as read from source: `mcp add` is interactive (answers on stdin; a closed stdin
 // cancels and saves nothing), the gateway is reloaded with `gateway restart --detach` + `gateway ensure --json`, and the
 // connection is verified with `mcp list` + `mcp test` (no log grepping). The stub's syntax layer is the real argparse; its
 // behaviour is an assumption (see stubs/hermes).
@@ -183,10 +183,10 @@ for (const v of VENDORS) {
       });
     });
 
-    it("a Hermes that is not v0.22.5 is refused before anything is written", async () => {
+    it("a Hermes that is not v0.23.2 is refused before anything is written", async () => {
       await scenario({ name: `${v.mcp}-version`, valid: [NEW], files: { "hermes.version": "hermes 0.17.3\n" }, script: flow(v), env }, async (run) => {
         assert.equal(run.code, 1);
-        assert.match(run.out, /ABORT: .*0\.22\.5 only/);
+        assert.match(run.out, /ABORT: .*0\.23\.2 only/);
         assert.deepEqual(writeEvents(run), []);
         assert.equal(run.sb.curlCalls().length, 0);
         assert.ok(!run.sb.exists(".hermes/.env"));
@@ -406,7 +406,7 @@ for (const v of VENDORS) {
       assert.doesNotMatch(text, /--auth-header|--auth-scheme|--args '-y,|gateway stop/);
       assert.doesNotMatch(code, /hermes -p default logs|gateway (stop|run)|registered\.\*tool/, "no log grepping, no stop/run reload in any block");
       assert.doesNotMatch(text, /0\.15|0\.17/);
-      assert.match(text, /Verified against Hermes v0\.22\.5/);
+      assert.match(text, /Verified against Hermes v0\.23\.2/);
       assert.match(text, /source-verified|SOURCE-verified|not live-verified|unverified/i);
     });
   });

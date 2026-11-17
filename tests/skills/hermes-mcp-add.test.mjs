@@ -1,4 +1,4 @@
-// hermes-mcp-add: the real SKILL.md blocks run against a simulated VPS. The hermes stub checks every call with the REAL v0.22.5
+// hermes-mcp-add: the real SKILL.md blocks run against a simulated VPS. The hermes stub checks every call with the REAL v0.23.2
 // argparse (so --auth-header / --auth-scheme / --placeholder-token / --yes cannot pass) and models `mcp add` as the interactive
 // command it is (stdin answers; a closed stdin cancels without saving, exit 0), `mcp test` exit codes, the catalog (all HTTP:
 // OAuth or no-auth) and `mcp login` (exit 0 even on failure). Behaviour of the stubs is an assumption written from the source.
@@ -447,7 +447,7 @@ describe("hermes-mcp-add: static facts about the text", () => {
     assert.match(text, /56 use OAuth, 10 need no authentication, none\s+takes an API key/);
   });
   it("cites its source and says what was not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     assert.match(text, /hermes_cli\/mcp_config\.py:618-721/);
     assert.match(text, /\*\*Not verified:\*\*/);
   });

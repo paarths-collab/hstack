@@ -1,5 +1,5 @@
 // hermes-update: version gate, inspection, the explicit native backup before the update (and no redundant `--backup`), post-update checks
-// (pm doctor gates, hermes doctor is reported, gateway readiness only when expected) and the honest "moved past 0.22.5" outcome.
+// (pm doctor gates, hermes doctor is reported, gateway readiness only when expected) and the honest "moved past 0.23.2" outcome.
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
@@ -11,18 +11,18 @@ import { SCRIPT_END, scenario } from "./helpers/sandbox.mjs";
 
 const SKILL = "hermes-update";
 const seed = { env: "PUBLIC_FIXTURE=keep\n", config: "model.default: prior/model\n" };
-const env = { HERMES_VERSION: "0.22.5", ALLOW_STABLE_UPDATE: "1" };
+const env = { HERMES_VERSION: "0.23.2", ALLOW_STABLE_UPDATE: "1" };
 const run = (...ids) => assemble(["set +e\n", { skill: SKILL, ids }, SCRIPT_END]);
 const sourceInstall = (sb) => sb.write(".hermes/hermes-agent/.git/fixture", "present");
 const calls = (r) => r.sb.hermesCalls().map((c) => c.join(" "));
 const artifacts = (r) => readdirSync(r.sb.home).filter((f) => /^hermes-backup-hstack-pre-update-.*\.zip$/.test(f));
 
 describe("hermes-update: Step 0 version gate", { concurrency: 6 }, () => {
-  for (const v of ["0.15.2", "0.21.6", "0.23.0", "10.22.5", "0.22.50"]) {
+  for (const v of ["0.15.2", "0.21.6", "0.23.0", "10.23.2", "0.23.20"]) {
     it(`refuses HERMES_VERSION=${v} before contacting the target`, async () => {
       await scenario({ name: "upd-ver", seed, script: run("step0#1"), env: { ...env, HERMES_VERSION: v } }, async (r) => {
         assert.equal(r.code, 1, r.out);
-        assert.match(r.out, /ABORT: .*0\.22\.5/);
+        assert.match(r.out, /ABORT: .*0\.23\.2/);
         assert.equal(r.sb.sshCalls().length, 0);
         assertStateIdentical(r);
       });
@@ -52,11 +52,11 @@ describe("hermes-update: Step 1 inspection (nothing is written)", { concurrency:
     });
   });
 
-  for (const banner of ["Hermes Agent v0.21.6 (2026.9.1)", "hermes 0.15.2", "Hermes Agent v0.22.50", "Hermes Agent v0.23.0"]) {
+  for (const banner of ["Hermes Agent v0.21.6 (2026.9.1)", "hermes 0.15.2", "Hermes Agent v0.23.20", "Hermes Agent v0.23.0"]) {
     it(`a ${JSON.stringify(banner)} banner is refused before the plan is even requested`, async () => {
       await scenario({ name: "upd-banner", seed, script: step1, env, setup: (sb) => { sourceInstall(sb); sb.write("hermes.version", `${banner}\n`); } }, async (r) => {
         assert.equal(r.code, 1, r.out);
-        assert.match(r.out, /FROM Hermes 0\.22\.5/);
+        assert.match(r.out, /FROM Hermes 0\.23\.2/);
         assert.match(r.out, /ABORT: native updater inspection failed/);
         assert.ok(!calls(r).some((x) => x.startsWith("update")));
         assertStateIdentical(r);
@@ -165,7 +165,7 @@ describe("hermes-update: post-update verification", { concurrency: 6 }, () => {
   it("same version after the update: says so, pm doctor passes, gateway readiness is NOT probed unless expected", async () => {
     await scenario({ name: "upd-same", seed, script: after, env, setup: sourceInstall }, async (r) => {
       assert.equal(r.code, 0, r.out);
-      assert.match(r.out, /Still Hermes 0\.22\.5/);
+      assert.match(r.out, /Still Hermes 0\.23\.2/);
       assert.match(r.out, /Gateway readiness not checked/);
       assert.ok(calls(r).includes("pm doctor"));
       assert.ok(!calls(r).some((x) => x.startsWith("gateway")), "ensure would start a gateway that was stopped on purpose");
@@ -178,7 +178,7 @@ describe("hermes-update: post-update verification", { concurrency: 6 }, () => {
       assert.equal(r.code, 0, r.out);
       assert.match(r.out, /Version after update: Hermes Agent v0\.22\.6/);
       assert.match(r.out, /UNVERIFIED FOR HSTACK/);
-      assert.doesNotMatch(r.out, /Still Hermes 0\.22\.5/);
+      assert.doesNotMatch(r.out, /Still Hermes 0\.23\.2/);
     });
   });
 
@@ -242,7 +242,7 @@ describe("hermes-update: text invariants", () => {
     assert.doesNotMatch(body, /gateway (stop|run|restart)|--daemon/);
   });
   it("has a Verified section with file:line citations and says what is not verified", () => {
-    assert.match(text, /## Verified against Hermes v0\.22\.5/);
+    assert.match(text, /## Verified against Hermes v0\.23\.2/);
     for (const cite of ["hermes_cli/subcommands/update.py", "hermes_cli/update_cmd_maint.py", "hermes_cli/config_defaults.py", "hermes_cli/backup.py", "pm/cli.py"]) assert.ok(text.includes(cite), cite);
     assert.match(text, /Not verified:/);
   });

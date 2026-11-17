@@ -1,6 +1,6 @@
 // integration-obsidian: the real SKILL.md blocks against a simulated VPS (helpers/sandbox.mjs).
 //
-// What is under test is the shrunk, source-verifiable shape at Hermes v0.22.5:
+// What is under test is the shrunk, source-verifiable shape at Hermes v0.23.2:
 //   Path A  vault as files: only OBSIDIAN_VAULT_PATH (the variable Hermes' bundled `obsidian` skill reads) goes into ~/.hermes/.env;
 //           no MCP server, no gateway reload, no cron, no helper scripts. The vault directory must already exist.
 //   Path C  Local REST API plugin through the stdio MCP server mcp-obsidian: native `mcp add` (answers on stdin), gateway reload with
@@ -325,10 +325,10 @@ describe("integration-obsidian Path C: Local REST API through the mcp-obsidian s
 });
 
 describe("integration-obsidian: shared gates", { concurrency: 6 }, () => {
-  it("a Hermes that is not v0.22.5 is refused before anything is written", async () => {
+  it("a Hermes that is not v0.23.2 is refused before anything is written", async () => {
     await scenario({ name: "obs-version", files: { "hermes.version": "hermes 0.17.3\n" }, script: flow({ pre: VAULT_PRE }), env: A }, async (run) => {
       assert.equal(run.code, 1);
-      assert.match(run.out, /ABORT: .*0\.22\.5 only/);
+      assert.match(run.out, /ABORT: .*0\.23\.2 only/);
       assert.deepEqual(writeEvents(run), []);
     });
   });
@@ -368,7 +368,7 @@ describe("integration-obsidian: shared gates", { concurrency: 6 }, () => {
     const code = loadBlocks(SKILL).map((b) => b.code).join("\n");
     assert.doesNotMatch(text, /run --daemon|gateway stop|hermes gateway env|0\.15|0\.17/);
     assert.doesNotMatch(code, /gateway (stop|run)\b|crontab|\/usr\/local\/bin|\/opt\/data|git clone|OBSIDIAN_VAULT_DIR|OBSIDIAN_SYNC_MODE|OBSIDIAN_GIT_REMOTE|OBSIDIAN_API_URL/);
-    assert.match(text, /Verified against Hermes v0\.22\.5/);
+    assert.match(text, /Verified against Hermes v0\.23\.2/);
     assert.match(text, /skills\/note-taking\/obsidian\/SKILL\.md/);
     assert.match(text, /OBSIDIAN_VAULT_PATH/);
   });

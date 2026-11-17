@@ -2,9 +2,9 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by the hermes stub: H, K, event, inject and gw_state come from it)
 # Test behaviour of `hermes doctor [--fix] [--live] [--ack ID]`. NOT Hermes. Sourced by the hermes stub; $@ starts at the command
-# (-p already removed) and the real v0.22.5 argparse (hermes_cli/subcommands/doctor.py) has already accepted the argv.
+# (-p already removed) and the real v0.23.2 argparse (hermes_cli/subcommands/doctor.py) has already accepted the argv.
 #
-# Strings and exit codes come from the v0.22.5 source (hermes_cli/doctor.py): the summary lines are _print_summary (:130-148), the exit
+# Strings and exit codes come from the v0.23.2 source (hermes_cli/doctor.py): the summary lines are _print_summary (:130-148), the exit
 # status is run_doctor's `int(bool(total.issues or total.manual_issues))` (:171-194, forwarded by main.py:1837,3550-3554), so a run that
 # still has issues exits 1 and "All checks passed!" exits 0. What the host actually has wrong is an ASSUMPTION steered by knobs:
 #   doctor_issues     file: one finding per line. A line starting "fixable:" is repaired by --fix (the rest is the text), any other line

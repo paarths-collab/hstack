@@ -304,13 +304,13 @@ describe("hermes-model: a bad or inconclusive inference test rolls back", { conc
     });
   });
 
-  it("Step 1 is a version gate: a banner that does not name 0.22.5 aborts before any write", async () => {
+  it("Step 1 is a version gate: a banner that does not name 0.23.2 aborts before any write", async () => {
     await scenario({
       name: "model-version", script: flow(), env: base,
-      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.22.5"', 'echo "hermes 0.22.4"'), 0o755),
+      setup: (sb) => sb.write(".local/bin/hermes", sb.read(".local/bin/hermes").replace('echo "hermes 0.23.2"', 'echo "hermes 0.22.4"'), 0o755),
     }, async (run) => {
       assert.equal(run.code, 1, run.out);
-      assert.match(run.out, /ABORT: .*0\.22\.5 only \(got: hermes 0\.22\.4\)\. Nothing was written/);
+      assert.match(run.out, /ABORT: .*0\.23\.2 only \(got: hermes 0\.22\.4\)\. Nothing was written/);
       assert.deepEqual(writeEvents(run), []);
       assertStateIdentical(run);
     });
@@ -329,14 +329,14 @@ describe("hermes-model: a bad or inconclusive inference test rolls back", { conc
 
 describe("hermes-model: skill text states what is verified and what is not", () => {
   const text = readFileSync(skillPath(SKILL), "utf8");
-  it("has a 'Verified against Hermes v0.22.5' section citing the config writer, the provider registry and the -z path", () => {
-    const m = /\n## Verified against Hermes v0\.22\.5\n([\s\S]*?)(\n## |\n---\n|$)/.exec(text);
+  it("has a 'Verified against Hermes v0.23.2' section citing the config writer, the provider registry and the -z path", () => {
+    const m = /\n## Verified against Hermes v0\.23\.2\n([\s\S]*?)(\n## |\n---\n|$)/.exec(text);
     assert.ok(m, "missing section");
     for (const cite of [/hermes_cli\/config\.py:\d+/, /hermes_cli\/auth\.py:\d+/, /hermes_cli\/oneshot\.py:\d+/, /hermes_cli\/gateway_chat\.py:\d+/]) assert.match(m[1], cite);
     assert.match(m[1], /Unverified|not run against|source-verified/i);
   });
   it("carries no candidate / unpromoted framing, no retired gate, no Path A/B split", () => {
-    assert.doesNotMatch(text, /candidate|unpromoted|CANDIDATE_ACKNOWLEDGED|HERMES_VERSION=0\.22\.5 explicit|Path B|apply_model_path/i);
+    assert.doesNotMatch(text, /candidate|unpromoted|CANDIDATE_ACKNOWLEDGED|HERMES_VERSION=0\.23\.2 explicit|Path B|apply_model_path/i);
   });
   it("documents the -z contract: only the final reply on stdout, exit 0 only for a completed turn, approvals auto-bypassed", () => {
     assert.match(text, /exit(s)? 0 only|only .*exit 0/i);

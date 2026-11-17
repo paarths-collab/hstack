@@ -1,6 +1,6 @@
 ---
 name: hermes-deploy
-description: Deploy a self-hosted Hermes Agent v0.22.5 with Telegram end-to-end over SSH, covering install, model, platform, skills, memory, personality, home channel, native gateway service and verification. Idempotent, dry-run-first and rollback-safe, and it works from any AI agent (Claude Code, Codex, Cursor, Gemini CLI, or Hermes itself).
+description: Deploy a self-hosted Hermes Agent v0.23.2 with Telegram end-to-end over SSH, covering install, model, platform, skills, memory, personality, home channel, native gateway service and verification. Idempotent, dry-run-first and rollback-safe, and it works from any AI agent (Claude Code, Codex, Cursor, Gemini CLI, or Hermes itself).
 ---
 
 # /hermes-deploy — full end-to-end Hermes Agent deploy (SSH-first)
@@ -14,8 +14,8 @@ Do everything autonomously; stop and ask the user ONLY for the things a machine
 cannot do (mint a token, paste an API key, scan a QR, click OAuth, send the first
 "hello," provision the VPS plan/region).
 
-**Target: Hermes v0.22.5 only (source-verified, not live-verified).** Every command, flag and
-variable name below was read in the v0.22.5 source (see "Verified against Hermes v0.22.5" at the end).
+**Target: Hermes v0.23.2 only (source-verified, not live-verified).** Every command, flag and
+variable name below was read in the v0.23.2 source (see "Verified against Hermes v0.23.2" at the end).
 Nothing here has been run against a real host, a real Telegram bot or a real model provider, and
 the promotion policy in `VERSIONS.txt` still applies before anyone calls it live-verified. The
 official source installer and the native gateway lifecycle replace the old pip/daemon assumptions. The
@@ -23,7 +23,7 @@ historical unconditional nightly restart workaround is removed: preserve existin
 review them separately. Model selection is the user's choice; current Hermes also supports managed
 local models, while this bounded unattended recipe configures the four BYOK providers listed below.
 Only Telegram and the default, exclusively owned host gateway are in scope in this release; the other
-platform recipes are being re-verified for 0.22.5 one at a time. Every native call selects
+platform recipes are being re-verified for 0.23.2 one at a time. Every native call selects
 `-p default`, regardless of the saved active profile. Installer, service, skill and plugin side
 effects are not all reversed by the four-file deploy recovery point.
 
@@ -35,11 +35,11 @@ effects are not all reversed by the four-file deploy recovery point.
 |----------|------------|---------------|
 | `$VPS_IP` | IP/hostname of the target VPS | Hostinger / DigitalOcean / Hetzner dashboard. Default recommendation: **Hostinger** (one-click). |
 | `$VPS_USER` | Intended installation/service account | Hosting dashboard |
-| `$HERMES_VERSION` | Optional. If set it must be exactly `0.22.5`; unset is fine | The only version this recipe is verified for (`VERSIONS.txt`) |
+| `$HERMES_VERSION` | Optional. If set it must be exactly `0.23.2`; unset is fine | The only version this recipe is verified for (`VERSIONS.txt`) |
 | `$MODEL_PROVIDER` | `openrouter` \| `anthropic` \| `openai` \| `deepseek` | User choice; recommend DeepSeek for cost or Claude Sonnet for quality |
 | `$MODEL_API_KEY` | API key for the chosen provider (stored as `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` by `/hermes-model`) | Provider dashboard |
 | `$HERMES_MODEL` | Exact model id for that provider (no default — ask; do not guess) | Provider model catalogue. Documented examples: `anthropic/claude-sonnet-4` on `openrouter`, `claude-sonnet-4-6` on `anthropic` |
-| `$PLATFORM` | `telegram` only for now | The other platform recipes are being re-verified for 0.22.5 one at a time |
+| `$PLATFORM` | `telegram` only for now | The other platform recipes are being re-verified for 0.23.2 one at a time |
 | `$HOME_CHANNEL_ID` | ID of the home channel for cron + notifications (format depends on `$PLATFORM`; checked in Step 0) | Platform admin UI |
 
 Platform credentials (bot token, app token, allowlist user IDs, ...) are **not** gathered
@@ -55,7 +55,7 @@ The user must also provide (cannot be automated):
 ### Confirm SSH access before doing anything
 
 ```bash
-[ "${PLATFORM:-}" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.22.5 one at a time. Nothing was written."; exit 1; }
+[ "${PLATFORM:-}" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.23.2 one at a time. Nothing was written."; exit 1; }
 ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
     "$VPS_USER@$VPS_IP" "echo ok" 2>&1 | grep -q '^ok$' \
   || { echo "ABORT: SSH to $VPS_USER@$VPS_IP failed. Run /setup-ssh-keys first."; exit 1; }
@@ -151,8 +151,8 @@ gw_reload() {
 # against an allowlist or a format regex, and the derived env-var names are set.
 # Anything unexpected aborts before a single remote call is made.
 deploy_validate_inputs() {
-  [ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.22.5 ] \
-    || { echo "ABORT: HERMES_VERSION must be 0.22.5 (the only version this recipe is verified for) or unset. Nothing was written."; return 1; }
+  [ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.23.2 ] \
+    || { echo "ABORT: HERMES_VERSION must be 0.23.2 (the only version this recipe is verified for) or unset. Nothing was written."; return 1; }
   case "$MODEL_PROVIDER" in
     openrouter) MODEL_KEYVAR=OPENROUTER_API_KEY ;;
     anthropic)  MODEL_KEYVAR=ANTHROPIC_API_KEY ;;
@@ -324,7 +324,7 @@ REMOTE
 }
 
 deploy_validate_inputs || exit 1
-[ "$PLATFORM" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.22.5 one at a time. Nothing was written."; exit 1; }
+[ "$PLATFORM" = telegram ] || { echo "ABORT: /hermes-deploy supports Telegram only for now; the other platforms are being re-verified for Hermes 0.23.2 one at a time. Nothing was written."; exit 1; }
 ```
 
 Rules for calling them: failures **before** `deploy_snapshot` (steps 1-4, the user declining the
@@ -333,7 +333,7 @@ failure **after** `deploy_snapshot` does `deploy_rollback; exit 1`. `deploy_fini
 automated check.
 
 Snapshots are staged privately, checked byte for byte, and published with a completion marker and checksums. Rollback validates the entire recovery point before changing live files and keeps it active if restoration fails. An older or incomplete snapshot without the marker is preserved for manual recovery; do not treat its files as a verified backup. A leftover `.creating` directory means snapshot creation is active or was interrupted: inspect that process before clearing the lock.
-**Gateway lifecycle (Hermes v0.22.5).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`
+**Gateway lifecycle (Hermes v0.23.2).** `gw_reload` runs `hermes -p default gateway restart --detach` and then requires `gw_ready`
 (`gateway ensure --json --timeout 60` exiting 0 with `"state":"ready"` and a different `instance_id`). Source-verified, not live-verified:
 `restart` restarts the installed service or, with none, runs the replacement in the calling shell unless `--detach` is given
 (`hermes_cli/gateway.py:5454-5536`, `hermes_cli/gateway_supervised_restart.py:140-151`); with live sessions and no terminal it refuses
@@ -389,7 +389,7 @@ fi
 cat <<EOF
 DRY RUN — the following will happen on $VPS_USER@$VPS_IP:
 
-  1. Install Hermes v0.22.5 (pinned commit, checksummed installer) via /hermes-install
+  1. Install Hermes v0.23.2 (pinned commit, checksummed installer) via /hermes-install
   2. Configure model via /hermes-model: provider $MODEL_PROVIDER, model $HERMES_MODEL
      (key $MODEL_KEYVAR: length ${#MODEL_API_KEY}, prefix: ${MODEL_API_KEY:0:4}...)
   3. Wire platform via /platform-$PLATFORM (it collects its own credentials and the
@@ -417,7 +417,7 @@ If the user confirms (or `AUTO_APPROVE=1`), proceed to Step 4.
 
 ## Step 4 — install Hermes (delegate to /hermes-install)
 
-Run `/hermes-install` (with `HERMES_VERSION=0.22.5` if you set it: it pins the v0.22.5 commit, checks the installer's SHA-256,
+Run `/hermes-install` (with `HERMES_VERSION=0.23.2` if you set it: it pins the v0.23.2 commit, checks the installer's SHA-256,
 skips the interactive setup wizard that hangs a non-TTY shell, and writes `~/.local/bin/hermes`). Do not hand-roll an installer line here.
 
 Verify (don't trust the installer — check):
@@ -425,8 +425,8 @@ Verify (don't trust the installer — check):
 ```bash
 INSTALLED=$(remote 'hermes -p default --version 2>/dev/null') \
   || { echo "ABORT: could not read Hermes version. Nothing was configured."; exit 1; }
-printf '%s\n' "$INSTALLED" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)' \
-  || { echo "ABORT: Hermes 0.22.5 is not installed on the target (got: $INSTALLED). See /hermes-install. Nothing was configured."; exit 1; }
+printf '%s\n' "$INSTALLED" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)' \
+  || { echo "ABORT: Hermes 0.23.2 is not installed on the target (got: $INSTALLED). See /hermes-install. Nothing was configured."; exit 1; }
 
 # First write of this deploy follows: take the snapshot now.
 deploy_snapshot || { echo "ABORT: could not snapshot ~/.hermes state. Nothing was written."; exit 1; }
@@ -662,7 +662,7 @@ deeper recovery.
 | 6 | `echo >>` on `authorized_keys` merging keys | Two keys on one line → SSH silently rejects both | Always `printf '\n%s\n'` |
 | 7 | Default local/small model | Hallucinates tool calls — breaks every skill | Frontier model only (DeepSeek / Sonnet / GPT) |
 | 8 | PATH missing `~/.local/bin` in fresh shell | `hermes` not found in non-login SSH | `remote()` prepends it, including for `bash -s` heredocs; use bare `hermes -p default ...` inside remote strings |
-| 9 | Calling this deploy "live-verified" | It is read from the v0.22.5 source and exercised against offline stubs, never against a real host, bot or provider | Report "source-verified"; the `VERSIONS.txt` promotion gate (real-target golden path, 7 days, review) is what changes that |
+| 9 | Calling this deploy "live-verified" | It is read from the v0.23.2 source and exercised against offline stubs, never against a real host, bot or provider | Report "source-verified"; the `VERSIONS.txt` promotion gate (real-target golden path, 7 days, review) is what changes that |
 | 10 | Scheduling a cron job that restarts the gateway | Hermes refuses to create jobs whose prompt or script contains `hermes gateway restart/stop/uninstall` or the systemctl/pkill equivalents (`cron/lifecycle_guard.py:30-67`, `cron/jobs.py:1853-1855`) | Do not schedule restarts; reload natively with `gw_reload` and review any existing restart jobs separately |
 | 11 | Reporting done when the gateway is `ready` but the platform never connected | `gateway ensure` readiness is the gateway process, not the Telegram adapter | Step 8 needs `✓ telegram connected` in `gateway.log`; the user's first "hello" (Step 9c) is the last check |
 | 12 | Throwaway root password left enabled | Brute-force surface area | `passwd -l root` after deploy, or rotate |
@@ -672,7 +672,7 @@ deeper recovery.
 | 16 | Quoted heredoc (`<<'REMOTE'`) referencing local `$VARS` | Nothing expands locally and the remote shell has none, so every value is empty | Validate locally, then pass an explicit env prefix: `remote "NAME=$(printf %q "$NAME") bash -s"` |
 | 17 | Inventing env-var names (`${PLATFORM}_TOKEN`, `${MODEL_PROVIDER}_API_KEY`) | Hermes reads fixed names (`TELEGRAM_BOT_TOKEN`, `ANTHROPIC_API_KEY`, ...); anything else is ignored silently | Let `/hermes-model` and `/platform-*` write them |
 | 18 | Not checking a heredoc's exit status | `set -e` inside the heredoc is useless if the caller ignores ssh's status | `remote ... <<'REMOTE' \|\| { deploy_rollback; exit 1; }` |
-| 19 | Deploying any Hermes other than 0.22.5 | Only that tag's source was read; older and newer builds differ in flags and lifecycle | Step 0 refuses a `HERMES_VERSION` other than `0.22.5`, Step 4 refuses any other version banner, both before the first write |
+| 19 | Deploying any Hermes other than 0.23.2 | Only that tag's source was read; older and newer builds differ in flags and lifecycle | Step 0 refuses a `HERMES_VERSION` other than `0.23.2`, Step 4 refuses any other version banner, both before the first write |
 | 20 | Restarting with `-y` "to get past" a refusal | `-y` interrupts live chats | The helpers add it only when the operator sets `GW_INTERRUPT=1`; otherwise report the refusal and ask |
 
 ---
@@ -689,7 +689,7 @@ HR, marketing, support, ops/admin, research).
 
 - [ ] SSH to `$VPS_USER@$VPS_IP` confirmed working (on host, not container)
 - [ ] Inputs validated locally (`deploy_validate_inputs`): provider, platform, model id, home channel id
-- [ ] `HERMES_VERSION` unset or exactly `0.22.5`; Hermes 0.22.5 installed at `~/.local/bin/hermes` and `--version` names it
+- [ ] `HERMES_VERSION` unset or exactly `0.23.2`; Hermes 0.23.2 installed at `~/.local/bin/hermes` and `--version` names it
 - [ ] Idempotency check passed (or `FORCE=1` overrode)
 - [ ] Dry-run shown to user; user approved (or `AUTO_APPROVE=1`)
 - [ ] Snapshot taken before the first write; `deploy_rollback` defined in Step 0 and restores (not deletes)
@@ -709,9 +709,9 @@ HR, marketing, support, ops/admin, research).
 See [docs/reference/TROUBLESHOOTING.md](../../docs/reference/TROUBLESHOOTING.md) for gateway,
 MCP, SSH-key, and platform failure modes.
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository. Nothing below
+Source-verified at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository. Nothing below
 was run against a real Hermes, Telegram bot or model provider, and `VERSIONS.txt` keeps the live-verification policy.
 
 - Gateway commands and flags: `gateway ensure [--json] [--timeout]` `hermes_cli/subcommands/gateway.py:122-131`; `stop` and `restart`
@@ -731,4 +731,4 @@ was run against a real Hermes, Telegram bot or model provider, and `VERSIONS.txt
 Not verified: any behaviour on a live host (install, service start, Telegram polling, model replies), the exact `ensure`/`restart`
 interaction when a service is installed but never started, and the vendor endpoints (nothing in this skill calls a vendor; the delegated skills do).
 
-Source: [v0.22.5 gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/hermes_cli/subcommands/gateway.py).
+Source: [v0.23.2 gateway parser](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/hermes_cli/subcommands/gateway.py).

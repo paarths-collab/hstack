@@ -2,8 +2,8 @@
 # shellcheck shell=bash disable=SC2154
 # (sourced by the hermes stub: H, K, event, inject and gw_state come from it)
 # Test behaviour of `hermes skills {search,install,inspect,list,uninstall,snapshot export,tap list}`, sourced by the hermes stub ($@ starts at
-# "skills"; -p already removed). SYNTAX is the real vendored v0.22.5 argparse (so `skills describe` and unknown flags exit 2 before this runs).
-# BEHAVIOUR is an assumption written from hermes_cli/skills_hub.py and tools/skills_guard.py (v0.22.5), NOT evidence about a running Hermes:
+# "skills"; -p already removed). SYNTAX is the real vendored v0.23.2 argparse (so `skills describe` and unknown flags exit 2 before this runs).
+# BEHAVIOUR is an assumption written from hermes_cli/skills_hub.py and tools/skills_guard.py (v0.23.2), NOT evidence about a running Hermes:
 #   search --json   prints json.dumps(rows, indent=2) with keys name, identifier, source, trust_level, description (skills_hub.py:354-362); the
 #                   stub produces it with python's own json module so the shape is the real one. Without --json: "Searching for: <q>" first,
 #                   a table after (skills_hub.py:366-381), "No skills found matching your query." when empty.

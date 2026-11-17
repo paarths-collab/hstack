@@ -1,6 +1,6 @@
 ---
 name: hermes-install
-description: Install Hermes Agent v0.22.5 on a fresh POSIX host with its official pinned source installer and managed runtime, without ambient pip or deleting existing user state.
+description: Install Hermes Agent v0.23.2 on a fresh POSIX host with its official pinned source installer and managed runtime, without ambient pip or deleting existing user state.
 ---
 
 # /hermes-install — official source installation over SSH
@@ -10,10 +10,10 @@ a fresh Linux/macOS source installation using the default `~/.hermes` data root 
 `~/.local/bin/hermes` launcher. Packaged Desktop, Docker, custom homes and existing
 source installations must use their native installation/update route instead.
 
-**Target: Hermes v0.22.5 only, source-verified and not live-verified.** v0.22.5 resolves to commit
-`bf0203a794a07aac3ff764972ab9087baa4e4f4e`. Its installer delegates managed Python,
+**Target: Hermes v0.23.2 only, source-verified and not live-verified.** v0.23.2 resolves to commit
+`ae2a81ccc00e9b7c06301523e5bb09608397149c`. Its installer delegates managed Python,
 Node and dependencies to Hermes PM. The commands below were read in the tagged source
-(see "Verified against Hermes v0.22.5"); no real-server install has been run with this
+(see "Verified against Hermes v0.23.2"); no real-server install has been run with this
 recipe, and the promotion gate in `VERSIONS.txt` still applies before anyone calls it
 live-verified. Do not install the unrelated PyPI package to pin Hermes.
 
@@ -22,7 +22,7 @@ live-verified. Do not install the unrelated PyPI package to pin Hermes.
 | Variable | Meaning |
 |---|---|
 | `VPS_IP`, `VPS_USER` | SSH target and intended service account |
-| `HERMES_VERSION` | Optional. If set it must be exactly `0.22.5`; any other value is refused before the target is contacted |
+| `HERMES_VERSION` | Optional. If set it must be exactly `0.23.2`; any other value is refused before the target is contacted |
 
 For a local install, run the remote bodies directly as the intended service account.
 Never run the installer under sudo to change accounts.
@@ -68,11 +68,11 @@ gw_reload() {
   if [ -n "$old" ] && [ "$new" = "$old" ]; then echo "gw_reload: the gateway instance did not change, so it was not restarted." >&2; return 1; fi
   printf '%s\n' "$out"
 }
-[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.22.5 ] \
-  || { echo "ABORT: this procedure is source-verified for Hermes 0.22.5 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
+[ -z "${HERMES_VERSION:-}" ] || [ "$HERMES_VERSION" = 0.23.2 ] \
+  || { echo "ABORT: this procedure is source-verified for Hermes 0.23.2 only (HERMES_VERSION=$HERMES_VERSION). Nothing was written."; exit 1; }
 [[ "$VPS_IP" =~ ^[A-Za-z0-9._:-]+$ && "$VPS_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] \
   || { echo "ABORT: malformed SSH target. Nothing was written."; exit 1; }
-HERMES_COMMIT=bf0203a794a07aac3ff764972ab9087baa4e4f4e
+HERMES_COMMIT=ae2a81ccc00e9b7c06301523e5bb09608397149c
 ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes "$VPS_USER@$VPS_IP" 'echo ok' \
   || { echo "ABORT: SSH failed. Run /setup-ssh-keys first."; exit 1; }
 ```
@@ -113,7 +113,7 @@ Proceed after the user's existing installation authorization, or `AUTO_APPROVE=1
 
 Download first and check the download succeeded before executing it. Do not pipe a failed
 network response into a shell. This step needs network access on the target when actually run.
-The installer refuses a `--commit` that is not on `main` (`scripts/install.sh:928-932`); the v0.22.5 commit is
+The installer refuses a `--commit` that is not on `main` (`scripts/install.sh:928-932`); the v0.23.2 commit is
 an ancestor of `main` in the upstream clone this recipe was read from.
 
 ```bash
@@ -130,7 +130,7 @@ else
   digest=$(shasum -a 256 "$t")
 fi
 digest=${digest%% *}
-[ "$digest" = 99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674 ]
+[ "$digest" = c73dad4dcf7c9ecadb98578e28cc763d23d7be3fa1b513545319038795493214 ]
 env HERMES_REPO_URL=https://github.com/NousResearch/hermes-agent.git \
   HERMES_INSTALL_DIR="$HOME/.hermes/hermes-agent" HERMES_HOME="$HOME/.hermes" \
   bash "$t" --commit "$HERMES_COMMIT" --channel stable \
@@ -152,13 +152,13 @@ set -e
 [ -x "$HOME/.local/bin/hermes" ]
 [ "$(git -C "$HOME/.hermes/hermes-agent" rev-parse HEAD)" = "$HERMES_COMMIT" ]
 v=$(hermes -p default --version)
-printf '%s\n' "$v" | grep -Eq '(^|[[:space:]])v?0[.]22[.]5([[:space:]]|$)'
+printf '%s\n' "$v" | grep -Eq '(^|[[:space:]])v?0[.]23[.]2([[:space:]]|$)'
 hermes -p default pm doctor  # hermes-parse: skip (pm is dispatched before argparse: hermes_cli/main.py:679-683)
 hermes -p default pm status  # hermes-parse: skip (pm is dispatched before argparse: hermes_cli/main.py:679-683)
 REMOTE
 ```
 
-`hermes doctor` is a broader check and is reported, not used as a gate. At v0.22.5 it exits non-zero
+`hermes doctor` is a broader check and is reported, not used as a gate. At v0.23.2 it exits non-zero
 whenever any issue remains (`hermes_cli/doctor.py:171-194`, forwarded by `hermes_cli/main.py:3550-3554`), and
 some of those issues are expected before a model key exists (for example "Run 'hermes setup' to configure API
 keys" when `.env` names no provider, `hermes_cli/doctor_config.py:179-184`, or missing toolset keys,
@@ -250,7 +250,7 @@ If another installation owner is found, stop this recipe and use that owner.
 | 9 | Installing in an ephemeral container | Recreation discards the changes | Update the image through its owner |
 | 10 | Calling installation a complete deployment | No model/platform has been tested | Complete the ordered configuration handoff |
 | 11 | Aborting or rolling back because `hermes doctor` exits non-zero | Doctor exits 1 whenever any issue remains, including "no API key yet" | Record the exit code and issues; gate on `pm doctor`, not on doctor |
-| 12 | Installing any Hermes other than 0.22.5 with this recipe | Flags and lifecycle differ between releases and only this tag was read | Step 0 refuses another `HERMES_VERSION`; Step 4 refuses another version banner |
+| 12 | Installing any Hermes other than 0.23.2 with this recipe | Flags and lifecycle differ between releases and only this tag was read | Step 0 refuses another `HERMES_VERSION`; Step 4 refuses another version banner |
 | 13 | Putting `pm ...` through the argument parser check | `pm` never reaches argparse (dispatched at `hermes_cli/main.py:679-683`) | Mark those lines `hermes-parse: skip` with that reason, nothing else |
 
 ## Step 6 — evidence to report
@@ -265,18 +265,18 @@ Retain local recovery diagnostics if any step failed.
 
 ## Definition of done
 
-- [ ] `HERMES_VERSION` unset or exactly `0.22.5`; exact commit and version banner confirmed on the target
+- [ ] `HERMES_VERSION` unset or exactly `0.23.2`; exact commit and version banner confirmed on the target
 - [ ] Installation ownership and fresh-host prerequisites checked before mutation
 - [ ] Official installer completed with managed dependencies and no interactive setup
 - [ ] Source commit, version and `pm doctor` verified; `hermes doctor` exit code and issues recorded
 - [ ] Provider inference and platform delivery are still reported as unverified
 - [ ] Existing installations and user data preserved on refusal/failure
 
-## Verified against Hermes v0.22.5
+## Verified against Hermes v0.23.2
 
-Source-verified at tag v0.22.5 (commit `bf0203a794a07aac3ff764972ab9087baa4e4f4e`); paths are relative to that repository. The installer
-bytes are pinned by SHA-256 `99cb3691d55019c6973a7acb775a915648666cc24e483ca827a1cdbb3531a674` and equal the offline fixture in
-`tests/skills/fixtures/hermes-v0.22.5/install.sh` (checked by `native-surfaces.test.mjs`).
+Source-verified at tag v0.23.2 (commit `ae2a81ccc00e9b7c06301523e5bb09608397149c`); paths are relative to that repository. The installer
+bytes are pinned by SHA-256 `c73dad4dcf7c9ecadb98578e28cc763d23d7be3fa1b513545319038795493214` and equal the offline fixture in
+`tests/skills/fixtures/hermes-v0.23.2/install.sh` (checked by `native-surfaces.test.mjs`).
 
 - Installer options and environment: `--commit`, `--channel stable|main`, `--non-interactive`, `--skip-browser`, `--skip-computer-use`
   `scripts/install.sh:46-90`; `HERMES_REPO_URL`, `HERMES_INSTALL_DIR`, `HERMES_HOME` `:23-33`; unknown options exit 1 `:88`; `--channel` is
@@ -293,5 +293,5 @@ bytes are pinned by SHA-256 `99cb3691d55019c6973a7acb775a915648666cc24e483ca827a
 Not verified: any run of the installer on a real host (network, PM generations, Python/Node builds), whether `hermes doctor` exits 0 on a fresh
 keyless headless install, and everything after installation (inference, platforms).
 
-Sources checked against v0.22.5: [official installer](https://github.com/NousResearch/hermes-agent/blob/v0.22.5/scripts/install.sh),
+Sources checked against v0.23.2: [official installer](https://github.com/NousResearch/hermes-agent/blob/v0.23.2/scripts/install.sh),
 [installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).
