@@ -10,7 +10,16 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ---
 
-## [Unreleased]
+## [Unreleased] — 2026-11-17
+
+### Changed
+- Moved the website to the separate [hstack-website repository](https://github.com/paarths-collab/hstack-website). The [public website](https://hstack-website.vercel.app/) provides guides and a video walkthrough of the original project.
+- Refreshed the Hermes compatibility target to **0.23.2**, pinned to its immutable tagged commit and installer checksum. Updated all 97 skill version gates, distributor guidance, native parser fixtures and website version references. This is a one-time compatibility refresh of the reference catalog; live validation remains pending.
+- Added the HSTACK website with reader guides, an integration directory, responsive branding, pinned horizontal feature panels and reduced-motion support.
+
+## [0.4.0] — 2026-11-17 — final release, project archived
+
+- **Archived.** hstack is no longer maintained. Hermes now provides most of what it covered natively (desktop app with remote connections, an approved MCP connector catalog, a plugin catalog, and built-in backup, update and diagnostics). The final release targeted Hermes 0.22.5; the later one-time 0.23.2 refresh is recorded above. README, plugin metadata, CONTRIBUTING, SECURITY and agent instructions now say so; the Gemini extension version is aligned to 0.4.0.
 
 - Removed the dedicated GitHub-to-Telegram report packs, their experimental acceptance transaction and associated tests/contracts. Retained the standalone GitHub integration skill; removed GitHub from the brief planner. Refocused the README on setup, connections and operations.
 

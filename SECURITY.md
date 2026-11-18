@@ -1,5 +1,11 @@
 # Security policy
 
+> [!IMPORTANT]
+> **This project is archived and no longer maintained.** Security reports will
+> not lead to fixes or new releases, and the reporting channels below may no
+> longer be available. Do not run these skills against production servers
+> without reviewing them yourself. The policy below is kept as a record.
+
 hstack ships instructions that AI coding agents execute against **your** VPS, holding **your** credentials for third-party vendors. This document covers:
 
 - [Reporting a vulnerability](#reporting-a-vulnerability)

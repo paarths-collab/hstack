@@ -1,5 +1,10 @@
 # hstack — AI-coding-agent instructions
 
+> **Archived (2026-11-17).** hstack is a finished reference project and is no longer
+> maintained. Do not add skills, integrations or features, and do not open pull
+> requests. Hermes now covers most of this natively; the skills target Hermes 0.23.2
+> only. The instructions below describe how the project worked when it was active.
+
 This repo is **hstack**: a portable skill catalog for deploying and operating self-hosted
 Hermes agents. Built by Paarth.
 

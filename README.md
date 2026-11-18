@@ -2,28 +2,52 @@
 
 # hstack
 
-**Set up your own Hermes assistant. Give your coding agent the steps.**
+**Setup guides your coding agent can follow to run Hermes on your server.**
 
 [![Skills](https://img.shields.io/badge/skills-97-0ea5e9)](skills/)
 [![Integrations](https://img.shields.io/badge/integrations-71-14b8a6)](skills/)
 [![Platforms](https://img.shields.io/badge/platforms-8-8b5cf6)](skills/)
-
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-22c55e)](LICENSE)
-[![Hermes target](https://img.shields.io/badge/Hermes-0.23.2-8b5cf6)](compatibility/README.md)
-[![Validation](https://img.shields.io/badge/validation-source_checked-0ea5e9)](compatibility/VALIDATION.md)
 
-[Get started](#get-started) · [Use cases](#make-it-yours) · [Documentation](docs/README.md) · [Compatibility](compatibility/README.md)
+[Website](https://hstack-website.vercel.app/) · [Watch the walkthrough](https://hstack-website.vercel.app/#demo) · [Get started](#get-started) · [Documentation](docs/README.md)
 
 </div>
 
----
+## Project status
 
-hstack is a collection of step-by-step skills that a coding agent follows over
-SSH to install, connect and maintain **Hermes on your server**. Use it with Claude
-Code, Codex, Cursor or another supported agent.
+**Archived · Kept as a reference project.**
 
-Ask for an outcome, review the plan, and let your agent follow the relevant
-procedures. You provide the server, access and credentials. No hstack account or
+hstack packages Hermes setup and maintenance procedures into skills for coding
+agents. It is no longer actively maintained. A one-time compatibility refresh
+for **Hermes 0.23.2** was recorded on 17 November 2026.
+
+Source checks and local regression tests are documented separately from live
+validation. Vendor connections, chat platforms and native Windows execution
+still require live verification. See the [validation record](compatibility/VALIDATION.md)
+before using these procedures on a server.
+
+## The original project and the new website
+
+The original HSTACK project is the skill catalogue, installers and local planning
+tools in this repository. The new website gives that work a readable home: setup
+guides, an integration directory and a video walkthrough. It does not restart
+maintenance or change the validation status of the underlying skills.
+
+- [Browse the website](https://hstack-website.vercel.app/)
+- [Watch the walkthrough](https://hstack-website.vercel.app/#demo)
+- [Website source](https://github.com/paarths-collab/hstack-website) — maintained in a separate repository
+- [Project history](docs/project-history.md) — original scope and later presentation work
+
+## Video walkthrough
+
+[![Watch the HSTACK walkthrough](assets/hstack-walkthrough.jpg)](https://hstack-website.vercel.app/#demo)
+
+[Watch on the website →](https://hstack-website.vercel.app/#demo)
+
+## What it does
+
+Your coding agent reads a skill, explains the plan, and follows the setup steps
+over SSH. You supply the server, access and credentials. No hstack account or
 hosted relay is required.
 
 > “Set up Hermes on my server and connect Telegram.”
@@ -32,24 +56,35 @@ hosted relay is required.
 >
 > “Check why my Hermes gateway is offline.”
 
-## What you get
-
-| | Included |
+| Area | Included |
 |---|---|
-| **Setup & operations** | Installation, model configuration, health checks, native gateway restart, backups and recovery procedures |
-| **Integrations** | 71 service guides, including GitHub, Notion, Linear, Postgres and Supabase |
-| **Chat platforms** | Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat and Mattermost |
-| **Browser planner** | A local composer that builds a reviewable plan without collecting credentials |
+| Setup and maintenance | Installation, model configuration, health checks, gateway restart, backups and recovery |
+| Integrations | 71 service guides, including GitHub, Notion, Linear, Postgres and Supabase |
+| Messaging | Telegram, Slack, Discord, WhatsApp, Teams, Signal, Google Chat and Mattermost |
+| Planning | Blueprints and a local browser composer for reviewing a setup before deployment |
 
-**Why use it with Hermes?** Hermes provides the assistant and its native tools.
-hstack supplies reusable setup procedures and reviewable plans, so you have less
-configuration to assemble yourself. It prefers Hermes's
-native connectors, scheduling and lifecycle commands. Setup-time savings have not been measured.
+The skills provide procedures, not pre-connected services. Installing them does
+not deploy Hermes, authorize an account or activate a workflow.
+
+## How it fits together
+
+```mermaid
+flowchart LR
+    U[You: choose an outcome] --> A[Coding agent]
+    S[HSTACK skills] --> A
+    A --> R[Review plan and permissions]
+    R --> SSH[SSH to your server]
+    SSH --> H[Hermes]
+    H --> T[Selected tools and chat apps]
+    W[Website: guides and video] -. explains .-> S
+```
+
+The website explains the setup; execution happens through your coding agent and
+your server.
 
 ## Get started
 
-Choose **one** installation route. Installing skills makes them available to your
-coding agent; it does not deploy Hermes or activate a workflow.
+Choose one installation method.
 
 ### Claude Code
 
@@ -68,19 +103,10 @@ Start a new session, then ask for help or invoke `/hstack:hermes-status`.
 codex plugin marketplace add paarths-collab/hstack --ref main
 ```
 
-Open `/plugins`, select the **hstack** marketplace and install **hstack**. Start a
-new session afterwards. See the [plugin guide](docs/plugins.md#codex) for CLI
-installation and updates.
+Open `/plugins`, select the **hstack** marketplace and install **hstack**.
+Start a new session afterwards.
 
-### Cursor
-
-Follow the [local or team plugin setup](docs/plugins.md#cursor), then reload Cursor.
-A repository manifest does not mean hstack is listed in the public marketplace.
-
-<details>
-<summary><strong>Other agents, Windows and selective installation</strong></summary>
-
-Clone the repository and use the installer to choose your agents and skills:
+### Other agents and selective installation
 
 ```bash
 git clone https://github.com/paarths-collab/hstack.git
@@ -88,9 +114,9 @@ cd hstack
 bash install.sh --pick
 ```
 
-The installer supports Claude Code, Codex, Cursor, Gemini CLI, OpenClaw and Hermes.
-Stock macOS Bash 3.2 and Linux are supported. On Windows, run `./install.ps1` from
-PowerShell; native Windows validation remains pending.
+The installer supports Claude Code, Codex, Cursor, Gemini CLI, OpenClaw and
+Hermes. It runs on macOS Bash 3.2 and Linux. For Windows, use `./install.ps1`
+from PowerShell; native Windows validation remains pending.
 
 ```bash
 bash install.sh --ide=claude,codex
@@ -99,68 +125,40 @@ bash install.sh --include=notion,github
 bash install.sh --help
 ```
 
-Reinstallation replaces hstack-owned files. Conflicting user files and edited
-copies are backed up rather than deleted; the installer prints their locations.
+Conflicting user files and edited copies are backed up before replacement.
+The installer prints their locations.
 
-</details>
+For Cursor plugin setup and agent-specific update instructions, see the
+[plugin guide](docs/plugins.md).
 
-After installation, ask your agent to find the relevant hstack skill and explain
-its plan before making changes. Browse the [skill catalogue](skills/) or read the
-[plugin installation and update guide](docs/plugins.md).
+## Before running a skill
 
-## Make it yours
+Ask your agent to explain the plan and required permissions before making
+changes. Keep credentials in private files, not in chat or the repository.
 
-Start with a useful outcome and let your agent prepare the steps:
+The deploy procedure targets **Telegram on an exclusive default-profile Linux
+server**. The seven-day live reliability gate has not started. Offline checks
+do not establish production readiness, and recovery cannot undo sent messages
+or arbitrary external side effects.
 
-| You want… | Start here |
-|---|---|
-| **An assistant in your chat app** | Install Hermes, choose a model and connect Telegram; review other platform procedures for an existing installation |
-| **Help with your notes and work** | Connect Notion, Obsidian or Linear with the access you choose |
-| **A clear setup plan** | Use the browser planner or an editable blueprint to review connections and required credentials |
-| **A healthier server assistant** | Check gateway health, diagnose failures and use native backup/update procedures |
+For a plan you can review first, use the [local Composer](apps/composer/README.md).
+It collects no credentials; deployment happens separately on your server.
 
-These are guided setups, not pre-connected services. Your agent follows the
-selected skills; you review access and provide credentials in your environment.
+## Reference
 
-## Plan in the browser
+- [Skill catalogue](skills/) — setup and integration procedures
+- [Documentation](docs/README.md) — guides and reference material
+- [Compatibility](compatibility/README.md) — supported scope and evidence policy
+- [Tests](tests/README.md) — checks and their limits
+- [Troubleshooting](docs/reference/TROUBLESHOOTING.md) — symptoms and fixes
+- [Architecture](docs/architecture.md) — repository structure
+- [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
-The [Composer](apps/composer/README.md) lets you select sources and a destination,
-review access requirements and export a plan. It runs locally and does not ask for
-credentials. Deployment happens separately on your server.
-
-## Current status
-
-**Target: Hermes 0.23.2. Source-verified; live validation is still pending.**
-
-| Checked | Still needed |
-|---|---|
-| Skill structure, source interfaces and regression tests | Live verification of vendor connections and chat platforms |
-| Plugin metadata, Claude validation and Codex discovery | Loading the refreshed plugin in Cursor and execution across all hosts |
-| Cross-platform installer checks | Native Windows validation |
-
-The deploy procedure currently supports **Telegram on an exclusive default-profile Linux target**. The seven-day live
-reliability gate has not started. Offline checks do not establish production
-readiness. See the [validation evidence](compatibility/VALIDATION.md) and
-[compatibility policy](compatibility/README.md) before deployment.
-
-Keep credentials in private files, not in chat or the repository. Review access
-and commands before execution. Recovery cannot recall sent messages or undo
-arbitrary external side effects.
-
-## Explore & contribute
-
-- [Documentation index](docs/README.md) — guides and reference material
-- [Repository structure](docs/architecture.md) — where each component lives
-- [Tests](tests/README.md) — checks, commands and evidence limits
-- [Troubleshooting](docs/reference/TROUBLESHOOTING.md) — known symptoms and fixes
-- [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
-
-Verified fixes and reproducible integration failures are especially useful
-contributions. Use the [skill template](templates/SKILL.template.md) when adding
-a procedure.
+This project is no longer accepting contributions.
 
 ---
 
 [Apache 2.0](LICENSE) · Built by **Paarth**
 
-<sub>Independent open-source project. Not affiliated with or endorsed by Nous Research or the integrated vendors.</sub>
+Independent open-source project. Not affiliated with or endorsed by Nous Research
+or the integrated vendors.

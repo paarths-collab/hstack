@@ -1,5 +1,7 @@
 # hstack — self-hosted Hermes and Agent Blueprint skills
 
+> Archived reference project. The one-time Hermes 0.23.2 refresh is source-checked; live validation remains pending. See [project status](README.md#project-status).
+
 hstack is a catalog of **97 skill files**. Each one is a recipe you (the AI coding agent)
 read and execute on the user's own server over SSH, so their self-hosted Hermes agent ends
 up correctly set up.

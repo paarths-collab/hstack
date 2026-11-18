@@ -50,7 +50,7 @@ Root-level policy and metadata files include `CONTRIBUTING.md`, `SECURITY.md`,
 | `compatibility/` | Records source pins, test evidence and the separate requirements for live verification |
 
 
-## Where new work belongs
+## Historical placement conventions
 
 - Add or update a procedure in `skills/<name>/SKILL.md`. Keep this flat discovery layout: installers and agent manifests consume it.
 - Put reusable execution code in its owning package; keep browser UI code in `apps/composer/`.
@@ -64,3 +64,10 @@ installation commands. Moving them requires a compatibility plan. There is no
 root npm workspace: the browser planner is static, JavaScript packages are
 private modules, and blueprint validation uses Python. The [test guide](../tests/README.md)
 lists the direct commands used for each layer.
+
+## Separate website
+
+The public [website](https://hstack-website.vercel.app/) and its walkthrough live in
+[hstack-website](https://github.com/paarths-collab/hstack-website), not `apps/web`.
+See [project history](project-history.md) for the distinction between the archived
+skills and their new presentation.

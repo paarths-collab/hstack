@@ -1,8 +1,13 @@
 # Contributing to hstack
 
+> [!IMPORTANT]
+> **This project is archived and no longer accepts contributions.** Issues and
+> pull requests will not be reviewed. The guide below is kept as a record of how
+> the project was developed.
+
 Before editing, read the [repository structure](docs/architecture.md) and [test guide](tests/README.md).
 
-Welcome. hstack's real moat is **accumulated knowledge of what breaks** — every skill that survived contact with a real deploy encodes fixes for traps we hit so the next operator doesn't. That knowledge grows via contributions.
+The following procedures document the original development workflow. They are retained for people studying or forking the project; they are not an invitation to submit changes to the archived catalogue.
 
 This guide covers:
 
