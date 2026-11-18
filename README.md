@@ -27,7 +27,7 @@ maintenance or change the validation status of the underlying skills.
 
 ## Video walkthrough
 
-[Watch the HSTACK video](assets/hstack-promo.mp4)
+[![HSTACK walkthrough — click to play the full video](assets/hstack-walkthrough.gif)](https://github.com/paarths-collab/hstack/raw/refs/heads/main/assets/hstack-promo.mp4)
 
 **Website:** [hstack-website.vercel.app](https://hstack-website.vercel.app/)
 
