@@ -1,7 +1,0 @@
-{
-  "compilerOptions": {
-    "checkJs": false,
-    "jsx": "preserve"
-  },
-  "include": ["app/**/*.js", "app/**/*.jsx"]
-}

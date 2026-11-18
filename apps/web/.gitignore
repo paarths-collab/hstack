@@ -1,6 +1,0 @@
-test-results/
-playwright-report/
-/.data/
-
-/out/
-!.env.example
