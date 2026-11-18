@@ -13,19 +13,6 @@
 
 </div>
 
-## Project status
-
-**Archived · Kept as a reference project.**
-
-hstack packages Hermes setup and maintenance procedures into skills for coding
-agents. It is no longer actively maintained. A one-time compatibility refresh
-for **Hermes 0.23.2** was recorded on 17 November 2026.
-
-Source checks and local regression tests are documented separately from live
-validation. Vendor connections, chat platforms and native Windows execution
-still require live verification. See the [validation record](compatibility/VALIDATION.md)
-before using these procedures on a server.
-
 ## The original project and the new website
 
 The original HSTACK project is the skill catalogue, installers and local planning
@@ -40,9 +27,9 @@ maintenance or change the validation status of the underlying skills.
 
 ## Video walkthrough
 
-[![Watch the HSTACK walkthrough](assets/hstack-walkthrough.jpg)](https://hstack-website.vercel.app/#demo)
+[Watch the HSTACK video](assets/hstack-promo.mp4)
 
-[Watch on the website →](https://hstack-website.vercel.app/#demo)
+**Website:** [hstack-website.vercel.app](https://hstack-website.vercel.app/)
 
 ## What it does
 
