@@ -1,114 +1,250 @@
 {
-  "checkedOn": "2026-11-02",
+  "checkedOn": "2026-11-16",
   "latestStable": {
-    "tag": "v0.22.5",
-    "commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
-    "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5",
-    "changeSincePriorReview": false
+    "tag": "v0.23.1",
+    "commit": "3b421578588243f920886e6fe79a6faa87ea026e",
+    "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.1",
+    "publishedAt": "2026-11-10T01:42:15Z"
   },
-  "pinnedSourceReview": {
-    "tools/mcp_tool.py": {
-      "sha256": "0d4f2a29e4fea798df27a0c7aaf92befaf5ef6e49b17a5ff8cedd9ae067189fa",
-      "checkedDefinition": null,
-      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool.py"
-    },
-    "tools/mcp_tool_discovery.py": {
-      "sha256": "4cc0951ca745691705e11f943eff186a94a6ac41446eac06d5847d7efa56a5dd",
-      "checkedDefinition": "register_mcp_servers",
-      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_discovery.py"
-    },
-    "tools/mcp_tool_schema.py": {
-      "sha256": "0a0e214b1e19d2e7719cc1f8f7a4b6ecd5be8df6aab1b6ef61e0049c21428bea",
-      "checkedDefinition": "mcp_prefixed_tool_name",
-      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_schema.py"
-    },
-    "tools/mcp_tool_lifecycle.py": {
-      "sha256": "243bb5f655964ba32e4b8a9855ac2b60a189627628ec58a86487cf998acd3811",
-      "checkedDefinition": "shutdown_mcp_servers",
-      "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_lifecycle.py"
-    }
-  },
-  "finding": "Optional native verification scripts referenced registration, naming and shutdown on the monolithic core module; pinned stable source defines them in discovery/schema/lifecycle modules instead. Hstack stdio protocol incompatibility was not established.",
-  "localFix": {
-    "resolver": "scripts/hermes_mcp_compat.py",
-    "verifiers": [
-      "scripts/verify-hermes-analytics.py",
-      "scripts/verify-hermes-bigquery.py",
-      "scripts/verify-hermes-mongodb.py",
-      "scripts/verify-hermes-mysql.py",
-      "scripts/verify-hermes-quickbooks.py",
-      "scripts/verify-hermes-redis.py",
-      "scripts/verify-hermes-zendesk.py"
+  "hstackStatus": "v0.23.1 and the reviewed canary require tagged-runtime, authenticated Desktop/Webapp mount and live account acceptance before promotion.",
+  "interveningReleases": [
+    "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.7",
+    "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.6"
+  ],
+  "profileScopeReview": {
+    "affectedTags": [
+      "v0.22.5",
+      "v0.23.0"
     ],
-    "regression": "tests/hermes-compat.test.mjs",
-    "behavior": "Delegate to native implementations in either layout; propagate internal import failures and reject non-callable interfaces without monkeypatching Hermes."
+    "finding": "The plugin imported _config_profile_scope from hermes_cli.web_server. Both pinned releases define it in hermes_cli.web_server_profiles. The installed legacy tree exposes it in web_server.",
+    "source": "https://github.com/NousResearch/hermes-agent/blob/2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19/hermes_cli/web_server_profiles.py#L277",
+    "nativeRoute": "https://github.com/NousResearch/hermes-agent/blob/2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19/hermes_cli/web_routers/mcp.py#L30",
+    "affectedFile": "hermes-plugin/hstack-connections/dashboard/plugin_api.py",
+    "regression": "tests/desktop_backend.py",
+    "result": "Split-profile fixture reproduced ImportError before the fix. Four backend fixture cases passed after it, including activation, profile isolation, collision handling and native read response parsing. One additional registry resolver fixture passed."
   },
-  "nativeInstalledProbe": {
-    "sourceMcpSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
-    "evidence": "Actual installed Hermes registry and real Hstack stdio with synthetic Google HTTP/auth only; Python-side network denied. Not a tagged runtime, account or model test.",
+  "sourceChecks": {
+    "pinnedSha256": {
+      "hermes_cli/web_server.py": "a52cffb892b0adbb019357446b7caa85d7b2ab09b81c9ecbfae1464c4cc0a069",
+      "hermes_cli/web_server_profiles.py": "921017070da7f2f55033e0334ad3bbf2dcc8284ea3d330b1720208f3c0a48704",
+      "hermes_cli/mcp_config.py": "bd017489bfbb2769f73572ed6627b67e61838d8af162bf3072cc664d9a31f696",
+      "hermes_cli/subcommands/mcp.py": "8a50f70c67ff671485229e8929f8503dfe1c6287d628cba8acbb6c0de2a09ea4",
+      "hermes_cli/subcommands/plugins.py": "1c3b7c78555f5be1337375e290a7463c9c5169c300aeb0928a75def1ef853d18",
+      "tools/mcp_tool_discovery.py": "8e9efe1680968c5ee121a576a8cc3548d64a3e47da8e51c72632a8c353de6bb1",
+      "tools/mcp_tool_lifecycle.py": "c73b3c7de2e69a70ddbfc88681678cc30ec14de86a4b93203bc3203b99672bf1",
+      "tools/mcp_tool_schema.py": "0a0e214b1e19d2e7719cc1f8f7a4b6ecd5be8df6aab1b6ef61e0049c21428bea",
+      "tools/registry.py": "6d37a47cf70acf3d1964a9e7bdc525628a754155944fad22e33d38afa2034aa8"
+    },
+    "registry": "Reviewed register_mcp_servers(servers), mcp_prefixed_tool_name(server_name, tool_name), registry.dispatch(name, args) and shutdown_mcp_servers() call signatures.",
+    "cli": "Parsed mcp add with stdio arguments, mcp list, mcp test, mcp reauth and plugins update using the tagged native parsers. No command handlers executed.",
+    "reviewedTag": "v0.23.0",
+    "reviewedCommit": "2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19"
+  },
+  "upstreamFeatures": {
+    "webapp": "The gateway serves the Desktop workspace including plugins. Authenticated Hstack plugin mounting and profile switching in that shell still need validation.",
+    "spendLimits": "Native cost tables key prices by advertised MCP tool name. In Hstack search mode, nested calls share hstack_call_tool. Per-upstream-tool budgets through that control remain unverified.",
+    "costPolicySource": "https://github.com/NousResearch/hermes-agent/blob/2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19/tools/mcp_tool_costs.py",
+    "updates": "Hermes supplies plugin updates and opt-in automatic updates."
+  },
+  "previousReview": {
+    "checkedOn": "2026-11-02",
+    "latestStable": {
+      "tag": "v0.22.5",
+      "commit": "bf0203a794a07aac3ff764972ab9087baa4e4f4e",
+      "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.22.5",
+      "changeSincePriorReview": false
+    },
+    "pinnedSourceReview": {
+      "tools/mcp_tool.py": {
+        "sha256": "0d4f2a29e4fea798df27a0c7aaf92befaf5ef6e49b17a5ff8cedd9ae067189fa",
+        "checkedDefinition": null,
+        "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool.py"
+      },
+      "tools/mcp_tool_discovery.py": {
+        "sha256": "4cc0951ca745691705e11f943eff186a94a6ac41446eac06d5847d7efa56a5dd",
+        "checkedDefinition": "register_mcp_servers",
+        "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_discovery.py"
+      },
+      "tools/mcp_tool_schema.py": {
+        "sha256": "0a0e214b1e19d2e7719cc1f8f7a4b6ecd5be8df6aab1b6ef61e0049c21428bea",
+        "checkedDefinition": "mcp_prefixed_tool_name",
+        "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_schema.py"
+      },
+      "tools/mcp_tool_lifecycle.py": {
+        "sha256": "243bb5f655964ba32e4b8a9855ac2b60a189627628ec58a86487cf998acd3811",
+        "checkedDefinition": "shutdown_mcp_servers",
+        "source": "https://raw.githubusercontent.com/NousResearch/hermes-agent/bf0203a794a07aac3ff764972ab9087baa4e4f4e/tools/mcp_tool_lifecycle.py"
+      }
+    },
+    "finding": "Optional native verification scripts referenced registration, naming and shutdown on the monolithic core module; pinned stable source defines them in discovery/schema/lifecycle modules instead. Hstack stdio protocol incompatibility was not established.",
+    "localFix": {
+      "resolver": "scripts/hermes_mcp_compat.py",
+      "verifiers": [
+        "scripts/verify-hermes-analytics.py",
+        "scripts/verify-hermes-bigquery.py",
+        "scripts/verify-hermes-mongodb.py",
+        "scripts/verify-hermes-mysql.py",
+        "scripts/verify-hermes-quickbooks.py",
+        "scripts/verify-hermes-redis.py",
+        "scripts/verify-hermes-zendesk.py"
+      ],
+      "regression": "tests/hermes-compat.test.mjs",
+      "behavior": "Delegate to native implementations in either layout; propagate internal import failures and reject non-callable interfaces without monkeypatching Hermes."
+    },
+    "nativeInstalledProbe": {
+      "sourceMcpSha256": "5dfda61a1e4a843b43109fdbf4b0130f88517d50e17d0a73ce302fbc4dea5f4e",
+      "evidence": "Actual installed Hermes registry and real Hstack stdio with synthetic Google HTTP/auth only; Python-side network denied. Not a tagged runtime, account or model test.",
+      "checks": {
+        "realStdioSearchReadAndSqlBlock": true,
+        "healthDoesNotExposeAccountContent": true,
+        "oneRefreshForTwoReads": true,
+        "noNetworkOrSql": true,
+        "privateSourceFilesUnchanged": true,
+        "oneSdkClientForDiscoveryAndTwoReads": true
+      },
+      "registry": {
+        "directHermesLegacyRead": true,
+        "gatewayHermesSearchReadAndSqlBlock": true,
+        "directProtocolMode": "auto",
+        "directMethods": [
+          "initialize",
+          "notifications/initialized",
+          "tools/list",
+          "tools/call",
+          "tools/call"
+        ],
+        "directPreflights": [
+          "HEAD"
+        ],
+        "python": "3.11.16",
+        "mcp": "2.0.0"
+      },
+      "requestComparison": {
+        "readsPerPath": 2,
+        "directHermesMcpPosts": 5,
+        "hstackMcpPostsPerProcess": 5,
+        "limitation": "Synthetic request count only; direct path uses a static synthetic header. No equal auth/setup, latency, model or cost comparison."
+      }
+    },
+    "limitations": [
+      "Full pinned stable runtime was not executed; split layout resolution has fixture tests and pinned source review only.",
+      "Other installed vendor runtimes were not rerun.",
+      "No credentials, paid APIs, model calls, GitHub writes or deployments used; no candidate promoted.",
+      "GitHub API tag/candidate enumeration was unavailable; official latest-release metadata and release listing were checked, so this is not an exhaustive candidate audit."
+    ],
+    "regressionRuns": [
+      {
+        "node": "v22.23.4",
+        "exitCode": 0,
+        "tests": 357,
+        "pass": 357,
+        "fail": 0,
+        "skipped": 0
+      },
+      {
+        "node": "v24.22.2",
+        "exitCode": 0,
+        "tests": 357,
+        "pass": 357,
+        "fail": 0,
+        "skipped": 0
+      },
+      {
+        "node": "v26.8.1",
+        "exitCode": 0,
+        "tests": 357,
+        "pass": 357,
+        "fail": 0,
+        "skipped": 0
+      }
+    ],
+    "testedCodeAndConfigSha256": "17342e8abab7d96356f905bfc91a3b35a1c522430d4d376e5534ce9b937b4f0b"
+  },
+  "november16Review": {
+    "latestCanary": {
+      "tag": "v0.23.1+canary.20261115T064406Z",
+      "commit": "d1b46d718ffe675427928eff7e5fff69bcb4519b",
+      "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.1%2Bcanary.20261115T064406Z",
+      "publishedAt": "2026-11-15T07:52:37Z",
+      "prerelease": true
+    },
+    "releaseEnumeration": {
+      "source": "https://api.github.com/repos/NousResearch/hermes-agent/releases?per_page=10",
+      "tags": [
+        "v0.23.1+canary.20261115T064406Z",
+        "v0.23.1+canary.20261114T064334Z",
+        "v0.23.1+canary.20261113T064447Z",
+        "v0.23.1",
+        "v0.23.0",
+        "v0.22.7",
+        "v0.22.6",
+        "v0.22.5",
+        "v0.22.4",
+        "v0.22.3"
+      ],
+      "scope": "Ten most recent release records. The newest canary tag was resolved to its immutable commit because target_commitish was main. Only stable and newest canary interfaces were checked."
+    },
+    "upstreamChange": {
+      "summary": "v0.23.1 raises the live plugin catalog download cap from 2 MiB to 16 MiB. Older releases can fall back to bundled entries and miss newly published pins or removed entries. The release also adds session-scoped environment values and plugin RPC/events.",
+      "release": "https://github.com/NousResearch/hermes-agent/releases/tag/v0.23.1",
+      "catalogSource": "https://github.com/NousResearch/hermes-agent/blob/3b421578588243f920886e6fe79a6faa87ea026e/hermes_cli/plugin_catalog.py"
+    },
+    "confirmedCanaryIssue": {
+      "finding": "Hstack activation accessed web_server._CONFIG_MUTATION_LOCK. The canary removed it and native web routes now use config_backend.CONFIG_MUTATION_LOCK.",
+      "source": "https://github.com/NousResearch/hermes-agent/blob/d1b46d718ffe675427928eff7e5fff69bcb4519b/hermes_cli/config_backend.py#L301",
+      "nativeRoute": "https://github.com/NousResearch/hermes-agent/blob/d1b46d718ffe675427928eff7e5fff69bcb4519b/hermes_cli/web_routers/_common.py#L36",
+      "affectedFile": "hermes-plugin/hstack-connections/dashboard/plugin_api.py",
+      "fix": "Use the existing native web_server lock when exposed, otherwise import the native config_backend lock at activation time. Never create a separate Hstack lock.",
+      "regression": "tests/desktop_backend.py",
+      "beforeFix": "The moved-lock activation fixture failed with AttributeError.",
+      "afterFix": "Five Python backend cases passed across legacy, split-profile and moved-lock layouts. The save callback asserts the shared lock is held. Profile separation and configuration collision checks also pass."
+    },
     "checks": {
-      "realStdioSearchReadAndSqlBlock": true,
-      "healthDoesNotExposeAccountContent": true,
-      "oneRefreshForTwoReads": true,
-      "noNetworkOrSql": true,
-      "privateSourceFilesUnchanged": true,
-      "oneSdkClientForDiscoveryAndTwoReads": true
+      "node": "Eight focused tests passed in tests/hermes-compat.test.mjs and tests/marketing-package.test.mjs.",
+      "nativeCli": "Six parser cases passed on each downloaded pinned tree: mcp add/list/test/reauth and plugins install --no-enable/update. Handlers were not invoked.",
+      "source": "Six Hstack-used native function signatures were checked on both trees along with the shared lock location.",
+      "portablePackage": "The Agent Plugins v1 loader is byte-identical across reviewed stable and canary commits. Hstack Marketing schema/trust/environment/skill checks passed locally.",
+      "liveAccountsUsed": false,
+      "candidatePromoted": false,
+      "fullSuiteRun": false
     },
-    "registry": {
-      "directHermesLegacyRead": true,
-      "gatewayHermesSearchReadAndSqlBlock": true,
-      "directProtocolMode": "auto",
-      "directMethods": [
-        "initialize",
-        "notifications/initialized",
-        "tools/list",
-        "tools/call",
-        "tools/call"
-      ],
-      "directPreflights": [
-        "HEAD"
-      ],
-      "python": "3.11.16",
-      "mcp": "2.0.0"
+    "pinnedSourceSha256": {
+      "stable": {
+        "hermes_cli/agent_plugins.py": "3d2a8cfa5c2e574e8a8e11c320be7a860b4dacb06d87055ad36ae86b1ec97cef",
+        "hermes_cli/mcp_config.py": "d5b287b799ad1d64eb9ca3163ae6cde1f7ece769c433b6d4dcd6059fa96b3fbb",
+        "hermes_cli/plugin_catalog.py": "8bd878172be6b5ad6f4bc45fffa4bee54c815f38b59e8f3bf13c836de66d26ef",
+        "hermes_cli/subcommands/_shared.py": "70a6324a28ff308386a805a60503fb4e3cfe8023f63efe6a33d647e18dedb2ec",
+        "hermes_cli/subcommands/mcp.py": "8a50f70c67ff671485229e8929f8503dfe1c6287d628cba8acbb6c0de2a09ea4",
+        "hermes_cli/subcommands/plugins.py": "1c3b7c78555f5be1337375e290a7463c9c5169c300aeb0928a75def1ef853d18",
+        "hermes_cli/web_server.py": "450289d43bb48e0df8906881ca4760fc8e4d92cf6e9b63e8fc5890a7231ce047",
+        "hermes_cli/web_server_profiles.py": "921017070da7f2f55033e0334ad3bbf2dcc8284ea3d330b1720208f3c0a48704",
+        "tools/mcp_tool_discovery.py": "8e9efe1680968c5ee121a576a8cc3548d64a3e47da8e51c72632a8c353de6bb1",
+        "tools/mcp_tool_lifecycle.py": "c73b3c7de2e69a70ddbfc88681678cc30ec14de86a4b93203bc3203b99672bf1",
+        "tools/mcp_tool_schema.py": "f0b62a01d484b3b74903b5c3cbb81f8ef448eeb760868298faf8b51152439e7e",
+        "tools/registry.py": "f73137030e95b47b92702f935d95f2cd01740b61161d7d940d6c83f02401294d"
+      },
+      "pinned-canary": {
+        "hermes_cli/agent_plugins.py": "3d2a8cfa5c2e574e8a8e11c320be7a860b4dacb06d87055ad36ae86b1ec97cef",
+        "hermes_cli/config.py": "fea4ff7635bb076944d96d5875df745aa1b070949d0e778e3c13a704e13869c6",
+        "hermes_cli/config_backend.py": "bda1da572df3e117291f40980b3cbdcffd37554ebc6a23c2a8994a8c4d11cc4c",
+        "hermes_cli/mcp_config.py": "138149a37a5939ed8162e35d4742943634d020d3d675d3735791ce2866af25bb",
+        "hermes_cli/plugin_catalog.py": "f5623e3efa7b9a96798ca8ce5b8971c42407079b2252e98116deb7624155a49f",
+        "hermes_cli/subcommands/_shared.py": "70a6324a28ff308386a805a60503fb4e3cfe8023f63efe6a33d647e18dedb2ec",
+        "hermes_cli/subcommands/mcp.py": "8a50f70c67ff671485229e8929f8503dfe1c6287d628cba8acbb6c0de2a09ea4",
+        "hermes_cli/subcommands/plugins.py": "43bc7a32a97d5c15c9570cada0cea696a3c81de6d09c63e5a75a34e0de817b92",
+        "hermes_cli/web_routers/_common.py": "ab763e92d47d7d9adc8ae5d49c3319ef20d8140fc5d1475c73bcb887afb37d81",
+        "hermes_cli/web_server.py": "c283dcefac6c30491f772a73348011632fd88d6600709571e8e9c0fedf493e03",
+        "hermes_cli/web_server_profiles.py": "470e7a909106bdd79b2b61a1a440fd7901741cd22ad8e961759fa3cf0a52f61f",
+        "tools/mcp_tool_discovery.py": "a0b3a42eeceacc1e4d83c19682e660633cef25bcb30c44033195545f11ffa6a3",
+        "tools/mcp_tool_lifecycle.py": "c73b3c7de2e69a70ddbfc88681678cc30ec14de86a4b93203bc3203b99672bf1",
+        "tools/mcp_tool_schema.py": "6d68385ca88bff9b16680286a61109e4d6e4315b514446ac9be2ebff09d29cd8"
+      }
     },
-    "requestComparison": {
-      "readsPerPath": 2,
-      "directHermesMcpPosts": 5,
-      "hstackMcpPostsPerProcess": 5,
-      "limitation": "Synthetic request count only; direct path uses a static synthetic header. No equal auth/setup, latency, model or cost comparison."
-    }
-  },
-  "limitations": [
-    "Full pinned stable runtime was not executed; split layout resolution has fixture tests and pinned source review only.",
-    "Other installed vendor runtimes were not rerun.",
-    "No credentials, paid APIs, model calls, GitHub writes or deployments used; no candidate promoted.",
-    "GitHub API tag/candidate enumeration was unavailable; official latest-release metadata and release listing were checked, so this is not an exhaustive candidate audit."
-  ],
-  "regressionRuns": [
-    {
-      "node": "v22.23.4",
-      "exitCode": 0,
-      "tests": 357,
-      "pass": 357,
-      "fail": 0,
-      "skipped": 0
-    },
-    {
-      "node": "v24.22.2",
-      "exitCode": 0,
-      "tests": 357,
-      "pass": 357,
-      "fail": 0,
-      "skipped": 0
-    },
-    {
-      "node": "v26.8.1",
-      "exitCode": 0,
-      "tests": 357,
-      "pass": 357,
-      "fail": 0,
-      "skipped": 0
-    }
-  ],
-  "testedCodeAndConfigSha256": "17342e8abab7d96356f905bfc91a3b35a1c522430d4d376e5534ce9b937b4f0b"
+    "limitations": [
+      "Source, native parser and synthetic regression evidence only. Tagged gateway/Desktop/Webapp runtime and live-account reads remain pending.",
+      "Portable Hstack Marketing installation and model-driven use remain unverified.",
+      "Raw source requests initially returned 429. Required files were retrieved using public GitHub contents API with pinned commits. Exploratory moving-main files were excluded from evidence.",
+      "The routine full suite, vendor runtimes and hosted account validation were outside this focused change."
+    ]
+  }
 }

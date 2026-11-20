@@ -123,10 +123,13 @@ def use_native(provider: str, name: str, config: dict, home: Path):
 def scoped_action(body: dict, profile: Optional[str]):
     # Same context-local profile resolution and mutation lock used by Hermes' own
     # MCP routes. Never interpret a UI string as a filesystem path or command.
-    from hermes_cli.web_server import _config_profile_scope, _CONFIG_MUTATION_LOCK
+    from hermes_cli import web_server
+    profile_scope = getattr(web_server, "_config_profile_scope", None)
+    if profile_scope is None:
+        from hermes_cli.web_server_profiles import _config_profile_scope as profile_scope
     from hermes_constants import get_hermes_home
     from hermes_cli.mcp_config import _get_mcp_servers, _save_mcp_server
-    with _config_profile_scope(profile):
+    with profile_scope(profile):
         home = get_hermes_home()
         name, config, state_dir = desktop_config(home)
         action = body["action"]
@@ -136,7 +139,10 @@ def scoped_action(body: dict, profile: Optional[str]):
         if status["state"] not in {"verified", "active", "degraded"}:
             return {"state": "error", "message": "Save and validate the key before activating or using it."}
         if action == "activate":
-            with _CONFIG_MUTATION_LOCK:
+            mutation_lock = getattr(web_server, "_CONFIG_MUTATION_LOCK", None)
+            if mutation_lock is None:
+                from hermes_cli.config_backend import CONFIG_MUTATION_LOCK as mutation_lock
+            with mutation_lock:
                 existing = _get_mcp_servers().get(name)
                 if existing is not None and existing != config:
                     return {"state": "error", "message": "An existing Hstack Desktop entry has different settings. It was preserved; review it in Hermes MCP settings."}
